@@ -1,0 +1,51 @@
+.git
+.github
+.agents
+.codex
+.DS_Store
+Thumbs.db
+
+# Local editor and agent files
+.idea
+.vscode
+.omx
+.runtime
+.codex-logs
+.omc
+.playwright-mcp
+
+# Root build artifacts
+dist
+*.log
+*.tmp
+*.bak
+chatgpt2api-studio
+chatgpt2api-studio.exe
+chatgpt-image-studio
+chatgpt-image-studio.exe
+poom-image-backend
+
+# Backend runtime data and local build output
+backend/data
+backend/static
+backend/*.exe
+backend/*.out.log
+backend/*.err.log
+backend/tmp-*.json
+backend/tmp-*.png
+backend/coverage.out
+
+# Frontend dependencies and build output
+web/node_modules
+web/dist
+web/out
+web/coverage
+web/build
+web/.env*
+web/*.tsbuildinfo
+web/vite-watch.out.log
+web/vite-watch.err.log
+web/npm-debug.log*
+web/yarn-debug.log*
+web/yarn-error.log*
+web/.pnpm-debug.log*

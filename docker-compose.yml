@@ -1,0 +1,58 @@
+name: ${COMPOSE_PROJECT_NAME:-image-studio}
+
+services:
+  studio:
+    image: ghcr.io/your-org/image-studio:${IMAGE_TAG:-latest}
+    ports:
+      - "7000:7000"
+    environment:
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 7000
+      APP_SESSION_TTL_HOURS: ${APP_SESSION_TTL_HOURS:-24}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      TEST_USERNAME: ${TEST_USERNAME:-test}
+      TEST_EMAIL: ${TEST_EMAIL:-test@example.com}
+      TEST_PASSWORD: ${TEST_PASSWORD}
+      IMAGE_STUDIO_UPDATER_URL: http://updater:7071
+      IMAGE_STUDIO_UPDATER_TOKEN: ${IMAGE_STUDIO_UPDATER_TOKEN:-}
+      IMAGE_STUDIO_VERSION_REPO: ${IMAGE_STUDIO_VERSION_REPO:-your-org/image-studio}
+      IMAGE_STUDIO_GITHUB_TOKEN: ${IMAGE_STUDIO_GITHUB_TOKEN:-}
+      REGISTRATION_SMTP_HOST: ${REGISTRATION_SMTP_HOST:-}
+      REGISTRATION_SMTP_PORT: ${REGISTRATION_SMTP_PORT:-587}
+      REGISTRATION_SMTP_USERNAME: ${REGISTRATION_SMTP_USERNAME:-}
+      REGISTRATION_SMTP_PASSWORD: ${REGISTRATION_SMTP_PASSWORD:-}
+      REGISTRATION_SMTP_FROM: ${REGISTRATION_SMTP_FROM:-}
+      REGISTRATION_SMTP_FROM_NAME: ${REGISTRATION_SMTP_FROM_NAME:-ImageStudio}
+      TZ: ${TZ:-Asia/Shanghai}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${IMAGE_STUDIO_DATA_DIR:-./backend/data}:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  updater:
+    image: ghcr.io/your-org/image-studio:${IMAGE_TAG:-latest}
+    command: ["/app/image-studio-updater"]
+    environment:
+      UPDATER_HOST: 0.0.0.0
+      UPDATER_PORT: 7071
+      IMAGE_STUDIO_UPDATER_TOKEN: ${IMAGE_STUDIO_UPDATER_TOKEN:-}
+      IMAGE_STUDIO_DEPLOY_DIR: ${IMAGE_STUDIO_DEPLOY_DIR:-/deploy}
+      IMAGE_STUDIO_COMPOSE_FILE: docker-compose.yml
+      IMAGE_STUDIO_COMPOSE_PROJECT: ${COMPOSE_PROJECT_NAME:-image-studio}
+      IMAGE_STUDIO_COMPOSE_SERVICE: studio
+      IMAGE_STUDIO_UPDATE_TIMEOUT_SECONDS: ${IMAGE_STUDIO_UPDATE_TIMEOUT_SECONDS:-900}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_CONFIG_DIR:-/root/.docker}:/root/.docker:ro
+      - ${IMAGE_STUDIO_DEPLOY_DIR:-./}:${IMAGE_STUDIO_DEPLOY_DIR:-/deploy}
+    restart: unless-stopped
