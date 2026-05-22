@@ -13,7 +13,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import Zoom from "react-medium-image-zoom";
-import { ArrowUp, Brain, Brush, Check, ChevronDown, Mic2, SquarePlus, Trash2 } from "lucide-react";
+import { ArrowUp, Brain, Brush, Check, ChevronDown, Cpu, Mic2, SquarePlus, Trash2 } from "lucide-react";
 
 import { HtmlImage as Image } from "@/components/html-image";
 import { Input } from "@/components/ui/input";
@@ -107,6 +107,7 @@ function AspectResolutionPicker({
   resolutionTier,
   resolutionTierLabel,
   resolutionTierOptions,
+  triggerClassName,
   onAspectRatioChange,
   onResolutionTierChange,
 }: {
@@ -115,6 +116,7 @@ function AspectResolutionPicker({
   resolutionTier: string;
   resolutionTierLabel: string;
   resolutionTierOptions: Array<{ label: string; value: string; disabled?: boolean }>;
+  triggerClassName?: string;
   onAspectRatioChange: (value: string) => void;
   onResolutionTierChange: (value: string) => void;
 }) {
@@ -210,7 +212,7 @@ function AspectResolutionPicker({
       <button
         ref={buttonRef}
         type="button"
-        className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg-surface)] px-3 text-[13px] font-semibold text-[var(--app-text-secondary)] shadow-none transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)]"
+        className={cn(triggerClassName, "inline-flex items-center transition")}
         onClick={() => {
           setOpen((current) => {
             if (current) {
@@ -365,7 +367,14 @@ export function PromptComposer({
   }, [isMobileComposerCollapsed, onMobileCollapsedChange]);
 
   const controlButtonClass =
-    "h-9 w-auto shrink-0 gap-1.5 whitespace-nowrap rounded-lg border border-[var(--app-border)] bg-[var(--app-bg-surface)] px-3 text-[13px] font-semibold text-[var(--app-text-secondary)] shadow-none hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)]";
+    "h-9 w-auto shrink-0 gap-1.5 whitespace-nowrap rounded-lg border border-[var(--app-border)] bg-[#1B1C22] px-3 text-[13px] font-semibold text-[var(--app-text-secondary)] shadow-none outline-none backdrop-blur-xl transition hover:bg-[#22242B] hover:text-[var(--app-text-primary)] focus-visible:border-[var(--app-border-strong)] focus-visible:ring-[3px] focus-visible:ring-[rgba(91,214,255,0.18)]";
+  const parsedImageCount = Number.parseInt(imageCount, 10);
+  const normalizedImageCount = Number.isFinite(parsedImageCount)
+    ? Math.min(8, Math.max(1, parsedImageCount))
+    : 1;
+  const setNormalizedImageCount = useCallback((value: number) => {
+    onImageCountChange(String(Math.min(8, Math.max(1, value))));
+  }, [onImageCountChange]);
 
   return (
     <div className="fixed inset-x-0 bottom-0 z-30 px-3 pb-4 sm:px-6 lg:absolute lg:inset-x-8 lg:bottom-8 lg:p-0">
@@ -511,7 +520,7 @@ export function PromptComposer({
 
               <Select value={providerPlatform} onValueChange={(value) => onProviderPlatformChange(value as APIAccessPlatform)}>
                 <SelectTrigger className={cn(controlButtonClass, "min-w-[156px] focus:ring-0")}>
-                  <Brain className="size-4" />
+                  <Cpu className="size-4" />
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -529,6 +538,7 @@ export function PromptComposer({
                 resolutionTier={imageResolutionTier}
                 resolutionTierLabel={imageResolutionTierLabel}
                 resolutionTierOptions={imageResolutionTierOptions}
+                triggerClassName={controlButtonClass}
                 onAspectRatioChange={onImageAspectRatioChange}
                 onResolutionTierChange={onImageResolutionTierChange}
               />
@@ -561,17 +571,42 @@ export function PromptComposer({
               </Select>
 
               {mode === "generate" ? (
-                <div className={cn(controlButtonClass, "inline-flex min-w-[112px] items-center justify-center gap-2")}>
+                <div className={cn(controlButtonClass, "inline-flex min-w-[132px] items-center justify-center gap-2")}>
                   <span>数量</span>
-                  <Input
-                    type="number"
-                    min="1"
-                    max="8"
-                    step="1"
-                    value={imageCount}
-                    onChange={(event) => onImageCountChange(event.target.value)}
-                    className="h-6 w-8 border-0 bg-transparent px-0 text-center text-[13px] font-semibold text-[var(--app-text-primary)] shadow-none focus-visible:ring-0"
-                  />
+                  <div className="inline-flex items-center gap-1.5">
+                    <Input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      value={imageCount}
+                      onChange={(event) => {
+                        const nextValue = event.target.value.replace(/\D/g, "").slice(0, 1);
+                        onImageCountChange(nextValue);
+                      }}
+                      onBlur={() => setNormalizedImageCount(normalizedImageCount)}
+                      className="h-7 w-9 rounded-full border-0 bg-[var(--app-bg-surface-hover)] px-2 text-center text-[13px] font-bold text-[var(--app-text-primary)] shadow-none focus-visible:ring-0"
+                    />
+                    <div className="inline-flex flex-col items-center justify-center gap-0.5">
+                      <button
+                        type="button"
+                        className="grid h-3.5 w-5 place-items-center rounded-[3px] text-[var(--app-text-muted)] transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+                        onClick={() => setNormalizedImageCount(normalizedImageCount + 1)}
+                        disabled={normalizedImageCount >= 8}
+                        aria-label="增加数量"
+                      >
+                        <span className="block size-0 border-x-[4px] border-b-[5px] border-x-transparent border-b-current" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        className="grid h-3.5 w-5 place-items-center rounded-[3px] text-[var(--app-text-muted)] transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+                        onClick={() => setNormalizedImageCount(normalizedImageCount - 1)}
+                        disabled={normalizedImageCount <= 1}
+                        aria-label="减少数量"
+                      >
+                        <span className="block size-0 border-x-[4px] border-t-[5px] border-x-transparent border-t-current" aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
                 </div>
               ) : null}
 

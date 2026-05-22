@@ -1,6 +1,6 @@
 "use client";
 
-import { memo } from "react";
+import { type CSSProperties, memo, useState } from "react";
 import Zoom from "react-medium-image-zoom";
 import {
   Brush,
@@ -41,10 +41,119 @@ type ProcessingStatus = {
   detail: string;
 };
 
-function formatTurnSizeLabel(size?: string) {
-  return String(size || "")
+type ResultFrameMetrics = {
+  width: number;
+  height: number;
+  style: CSSProperties;
+};
+
+type ImageDimensions = {
+  width: number;
+  height: number;
+};
+
+const resultFrameMaxSide = 350;
+const resultFrameMinWidth = 180;
+const commonAspectRatios = [
+  { label: "1:1", ratio: 1 },
+  { label: "2:3", ratio: 2 / 3 },
+  { label: "3:2", ratio: 3 / 2 },
+  { label: "3:4", ratio: 3 / 4 },
+  { label: "4:3", ratio: 4 / 3 },
+  { label: "5:4", ratio: 5 / 4 },
+  { label: "4:5", ratio: 4 / 5 },
+  { label: "9:16", ratio: 9 / 16 },
+  { label: "16:9", ratio: 16 / 9 },
+  { label: "21:9", ratio: 21 / 9 },
+];
+
+function fallbackResultFrameMetrics(): ResultFrameMetrics {
+  return {
+    width: 1024,
+    height: 1024,
+    style: {
+      aspectRatio: "1 / 1",
+      maxWidth: `${resultFrameMaxSide}px`,
+    },
+  };
+}
+
+function parseSizeDimensions(size?: string): ImageDimensions | null {
+  const match = String(size || "")
     .trim()
-    .replace("x", "X");
+    .match(/^(\d+)\s*x\s*(\d+)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  return { width, height };
+}
+
+function resultFrameMetrics(dimensions: ImageDimensions | null): ResultFrameMetrics {
+  if (!dimensions) {
+    return fallbackResultFrameMetrics();
+  }
+
+  const { width, height } = dimensions;
+  const ratio = width / height;
+  const maxWidth =
+    ratio < 1 ? Math.max(resultFrameMinWidth, Math.round(resultFrameMaxSide * ratio)) : resultFrameMaxSide;
+  return {
+    width,
+    height,
+    style: {
+      aspectRatio: `${width} / ${height}`,
+      maxWidth: `${maxWidth}px`,
+    },
+  };
+}
+
+function greatestCommonDivisor(left: number, right: number): number {
+  let a = Math.abs(Math.round(left));
+  let b = Math.abs(Math.round(right));
+  while (b > 0) {
+    const next = a % b;
+    a = b;
+    b = next;
+  }
+  return a || 1;
+}
+
+function approximateAspectRatio(width: number, height: number) {
+  const ratio = width / height;
+  let best = { width: 1, height: 1, diff: Number.POSITIVE_INFINITY };
+  for (let denominator = 1; denominator <= 24; denominator += 1) {
+    const numerator = Math.max(1, Math.round(ratio * denominator));
+    const diff = Math.abs(numerator / denominator - ratio);
+    if (diff < best.diff) {
+      best = { width: numerator, height: denominator, diff };
+    }
+  }
+  const divisor = greatestCommonDivisor(best.width, best.height);
+  return `${Math.round(best.width / divisor)}:${Math.round(best.height / divisor)}`;
+}
+
+function formatAspectRatioLabel(dimensions: ImageDimensions | null, fallbackSize?: string) {
+  const current = dimensions ?? parseSizeDimensions(fallbackSize);
+  if (!current) {
+    return "";
+  }
+  const ratio = current.width / current.height;
+  const matched = commonAspectRatios
+    .map((item) => ({
+      ...item,
+      diff: Math.abs(item.ratio - ratio) / item.ratio,
+    }))
+    .sort((left, right) => left.diff - right.diff)[0];
+  if (matched && matched.diff <= 0.025) {
+    return matched.label;
+  }
+  return approximateAspectRatio(current.width, current.height);
 }
 
 function buildDownloadName(createdAt: string, turnId: string, index: number) {
@@ -120,10 +229,235 @@ type ConversationTurnsProps = {
 };
 
 const metaPillClass =
-  "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg-surface)] px-3 text-[12px] font-semibold text-[var(--app-text-secondary)] shadow-none";
+  "inline-flex shrink-0 items-center gap-1 text-[12px] font-semibold leading-5 text-[var(--app-text-secondary)]";
+
+const metaLabelClass = "shrink-0 text-[var(--app-text-muted)]";
 
 const iconButtonClass =
-  "inline-flex size-8 items-center justify-center rounded-lg border border-[var(--app-border)] bg-[var(--app-bg-surface)] text-[var(--app-text-secondary)] transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)]";
+  "inline-flex size-9 items-center justify-center rounded-lg border border-white/15 bg-black/55 text-white shadow-[0_8px_24px_rgba(0,0,0,0.24)] backdrop-blur transition hover:bg-black/70";
+
+type GeneratedImageCardProps = {
+  conversationId: string;
+  turn: ImageConversationTurn;
+  image: StoredImage;
+  index: number;
+  modeLabelMap: Record<ImageMode, string>;
+  turnProcessing: boolean;
+  processingStatus: ProcessingStatus | null;
+  waitingDots: string;
+  submitElapsedSeconds: number;
+  formatConversationTime: (value: string) => string;
+  formatProcessingDuration: (seconds: number) => string;
+  onOpenSelectionEditor: (
+    conversationId: string,
+    turnId: string,
+    image: StoredImage,
+    imageName: string,
+  ) => void;
+  onSeedFromResult: (
+    conversationId: string,
+    image: StoredImage,
+    nextMode: ImageMode,
+  ) => void;
+  onRetryTurn: (
+    conversationId: string,
+    turn: ImageConversationTurn,
+    imageIndex?: number,
+  ) => Promise<void>;
+  onCancelTurn: (conversationId: string, turn: ImageConversationTurn) => Promise<void>;
+};
+
+function GeneratedImageCard({
+  conversationId,
+  turn,
+  image,
+  index,
+  modeLabelMap,
+  turnProcessing,
+  processingStatus,
+  waitingDots,
+  submitElapsedSeconds,
+  formatConversationTime,
+  formatProcessingDuration,
+  onOpenSelectionEditor,
+  onSeedFromResult,
+  onRetryTurn,
+  onCancelTurn,
+}: GeneratedImageCardProps) {
+  const [actualDimensions, setActualDimensions] = useState<ImageDimensions | null>(null);
+  const imageDataUrl = buildImageDataUrl(image);
+  const downloadName = buildDownloadName(turn.createdAt, turn.id, index);
+  const cancelRequested = Boolean(turn.cancelRequested);
+  const showQueuedState = turn.status === "queued";
+  const showRunningState = turn.status === "running" || turn.status === "generating";
+  const frameMetrics = resultFrameMetrics(actualDimensions ?? parseSizeDimensions(turn.size));
+  const aspectRatioLabel = formatAspectRatioLabel(actualDimensions, turn.size);
+
+  return (
+    <div
+      data-generated-image-card
+      className="w-max max-w-full"
+    >
+      <div
+        className="relative w-full overflow-hidden rounded-xl bg-[var(--app-bg-surface)] shadow-[inset_0_0_0_1px_var(--app-border)] [&_[data-rmiz-content]]:h-full [&_[data-rmiz-content]]:w-full [&_[data-rmiz]]:h-full [&_[data-rmiz]]:w-full"
+        style={frameMetrics.style}
+      >
+        {image.status === "success" && imageDataUrl ? (
+          <>
+            <Zoom>
+              <Image
+                src={imageDataUrl}
+                alt={`Generated result ${index + 1}`}
+                width={frameMetrics.width}
+                height={frameMetrics.height}
+                unoptimized
+                onLoad={(event) => {
+                  const { naturalWidth, naturalHeight } = event.currentTarget;
+                  if (naturalWidth <= 0 || naturalHeight <= 0) {
+                    return;
+                  }
+                  setActualDimensions((current) =>
+                    current?.width === naturalWidth && current.height === naturalHeight
+                      ? current
+                      : { width: naturalWidth, height: naturalHeight },
+                  );
+                }}
+                className="block h-full w-full cursor-zoom-in object-contain"
+              />
+            </Zoom>
+            <div className="absolute bottom-3 right-3 z-10 flex items-center gap-2">
+              <button
+                type="button"
+                className={iconButtonClass}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSeedFromResult(conversationId, image, "edit");
+                }}
+                title="复制"
+                aria-label="复制"
+              >
+                <Copy className="size-4" />
+              </button>
+              <a
+                href={imageDataUrl}
+                download={downloadName}
+                className={iconButtonClass}
+                onClick={(event) => event.stopPropagation()}
+                title="下载"
+                aria-label="下载"
+              >
+                <Download className="size-4" />
+              </a>
+              <button
+                type="button"
+                className={iconButtonClass}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOpenSelectionEditor(conversationId, turn.id, image, downloadName);
+                }}
+                title="编辑"
+                aria-label="编辑"
+              >
+                <Brush className="size-4" />
+              </button>
+            </div>
+          </>
+        ) : turn.status === "cancelled" ? (
+          <div className="flex h-full items-center justify-center px-6 py-8 text-center text-sm font-semibold leading-7 text-[var(--app-text-muted)]">
+            本次生成已取消
+          </div>
+        ) : image.status === "error" ? (
+          <div className="flex h-full items-center justify-center whitespace-pre-line bg-rose-950/20 px-6 py-8 text-center text-sm font-semibold leading-7 text-rose-300">
+            {formatImageErrorMessage(image.error || "处理失败")}
+          </div>
+        ) : (
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-8 text-center text-[var(--app-text-muted)]">
+            {cancelRequested ? (
+              <div className="rounded-full bg-rose-500/10 p-3 text-rose-300">
+                <X className="size-5" />
+              </div>
+            ) : (
+              <div className="rounded-full bg-[var(--app-bg-surface-hover)] p-3 text-[var(--app-text-primary)]">
+                <LoaderCircle className="size-5 animate-spin" />
+              </div>
+            )}
+            <p className="text-sm font-bold text-[var(--app-text-primary)]">
+              {cancelRequested
+                ? "正在取消任务"
+                : showQueuedState
+                  ? "已加入等候队列"
+                  : turnProcessing && processingStatus
+                    ? `${processingStatus.title}${waitingDots}`
+                    : "正在处理图片..."}
+            </p>
+            <p className="text-xs leading-6">
+              {cancelRequested
+                ? "正在等待当前请求结束，取消后将丢弃本次结果"
+                : showQueuedState
+                  ? `${turn.waitingDetail || "等待后端准入和上游处理"}${(turn.queuePosition ?? 0) > 1 ? ` · 前面还有 ${turn.queuePosition! - 1} 个` : ""}`
+                  : turnProcessing && processingStatus
+                    ? `${processingStatus.detail} · 已等待 ${formatProcessingDuration(submitElapsedSeconds)}`
+                    : "图片处理通常需要几分钟，请稍候"}
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4 flex w-max max-w-none items-center gap-2 whitespace-nowrap text-[12px]">
+        <span className={metaPillClass}>
+          <span className={metaLabelClass}>模型</span>
+          <span>{turn.providerPlatform || turn.model}</span>
+        </span>
+        <span className={metaPillClass}>
+          <span className={metaLabelClass}>模式</span>
+          {modeLabelMap[turn.mode]}
+        </span>
+        {aspectRatioLabel ? (
+          <span className={metaPillClass}>
+            <span className={metaLabelClass}>尺寸</span>
+            {aspectRatioLabel}
+          </span>
+        ) : null}
+        {turn.quality ? (
+          <span className={metaPillClass}>
+            <span className={metaLabelClass}>清晰度</span>
+            {turn.quality}
+          </span>
+        ) : null}
+        <span className={metaPillClass}>
+          <Clock3 className="size-3.5 shrink-0 text-[var(--app-text-muted)]" />
+          {formatConversationTime(turn.createdAt)}
+        </span>
+
+        {image.status === "error" ? (
+          <button
+            type="button"
+            className={cn(metaPillClass, "text-rose-300 disabled:cursor-not-allowed disabled:opacity-60")}
+            onClick={() => void onRetryTurn(conversationId, turn, index)}
+            disabled={turnProcessing}
+            title={turnProcessing ? "处理中" : "重试"}
+            aria-label="重试"
+          >
+            <RotateCcw className="size-4" />
+          </button>
+        ) : null}
+
+        {(showQueuedState || showRunningState) && turn.jobId ? (
+          <button
+            type="button"
+            onClick={() => void onCancelTurn(conversationId, turn)}
+            disabled={cancelRequested}
+            className={cn(metaPillClass, "text-rose-300 disabled:cursor-not-allowed disabled:opacity-60")}
+            title={cancelRequested ? "取消中" : "取消任务"}
+            aria-label={cancelRequested ? "取消中" : "取消任务"}
+          >
+            <X className="size-4" />
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 export const ConversationTurns = memo(function ConversationTurns({
   conversationId,
@@ -148,10 +482,6 @@ export const ConversationTurns = memo(function ConversationTurns({
             activeRequest.conversationId === conversationId &&
             activeRequest.turnId === turn.id,
         );
-        const cancelRequested = Boolean(turn.cancelRequested);
-        const showQueuedState = turn.status === "queued";
-        const showRunningState = turn.status === "running" || turn.status === "generating";
-
         return (
           <div key={turn.id} data-image-turn={turn.id} className="space-y-10">
             <div className="flex justify-end">
@@ -205,160 +535,26 @@ export const ConversationTurns = memo(function ConversationTurns({
                     turn.images.length === 1 ? "grid-cols-1" : "grid-cols-1 xl:grid-cols-2",
                   )}
                 >
-                  {turn.images.map((image, index) => {
-                    const imageDataUrl = buildImageDataUrl(image);
-                    const downloadName = buildDownloadName(turn.createdAt, turn.id, index);
-
-                    return (
-                      <div
-                        key={image.id}
-                        data-generated-image-card
-                        className={cn(
-                          "w-full max-w-[350px]",
-                        )}
-                      >
-                        <div className="overflow-hidden rounded-xl bg-[var(--app-bg-surface)] shadow-[inset_0_0_0_1px_var(--app-border)]">
-                          {image.status === "success" && imageDataUrl ? (
-                            <Zoom>
-                              <Image
-                                src={imageDataUrl}
-                                alt={`Generated result ${index + 1}`}
-                                width={1024}
-                                height={1024}
-                                unoptimized
-                                className="block h-auto max-h-[350px] w-auto max-w-full cursor-zoom-in object-contain"
-                              />
-                            </Zoom>
-                          ) : turn.status === "cancelled" ? (
-                            <div className="flex min-h-[260px] items-center justify-center px-6 py-8 text-center text-sm font-semibold leading-7 text-[var(--app-text-muted)]">
-                              本次生成已取消
-                            </div>
-                          ) : image.status === "error" ? (
-                            <div className="flex min-h-[320px] items-center justify-center whitespace-pre-line bg-rose-950/20 px-6 py-8 text-center text-sm font-semibold leading-7 text-rose-300">
-                              {formatImageErrorMessage(image.error || "处理失败")}
-                            </div>
-                          ) : (
-                            <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 px-6 py-8 text-center text-[var(--app-text-muted)]">
-                              {cancelRequested ? (
-                                <div className="rounded-full bg-rose-500/10 p-3 text-rose-300">
-                                  <X className="size-5" />
-                                </div>
-                              ) : (
-                                <div className="rounded-full bg-[var(--app-bg-surface-hover)] p-3 text-[var(--app-text-primary)]">
-                                  <LoaderCircle className="size-5 animate-spin" />
-                                </div>
-                              )}
-                              <p className="text-sm font-bold text-[var(--app-text-primary)]">
-                                {cancelRequested
-                                  ? "正在取消任务"
-                                  : showQueuedState
-                                    ? "已加入等候队列"
-                                    : turnProcessing && processingStatus
-                                      ? `${processingStatus.title}${waitingDots}`
-                                      : "正在处理图片..."}
-                              </p>
-                              <p className="text-xs leading-6">
-                                {cancelRequested
-                                  ? "正在等待当前请求结束，取消后将丢弃本次结果"
-                                  : showQueuedState
-                                    ? `${turn.waitingDetail || "等待后端准入和上游处理"}${(turn.queuePosition ?? 0) > 1 ? ` · 前面还有 ${turn.queuePosition! - 1} 个` : ""}`
-                                    : turnProcessing && processingStatus
-                                      ? `${processingStatus.detail} · 已等待 ${formatProcessingDuration(submitElapsedSeconds)}`
-                                      : "图片处理通常需要几分钟，请稍候"}
-                              </p>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="mt-4 flex flex-wrap items-center gap-2 text-[12px]">
-                          <span className={metaPillClass}>
-                            <span className="text-[var(--app-text-muted)]">模型</span>
-                            {turn.providerPlatform || turn.model}
-                          </span>
-                          <span className={metaPillClass}>
-                            <span className="text-[var(--app-text-muted)]">模式</span>
-                            {modeLabelMap[turn.mode]}
-                          </span>
-                          {turn.size ? (
-                            <span className={metaPillClass}>
-                              <span className="text-[var(--app-text-muted)]">尺寸</span>
-                              {formatTurnSizeLabel(turn.size)}
-                            </span>
-                          ) : null}
-                          {turn.quality ? (
-                            <span className={metaPillClass}>
-                              <span className="text-[var(--app-text-muted)]">清晰度</span>
-                              {turn.quality}
-                            </span>
-                          ) : null}
-                          <span className={metaPillClass}>
-                            <Clock3 className="size-3.5 text-[var(--app-text-muted)]" />
-                            {formatConversationTime(turn.createdAt)}
-                          </span>
-
-                          {image.status === "success" && imageDataUrl ? (
-                            <>
-                              <button
-                                type="button"
-                                className={iconButtonClass}
-                                onClick={() =>
-                                  onOpenSelectionEditor(conversationId, turn.id, image, downloadName)
-                                }
-                                title="选区"
-                                aria-label="选区"
-                              >
-                                <Brush className="size-4" />
-                              </button>
-                              <button
-                                type="button"
-                                className={iconButtonClass}
-                                onClick={() => onSeedFromResult(conversationId, image, "edit")}
-                                title="引用"
-                                aria-label="引用"
-                              >
-                                <Copy className="size-4" />
-                              </button>
-                              <a
-                                href={imageDataUrl}
-                                download={downloadName}
-                                className={iconButtonClass}
-                                title="下载"
-                                aria-label="下载"
-                              >
-                                <Download className="size-4" />
-                              </a>
-                            </>
-                          ) : null}
-
-                          {image.status === "error" ? (
-                            <button
-                              type="button"
-                              className={cn(iconButtonClass, "text-rose-300 disabled:cursor-not-allowed disabled:opacity-60")}
-                              onClick={() => void onRetryTurn(conversationId, turn, index)}
-                              disabled={turnProcessing}
-                              title={turnProcessing ? "处理中" : "重试"}
-                              aria-label="重试"
-                            >
-                              <RotateCcw className="size-4" />
-                            </button>
-                          ) : null}
-
-                          {(showQueuedState || showRunningState) && turn.jobId ? (
-                            <button
-                              type="button"
-                              onClick={() => void onCancelTurn(conversationId, turn)}
-                              disabled={cancelRequested}
-                              className={cn(iconButtonClass, "text-rose-300 disabled:cursor-not-allowed disabled:opacity-60")}
-                              title={cancelRequested ? "取消中" : "取消任务"}
-                              aria-label={cancelRequested ? "取消中" : "取消任务"}
-                            >
-                              <X className="size-4" />
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {turn.images.map((image, index) => (
+                    <GeneratedImageCard
+                      key={image.id}
+                      conversationId={conversationId}
+                      turn={turn}
+                      image={image}
+                      index={index}
+                      modeLabelMap={modeLabelMap}
+                      turnProcessing={turnProcessing}
+                      processingStatus={processingStatus}
+                      waitingDots={waitingDots}
+                      submitElapsedSeconds={submitElapsedSeconds}
+                      formatConversationTime={formatConversationTime}
+                      formatProcessingDuration={formatProcessingDuration}
+                      onOpenSelectionEditor={onOpenSelectionEditor}
+                      onSeedFromResult={onSeedFromResult}
+                      onRetryTurn={onRetryTurn}
+                      onCancelTurn={onCancelTurn}
+                    />
+                  ))}
                 </div>
               ) : null}
             </div>
