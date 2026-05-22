@@ -2,7 +2,7 @@ name: ${COMPOSE_PROJECT_NAME:-image-studio}
 
 services:
   studio:
-    image: ghcr.io/your-org/image-studio:${IMAGE_TAG:-latest}
+    image: ghcr.io/pengpoom/poomimage:${IMAGE_TAG:-latest}
     ports:
       - "7000:7000"
     environment:
@@ -17,7 +17,7 @@ services:
       TEST_PASSWORD: ${TEST_PASSWORD}
       IMAGE_STUDIO_UPDATER_URL: http://updater:7071
       IMAGE_STUDIO_UPDATER_TOKEN: ${IMAGE_STUDIO_UPDATER_TOKEN:-}
-      IMAGE_STUDIO_VERSION_REPO: ${IMAGE_STUDIO_VERSION_REPO:-your-org/image-studio}
+      IMAGE_STUDIO_VERSION_REPO: ${IMAGE_STUDIO_VERSION_REPO:-pengpoom/poomimage}
       IMAGE_STUDIO_GITHUB_TOKEN: ${IMAGE_STUDIO_GITHUB_TOKEN:-}
       REGISTRATION_SMTP_HOST: ${REGISTRATION_SMTP_HOST:-}
       REGISTRATION_SMTP_PORT: ${REGISTRATION_SMTP_PORT:-587}
@@ -39,7 +39,7 @@ services:
     restart: unless-stopped
 
   updater:
-    image: ghcr.io/your-org/image-studio:${IMAGE_TAG:-latest}
+    image: ghcr.io/pengpoom/poomimage:${IMAGE_TAG:-latest}
     command: ["/app/image-studio-updater"]
     environment:
       UPDATER_HOST: 0.0.0.0

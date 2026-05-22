@@ -11,9 +11,9 @@ Image Studio 是一个图片生成 Web 项目，包含 React 前端和 Go 后端
 推荐使用部署脚本初始化目录：
 
 ```bash
-mkdir -p image-studio
-cd image-studio
-curl -fsSL https://raw.githubusercontent.com/your-org/image-studio/main/deploy/docker-deploy.sh | bash
+mkdir -p poomimage
+cd poomimage
+curl -fsSL https://raw.githubusercontent.com/pengpoom/poomimage/main/deploy/docker-deploy.sh | bash
 ```
 
 脚本会生成：
@@ -48,8 +48,8 @@ http://服务器IP:7000/
 如果当前仓库仍是私有仓库，直接 `curl raw.githubusercontent.com` 可能无法下载脚本。可以先 clone 仓库后执行：
 
 ```bash
-git clone git@github.com:your-org/image-studio.git image-studio
-cd image-studio
+git clone git@github.com:pengpoom/poomimage.git poomimage
+cd poomimage
 ./deploy/docker-deploy.sh
 ```
 

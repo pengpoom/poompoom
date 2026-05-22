@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-GITHUB_REPO="${GITHUB_REPO:-your-org/image-studio}"
+GITHUB_REPO="${GITHUB_REPO:-pengpoom/poomimage}"
 BRANCH="${BRANCH:-main}"
 INSTALL_DIR="${INSTALL_DIR:-$PWD}"
 COMPOSE_URL="${COMPOSE_URL:-https://raw.githubusercontent.com/$GITHUB_REPO/$BRANCH/docker-compose.yml}"
