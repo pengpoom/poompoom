@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"imagestudio/internal/businessauth"
-	"imagestudio/internal/businessimage"
 )
 
 const defaultImageDir = "data/business-images"
@@ -158,7 +157,7 @@ func (s *Server) authorizeBusinessImageFile(r *http.Request, name string) (int, 
 	if !ok {
 		return http.StatusUnauthorized, false
 	}
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		return http.StatusInternalServerError, false
 	}
@@ -174,7 +173,7 @@ func (s *Server) authorizeBusinessImageFile(r *http.Request, name string) (int, 
 		return http.StatusOK, true
 	}
 
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		return http.StatusInternalServerError, false
 	}

@@ -1428,61 +1428,11 @@ app, server, chatgpt, accounts, storage, sync, proxy, apiAccess, newapi, sub2api
 
 这些接口服务于 `/v1/*` 兼容调用，认证使用 `Authorization: Bearer <APP_API_KEY>`，也允许已登录 UI session。它们属于兼容层，不是当前 Image Studio 工作台主链路。
 
-### POST `/v1/images/generations`
-
-OpenAI 图片生成兼容接口。
-
-请求：
-
-```json
-{
-  "model": "gpt-image-2",
-  "prompt": "a small bird",
-  "n": 1,
-  "size": "1024x1024",
-  "quality": "high",
-  "background": "auto",
-  "response_format": "url"
-}
-```
-
-响应：
-
-```json
-{
-  "created": 1778990000,
-  "data": [
-    {
-      "url": "/v1/files/image/xxx.png"
-    }
-  ]
-}
-```
-
-### POST `/v1/images/edits`
-
-OpenAI 图片编辑兼容接口，使用 `multipart/form-data`。
-
-字段：
-
-| 字段 | 必填 | 说明 |
-| --- | --- | --- |
-| `prompt` | 是 | 编辑提示词 |
-| `image` | 是 | 一张或多张参考图 |
-| `mask` | 否 | 蒙版 |
-| `model` | 否 | 模型 |
-| `size` | 否 | 尺寸 |
-| `quality` | 否 | 质量 |
-| `response_format` | 否 | `url` 或 `b64_json` |
-| `original_file_id` | 否 | 局部重绘旧引用 |
-| `original_gen_id` | 否 | 局部重绘旧引用 |
-| `source_account_id` | 条件必填 | 选择编辑旧图时需要 |
-| `conversation_id` | 否 | 旧会话 ID |
-| `parent_message_id` | 否 | 旧父消息 ID |
+`/v1/images/generations` 和 `/v1/images/edits` 已下线。当前网页生图只走 `/api/image/generate`，任务 ID 以 PostgreSQL `job_id` 为主线；未来如果重新提供外部图片 API，应基于同一条 `job_id` 主线实现。
 
 ### POST `/v1/chat/completions`
 
-Chat Completions 兼容接口，支持从消息里提取文本和图片生成请求。当前不支持真正流式返回。
+Chat Completions 兼容接口保留路由，但图片生成兼容能力已下线。携带图片生成请求时返回 `410 image_compat_removed`。
 
 请求示例：
 
@@ -1505,7 +1455,7 @@ Chat Completions 兼容接口，支持从消息里提取文本和图片生成请
 
 ### POST `/v1/responses`
 
-Responses 兼容接口，支持 `image_generation` 工具。
+Responses 兼容接口保留路由，但 `image_generation` 图片生成能力已下线。携带该工具时返回 `410 image_compat_removed`。
 
 请求示例：
 
@@ -1686,8 +1636,6 @@ Responses 兼容接口，支持 `image_generation` 工具。
 | GET | `/api/business/image/conversations/{id}` | UI 登录态 | 业务图片会话详情 |
 | DELETE | `/api/business/image/conversations/{id}` | UI 登录态 | 删除当前用户业务会话 |
 | POST | `/api/image/generate` | UI 登录态 | 业务生图 |
-| POST | `/v1/images/generations` | 兼容 API Key | OpenAI 图片生成兼容接口 |
-| POST | `/v1/images/edits` | 兼容 API Key | OpenAI 图片编辑兼容接口 |
 | POST | `/v1/chat/completions` | 兼容 API Key | Chat Completions 兼容接口 |
 | POST | `/v1/responses` | 兼容 API Key | Responses 兼容接口 |
 | GET | `/v1/models` | 兼容 API Key | 模型列表 |

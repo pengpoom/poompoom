@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"imagestudio/internal/config"
+	"imagestudio/internal/database"
 	"imagestudio/internal/sqlitedb"
 )
 
@@ -42,10 +43,27 @@ type MutationInput struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	driver string
+	ownDB  bool
 }
 
 func NewStore(cfg *config.Config) (*Store, error) {
+	if database.IsPostgres(cfg.Database.Driver) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		db, err := database.Open(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		store := NewStoreWithDB(db, cfg.Database.Driver)
+		store.ownDB = true
+		return store, nil
+	}
 	rawPath := strings.TrimSpace(cfg.Storage.SQLitePath)
 	if rawPath == "" {
 		return nil, fmt.Errorf("sqlite path is required")
@@ -54,7 +72,7 @@ func NewStore(cfg *config.Config) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, driver: "sqlite", ownDB: true}
 	if err := store.init(); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -62,14 +80,28 @@ func NewStore(cfg *config.Config) (*Store, error) {
 	return store, nil
 }
 
+func NewStoreWithDB(db *sql.DB, driver string) *Store {
+	driver = strings.ToLower(strings.TrimSpace(driver))
+	if driver == "" {
+		driver = "postgres"
+	}
+	return &Store{db: db, driver: driver}
+}
+
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
+		return nil
+	}
+	if !s.ownDB {
 		return nil
 	}
 	return s.db.Close()
 }
 
 func (s *Store) init() error {
+	if s.isPostgres() {
+		return nil
+	}
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS business_api_providers (
 			id TEXT PRIMARY KEY,
@@ -97,9 +129,9 @@ func (s *Store) init() error {
 func (s *Store) List(ctx context.Context) ([]Provider, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, name, platform, base_url, api_key, default_model, enabled, is_default, created_at, updated_at
+		s.rebind(`SELECT id, name, platform, base_url, api_key, default_model, enabled, is_default, created_at, updated_at
 		 FROM business_api_providers
-		 ORDER BY platform ASC, is_default DESC, enabled DESC, created_at ASC`,
+		 ORDER BY platform ASC, is_default DESC, enabled DESC, created_at ASC`),
 	)
 	if err != nil {
 		return nil, err
@@ -142,8 +174,8 @@ func (s *Store) Create(ctx context.Context, input MutationInput) (Provider, erro
 	}
 	_, err = s.db.ExecContext(
 		ctx,
-		`INSERT INTO business_api_providers(id, name, platform, base_url, api_key, default_model, enabled, is_default, created_at, updated_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.rebind(`INSERT INTO business_api_providers(id, name, platform, base_url, api_key, default_model, enabled, is_default, created_at, updated_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		provider.ID,
 		provider.Name,
 		provider.Platform,
@@ -183,9 +215,9 @@ func (s *Store) Update(ctx context.Context, id string, input MutationInput) (Pro
 	}
 	_, err = s.db.ExecContext(
 		ctx,
-		`UPDATE business_api_providers
+		s.rebind(`UPDATE business_api_providers
 		 SET name = ?, platform = ?, base_url = ?, api_key = ?, default_model = ?, enabled = ?, is_default = ?, updated_at = ?
-		 WHERE id = ?`,
+		 WHERE id = ?`),
 		next.Name,
 		next.Platform,
 		next.BaseURL,
@@ -213,9 +245,9 @@ func (s *Store) SetDefault(ctx context.Context, id string) (Provider, bool, erro
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = s.db.ExecContext(
 		ctx,
-		`UPDATE business_api_providers
+		s.rebind(`UPDATE business_api_providers
 		 SET enabled = 1, is_default = 1, updated_at = ?
-		 WHERE id = ?`,
+		 WHERE id = ?`),
 		now,
 		item.ID,
 	)
@@ -233,7 +265,7 @@ func (s *Store) Delete(ctx context.Context, id string) (bool, error) {
 	if id == "" {
 		return false, nil
 	}
-	result, err := s.db.ExecContext(ctx, `DELETE FROM business_api_providers WHERE id = ?`, id)
+	result, err := s.db.ExecContext(ctx, s.rebind(`DELETE FROM business_api_providers WHERE id = ?`), id)
 	if err != nil {
 		return false, err
 	}
@@ -251,9 +283,9 @@ func (s *Store) Get(ctx context.Context, id string) (Provider, bool, error) {
 	}
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, name, platform, base_url, api_key, default_model, enabled, is_default, created_at, updated_at
+		s.rebind(`SELECT id, name, platform, base_url, api_key, default_model, enabled, is_default, created_at, updated_at
 		 FROM business_api_providers
-		 WHERE id = ?`,
+		 WHERE id = ?`),
 		id,
 	)
 	item, err := scanProvider(row)
@@ -273,11 +305,11 @@ func (s *Store) DefaultForPlatform(ctx context.Context, platform string) (Provid
 	}
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, name, platform, base_url, api_key, default_model, enabled, is_default, created_at, updated_at
+		s.rebind(`SELECT id, name, platform, base_url, api_key, default_model, enabled, is_default, created_at, updated_at
 		 FROM business_api_providers
 		 WHERE platform = ? AND enabled = 1
 		 ORDER BY is_default DESC, updated_at DESC
-		 LIMIT 1`,
+		 LIMIT 1`),
 		platform,
 	)
 	item, err := scanProvider(row)
@@ -317,7 +349,7 @@ func (s *Store) EnsureConfigProvider(ctx context.Context, cfg *config.Config) er
 func (s *Store) clearDefault(ctx context.Context, platform string) error {
 	_, err := s.db.ExecContext(
 		ctx,
-		`UPDATE business_api_providers SET is_default = 0 WHERE platform = ?`,
+		s.rebind(`UPDATE business_api_providers SET is_default = 0 WHERE platform = ?`),
 		platform,
 	)
 	return err
@@ -327,10 +359,18 @@ func (s *Store) hasDefault(ctx context.Context, platform string) (bool, error) {
 	var count int
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT COUNT(*) FROM business_api_providers WHERE platform = ? AND enabled = 1 AND is_default = 1`,
+		s.rebind(`SELECT COUNT(*) FROM business_api_providers WHERE platform = ? AND enabled = 1 AND is_default = 1`),
 		platform,
 	).Scan(&count)
 	return count > 0, err
+}
+
+func (s *Store) isPostgres() bool {
+	return database.IsPostgres(s.driver)
+}
+
+func (s *Store) rebind(query string) string {
+	return database.Rebind(s.driver, query)
 }
 
 type providerScanner interface {

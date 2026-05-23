@@ -18,6 +18,7 @@ import (
 	"imagestudio/internal/businessimage"
 	"imagestudio/internal/businessjobs"
 	"imagestudio/internal/businessproviders"
+	"imagestudio/internal/businesssettings"
 	"imagestudio/internal/businesstracker"
 	"imagestudio/internal/config"
 )
@@ -31,22 +32,11 @@ func newBusinessImageTestConfig(t *testing.T) *config.Config {
 
 func TestExtractProviderImageGenerateMetadataPrefersJobID(t *testing.T) {
 	metadata := extractProviderImageGenerateMetadata(map[string]any{
-		"jobId":  "job-current",
-		"taskId": "legacy-task",
+		"jobId": "job-current",
 	})
 
 	if metadata.JobID != "job-current" {
 		t.Fatalf("JobID = %q, want job-current", metadata.JobID)
-	}
-}
-
-func TestExtractProviderImageGenerateMetadataAcceptsLegacyTaskID(t *testing.T) {
-	metadata := extractProviderImageGenerateMetadata(map[string]any{
-		"taskId": "legacy-task",
-	})
-
-	if metadata.JobID != "legacy-task" {
-		t.Fatalf("JobID = %q, want legacy-task", metadata.JobID)
 	}
 }
 
@@ -624,6 +614,278 @@ func TestRecoverQueuedBusinessImageJobsDoesNotDoubleClaim(t *testing.T) {
 		t.Fatalf("second claim returned error: %v", err)
 	} else if ok {
 		t.Fatal("second claim succeeded while first claim lease is still active")
+	}
+}
+
+func TestRunQueuedBusinessImageJobClaimsByJobIDOnly(t *testing.T) {
+	var gotAuth string
+	imageB64 := base64.StdEncoding.EncodeToString([]byte("queued-id-image"))
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data": []map[string]any{
+				{"b64_json": imageB64, "revised_prompt": "cat"},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	t.Setenv("IMAGE_PROVIDER", "openai_compatible")
+	t.Setenv("IMAGE_BASE_URL", upstream.URL)
+	t.Setenv("IMAGE_API_KEY", "provider-key")
+	t.Setenv("IMAGE_MODEL", "gpt-image-test")
+
+	cfg := newBusinessImageTestConfig(t)
+	cfg.Storage.ImageDir = "data/business-images"
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 5)
+	server := NewServer(cfg, nil, nil)
+
+	payload := map[string]any{
+		"prompt":         "cat",
+		"conversationId": "conv-id-only",
+		"turnId":         "turn-id-only",
+		"jobId":          "job-id-only",
+	}
+	if _, err := server.createQueuedProviderImageJob(context.Background(), businessimage.DevUserID, payload, time.Now().UTC()); err != nil {
+		t.Fatalf("create queued job: %v", err)
+	}
+	if recovered := server.runQueuedBusinessImageJob(context.Background(), "job-id-only"); recovered != 1 {
+		t.Fatalf("runQueuedBusinessImageJob() = %d, want 1", recovered)
+	}
+
+	jobStore, err := businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open job store: %v", err)
+	}
+	defer jobStore.Close()
+	var job businessjobs.Job
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		var ok bool
+		job, ok, err = jobStore.Get(context.Background(), "job-id-only", businessimage.DevUserID)
+		if err != nil {
+			t.Fatalf("get job: %v", err)
+		}
+		if ok && job.Status == businessjobs.StatusSucceeded {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if job.Status != businessjobs.StatusSucceeded {
+		t.Fatalf("job status = %q", job.Status)
+	}
+	if gotAuth != "Bearer provider-key" {
+		t.Fatalf("Authorization = %q", gotAuth)
+	}
+}
+
+func TestCreateQueuedProviderImageJobEnforcesUserActiveCapacity(t *testing.T) {
+	t.Setenv("IMAGE_PROVIDER", "openai_compatible")
+	t.Setenv("IMAGE_BASE_URL", "http://127.0.0.1:1")
+	t.Setenv("IMAGE_API_KEY", "provider-key")
+	t.Setenv("IMAGE_MODEL", "gpt-image-test")
+
+	cfg := newBusinessImageTestConfig(t)
+	saveBusinessSystemSettings(t, cfg, func(settings *businesssettings.Settings) {
+		settings.Runtime.MaxUserActiveJobs = 1
+		settings.Runtime.MaxQueuedJobs = 100
+		settings.Runtime.MaxProviderRunningJobs = 100
+	})
+	server := NewServer(cfg, nil, nil)
+	ctx := context.Background()
+	firstPayload := map[string]any{
+		"prompt":         "cat",
+		"conversationId": "conv-user-capacity-one",
+		"turnId":         "turn-user-capacity-one",
+		"jobId":          "job-user-capacity-one",
+	}
+	first, err := server.createQueuedProviderImageJob(ctx, businessimage.DevUserID, firstPayload, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("first createQueuedProviderImageJob() returned error: %v", err)
+	}
+
+	secondPayload := map[string]any{
+		"prompt":         "cat",
+		"conversationId": "conv-user-capacity-two",
+		"turnId":         "turn-user-capacity-two",
+		"jobId":          "job-user-capacity-two",
+	}
+	if _, err := server.createQueuedProviderImageJob(ctx, businessimage.DevUserID, secondPayload, time.Now().UTC()); !providerSubmitErrorCodeIs(err, "image_user_job_limit") {
+		t.Fatalf("second createQueuedProviderImageJob() error = %v, want image_user_job_limit", err)
+	} else if !providerSubmitErrorMessageIs(err, "你已有任务正在排队或生成，请稍后再试。") {
+		t.Fatalf("second createQueuedProviderImageJob() error = %v, want user capacity message", err)
+	}
+
+	jobStore, err := businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open job store: %v", err)
+	}
+	defer jobStore.Close()
+	first.Status = businessjobs.StatusSucceeded
+	first.Stage = "done"
+	first.ActualCount = 1
+	if _, err := jobStore.Save(ctx, first); err != nil {
+		t.Fatalf("release first job: %v", err)
+	}
+	if _, err := server.createQueuedProviderImageJob(ctx, businessimage.DevUserID, secondPayload, time.Now().UTC()); err != nil {
+		t.Fatalf("createQueuedProviderImageJob() after release returned error: %v", err)
+	}
+}
+
+func TestCreateQueuedProviderImageJobEnforcesGlobalQueuedCapacity(t *testing.T) {
+	t.Setenv("IMAGE_PROVIDER", "openai_compatible")
+	t.Setenv("IMAGE_BASE_URL", "http://127.0.0.1:1")
+	t.Setenv("IMAGE_API_KEY", "provider-key")
+	t.Setenv("IMAGE_MODEL", "gpt-image-test")
+
+	cfg := newBusinessImageTestConfig(t)
+	saveBusinessSystemSettings(t, cfg, func(settings *businesssettings.Settings) {
+		settings.Runtime.MaxUserActiveJobs = 100
+		settings.Runtime.MaxQueuedJobs = 1
+		settings.Runtime.MaxProviderRunningJobs = 100
+	})
+	server := NewServer(cfg, nil, nil)
+	ctx := context.Background()
+	firstPayload := map[string]any{
+		"prompt":         "cat",
+		"conversationId": "conv-global-capacity-one",
+		"turnId":         "turn-global-capacity-one",
+		"jobId":          "job-global-capacity-one",
+	}
+	first, err := server.createQueuedProviderImageJob(ctx, "user-global-capacity-one", firstPayload, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("first createQueuedProviderImageJob() returned error: %v", err)
+	}
+
+	secondPayload := map[string]any{
+		"prompt":         "cat",
+		"conversationId": "conv-global-capacity-two",
+		"turnId":         "turn-global-capacity-two",
+		"jobId":          "job-global-capacity-two",
+	}
+	if _, err := server.createQueuedProviderImageJob(ctx, "user-global-capacity-two", secondPayload, time.Now().UTC()); !providerSubmitErrorCodeIs(err, "image_queue_full") {
+		t.Fatalf("second createQueuedProviderImageJob() error = %v, want image_queue_full", err)
+	}
+
+	jobStore, err := businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open job store: %v", err)
+	}
+	defer jobStore.Close()
+	first.Status = businessjobs.StatusRunning
+	first.Stage = "running"
+	if _, err := jobStore.Save(ctx, first); err != nil {
+		t.Fatalf("move first job to running: %v", err)
+	}
+	if _, err := server.createQueuedProviderImageJob(ctx, "user-global-capacity-two", secondPayload, time.Now().UTC()); err != nil {
+		t.Fatalf("createQueuedProviderImageJob() after queued release returned error: %v", err)
+	}
+}
+
+func TestProviderImageGenerateEnforcesProviderRunningCapacity(t *testing.T) {
+	upstreamCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data": []map[string]any{
+				{"b64_json": base64.StdEncoding.EncodeToString([]byte("capacity-image"))},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := newBusinessImageTestConfig(t)
+	cfg.Storage.ImageDir = "data/business-images"
+	cfg.APIAccess.Platform = "gpt-image"
+	cfg.APIAccess.BaseURL = upstream.URL
+	cfg.APIAccess.APIKey = "provider-key"
+	saveBusinessSystemSettings(t, cfg, func(settings *businesssettings.Settings) {
+		settings.Runtime.MaxUserActiveJobs = 100
+		settings.Runtime.MaxQueuedJobs = 100
+		settings.Runtime.MaxProviderRunningJobs = 1
+	})
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 5)
+	provider := seedBusinessAPIProvider(t, cfg, businessproviders.MutationInput{
+		Name:         "Capacity Test Provider",
+		Platform:     businessproviders.PlatformGPTImage,
+		BaseURL:      upstream.URL,
+		APIKey:       "provider-key",
+		DefaultModel: "gpt-image-test",
+		Enabled:      true,
+		IsDefault:    true,
+	})
+	jobStore, err := businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open job store: %v", err)
+	}
+	blocker, err := jobStore.Save(context.Background(), businessjobs.Job{
+		ID:             "job-provider-capacity-blocker",
+		UserID:         "user-provider-capacity-blocker",
+		ConversationID: "conv-provider-capacity-blocker",
+		GenerationID:   "gen-provider-capacity-blocker",
+		Platform:       businessproviders.PlatformGPTImage,
+		ProviderID:     provider.ID,
+		Status:         businessjobs.StatusRunning,
+		Stage:          "running",
+		RequestedCount: 1,
+	})
+	if err != nil {
+		t.Fatalf("save blocking job: %v", err)
+	}
+	if err := jobStore.Close(); err != nil {
+		t.Fatalf("close job store: %v", err)
+	}
+
+	server := NewServer(cfg, nil, nil)
+	blocked := server.executeProviderImageGenerate(providerImageGenerateExecution{
+		Context:   context.Background(),
+		UserID:    businessimage.DevUserID,
+		StartedAt: time.Now().UTC(),
+		Payload: map[string]any{
+			"prompt":         "cat",
+			"conversationId": "conv-provider-capacity-blocked",
+			"turnId":         "turn-provider-capacity-blocked",
+			"jobId":          "job-provider-capacity-blocked",
+		},
+	})
+	if blocked.StatusCode != http.StatusTooManyRequests || blocked.ErrorCode != "image_provider_running_limit" {
+		t.Fatalf("blocked result = %#v, want provider running limit", blocked)
+	}
+	if upstreamCalls != 0 {
+		t.Fatalf("upstreamCalls = %d, want 0 while provider capacity is full", upstreamCalls)
+	}
+
+	jobStore, err = businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open job store for release: %v", err)
+	}
+	blocker.Status = businessjobs.StatusSucceeded
+	blocker.Stage = "done"
+	blocker.ActualCount = 1
+	if _, err := jobStore.Save(context.Background(), blocker); err != nil {
+		t.Fatalf("release blocking job: %v", err)
+	}
+	if err := jobStore.Close(); err != nil {
+		t.Fatalf("close job store after release: %v", err)
+	}
+
+	allowed := server.executeProviderImageGenerate(providerImageGenerateExecution{
+		Context:   context.Background(),
+		UserID:    businessimage.DevUserID,
+		StartedAt: time.Now().UTC(),
+		Payload: map[string]any{
+			"prompt":         "cat",
+			"conversationId": "conv-provider-capacity-allowed",
+			"turnId":         "turn-provider-capacity-allowed",
+			"jobId":          "job-provider-capacity-allowed",
+		},
+	})
+	if allowed.StatusCode != http.StatusOK {
+		t.Fatalf("allowed result status = %d, body = %s", allowed.StatusCode, string(allowed.Body))
+	}
+	if upstreamCalls != 1 {
+		t.Fatalf("upstreamCalls = %d, want 1 after release", upstreamCalls)
 	}
 }
 
@@ -2257,6 +2519,48 @@ func seedBusinessCredit(t *testing.T, cfg *config.Config, userID string, balance
 	if _, _, err := store.SetBalance(context.Background(), userID, balance, businesscredits.ReasonAdminAdjustment); err != nil {
 		t.Fatalf("seed credit: %v", err)
 	}
+}
+
+func saveBusinessSystemSettings(t *testing.T, cfg *config.Config, mutate func(*businesssettings.Settings)) businesssettings.Settings {
+	t.Helper()
+	store, err := businesssettings.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open settings store: %v", err)
+	}
+	defer store.Close()
+	settings := businesssettings.WithConfigRuntime(businesssettings.Defaults(), cfg)
+	if mutate != nil {
+		mutate(&settings)
+	}
+	saved, err := store.Save(context.Background(), settings)
+	if err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+	return saved
+}
+
+func seedBusinessAPIProvider(t *testing.T, cfg *config.Config, input businessproviders.MutationInput) businessproviders.Provider {
+	t.Helper()
+	store, err := businessproviders.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open provider store: %v", err)
+	}
+	defer store.Close()
+	provider, err := store.Create(context.Background(), input)
+	if err != nil {
+		t.Fatalf("seed provider: %v", err)
+	}
+	return provider
+}
+
+func providerSubmitErrorCodeIs(err error, code string) bool {
+	submitErr, ok := err.(*providerImageGenerateSubmitError)
+	return ok && submitErr.result.ErrorCode == code && submitErr.result.StatusCode == http.StatusTooManyRequests
+}
+
+func providerSubmitErrorMessageIs(err error, message string) bool {
+	submitErr, ok := err.(*providerImageGenerateSubmitError)
+	return ok && submitErr.result.ErrorMessage == message
 }
 
 func seedBusinessImageFile(t *testing.T, cfg *config.Config, fileName string) string {

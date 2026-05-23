@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,12 @@ import (
 	"imagestudio/internal/accounts"
 	"imagestudio/internal/buildinfo"
 	"imagestudio/internal/businessauth"
+	"imagestudio/internal/businesscredits"
+	"imagestudio/internal/businessimage"
+	"imagestudio/internal/businessjobs"
+	"imagestudio/internal/businessproviders"
+	"imagestudio/internal/businesssettings"
+	"imagestudio/internal/businesstracker"
 	"imagestudio/internal/cliproxy"
 	"imagestudio/internal/config"
 	"imagestudio/internal/middleware"
@@ -33,6 +40,7 @@ import (
 type Server struct {
 	cfg                    *config.Config
 	runtimeMu              sync.RWMutex
+	db                     *sql.DB
 	store                  *accounts.Store
 	syncClient             *cliproxy.Client
 	syncRunMu              sync.RWMutex
@@ -51,14 +59,13 @@ type Server struct {
 	staticDir              string
 	reqLogs                *imageRequestLogStore
 	imageAdmission         *imageAdmissionController
-	imageTasks             *imageTaskManager
 	loginLimiter           *loginRateLimiter
 	bootstrapWarningOnce   sync.Once
 	businessJobMu          sync.RWMutex
 	activeBusinessJobs     map[string]activeBusinessImageJob
 	businessJobReconcileMu sync.Mutex
 	businessJobWorkerOnce  sync.Once
-	businessJobWorkerWake  chan struct{}
+	businessJobDispatcher  businessJobDispatcher
 	officialClientFactory  func(accessToken, proxyURL string, authData map[string]any, requestConfig handler.ImageRequestConfig) imageWorkflowClient
 	responsesClientFactory func(accessToken, proxyURL string, authData map[string]any, requestConfig handler.ImageRequestConfig) imageWorkflowClient
 	cpaClientFactory       func(baseURL, apiKey string, timeout time.Duration, routeStrategy string) cpaRouteAwareImageWorkflowClient
@@ -121,17 +128,21 @@ func (e *requestError) Error() string {
 }
 
 func NewServer(cfg *config.Config, store *accounts.Store, syncClient *cliproxy.Client) *Server {
+	return NewServerWithDatabase(cfg, store, syncClient, nil)
+}
+
+func NewServerWithDatabase(cfg *config.Config, store *accounts.Store, syncClient *cliproxy.Client, db *sql.DB) *Server {
 	server := &Server{
-		cfg:                   cfg,
-		store:                 store,
-		syncClient:            syncClient,
-		syncRunCache:          map[string]*sourceSyncRunResult{},
-		staticDir:             cfg.ResolvePath(cfg.Server.StaticDir),
-		reqLogs:               newImageRequestLogStore(),
-		imageAdmission:        newImageAdmissionController(),
-		loginLimiter:          newLoginRateLimiter(5, 15*time.Minute),
-		activeBusinessJobs:    map[string]activeBusinessImageJob{},
-		businessJobWorkerWake: make(chan struct{}, 1),
+		cfg:                cfg,
+		db:                 db,
+		store:              store,
+		syncClient:         syncClient,
+		syncRunCache:       map[string]*sourceSyncRunResult{},
+		staticDir:          cfg.ResolvePath(cfg.Server.StaticDir),
+		reqLogs:            newImageRequestLogStore(),
+		imageAdmission:     newImageAdmissionController(),
+		loginLimiter:       newLoginRateLimiter(5, 15*time.Minute),
+		activeBusinessJobs: map[string]activeBusinessImageJob{},
 		officialClientFactory: func(accessToken, proxyURL string, authData map[string]any, requestConfig handler.ImageRequestConfig) imageWorkflowClient {
 			return handler.NewChatGPTClientWithProxyAndConfig(
 				accessToken,
@@ -172,8 +183,56 @@ func NewServer(cfg *config.Config, store *accounts.Store, syncClient *cliproxy.C
 			)
 		},
 	}
-	server.imageTasks = newImageTaskManager(server)
 	return server
+}
+
+func (s *Server) newBusinessAuthStore() (*businessauth.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businessauth.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businessauth.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessCreditStore() (*businesscredits.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businesscredits.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businesscredits.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessJobStore() (*businessjobs.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businessjobs.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businessjobs.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessImageStore() (*businessimage.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businessimage.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businessimage.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessSettingsStore() (*businesssettings.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businesssettings.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businesssettings.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessProviderStore() (*businessproviders.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businessproviders.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businessproviders.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessTrackerStore() (*businesstracker.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businesstracker.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businesstracker.NewStore(s.cfg)
 }
 
 func (s *Server) getStore() *accounts.Store {
@@ -491,8 +550,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/business/image/conversations/{id}", s.requireUIAuth(http.HandlerFunc(s.handleDeleteBusinessImageConversation)))
 	mux.Handle("POST /api/image/generate", s.requireUIAuth(http.HandlerFunc(s.handleProviderImageGenerateSubmit)))
 
-	mux.Handle("POST /v1/images/generations", s.requireImageAuth(http.HandlerFunc(s.handleImageGenerations)))
-	mux.Handle("POST /v1/images/edits", s.requireImageAuth(http.HandlerFunc(s.handleImageEdits)))
 	mux.Handle("POST /v1/chat/completions", s.requireImageAuth(http.HandlerFunc(s.handleImageChatCompletions)))
 	mux.Handle("POST /v1/responses", s.requireImageAuth(http.HandlerFunc(s.handleImageResponses)))
 	mux.Handle("GET /v1/models", s.requireImageAuth(http.HandlerFunc(s.handleModels)))
@@ -921,133 +978,6 @@ func (s *Server) handleRunSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"result": result, "status": status})
 }
 
-func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) {
-	if s.rejectIfMaintenanceMode(w) {
-		return
-	}
-	var req struct {
-		Model          string `json:"model"`
-		Prompt         string `json:"prompt"`
-		N              int    `json:"n"`
-		Size           string `json:"size"`
-		Quality        string `json:"quality"`
-		Background     string `json:"background"`
-		ResponseFormat string `json:"response_format"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
-		return
-	}
-	if strings.TrimSpace(req.Prompt) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "prompt is required"})
-		return
-	}
-	if req.N < 1 {
-		req.N = 1
-	}
-
-	payload, err := s.executeImageGeneration(r.Context(), imageGenerationRequest{
-		Model:          req.Model,
-		Prompt:         req.Prompt,
-		N:              req.N,
-		Size:           req.Size,
-		Quality:        req.Quality,
-		Background:     req.Background,
-		ResponseFormat: req.ResponseFormat,
-	}, r)
-	if err != nil {
-		writeImageRequestError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, payload)
-}
-
-func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
-	if s.rejectIfMaintenanceMode(w) {
-		return
-	}
-	if err := r.ParseMultipartForm(int64(max(1, s.cfg.App.MaxUploadSizeMB)) << 20); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid multipart form"})
-		return
-	}
-
-	prompt := strings.TrimSpace(r.FormValue("prompt"))
-	if prompt == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "prompt is required"})
-		return
-	}
-	requestedModel := normalizeRequestedImageModel(r.FormValue("model"), s.cfg.ChatGPT.Model)
-	responseFormat := firstNonEmpty(r.FormValue("response_format"), s.cfg.App.ImageFormat, "url")
-	size := strings.TrimSpace(r.FormValue("size"))
-	quality := strings.TrimSpace(r.FormValue("quality"))
-	mask, err := readOptionalMultipartFile(r.MultipartForm, "mask")
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
-		return
-	}
-
-	inpaintRequest := parseInpaintRequest(r)
-	var payload map[string]any
-	var data []map[string]any
-	var execErr error
-	if inpaintRequest.originalFileID != "" && inpaintRequest.originalGenID != "" {
-		if strings.TrimSpace(inpaintRequest.sourceAccountID) == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "source_account_id is required for selection edit"})
-			return
-		}
-		payload, execErr = s.executeImageSelectionEdit(r.Context(), imageSelectionEditRequest{
-			Model:           requestedModel,
-			Prompt:          prompt,
-			Mask:            mask,
-			OriginalFileID:  inpaintRequest.originalFileID,
-			OriginalGenID:   inpaintRequest.originalGenID,
-			ConversationID:  inpaintRequest.conversationID,
-			ParentMessageID: inpaintRequest.parentMessageID,
-			SourceAccountID: inpaintRequest.sourceAccountID,
-			ResponseFormat:  responseFormat,
-		}, r)
-		if execErr != nil {
-			err = execErr
-		} else {
-			data = compatResponseDataItems(payload)
-		}
-	} else {
-		images, readErr := readImagesFromMultipart(r.MultipartForm)
-		if readErr != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": readErr.Error()})
-			return
-		}
-		if len(images) == 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "at least one image is required"})
-			return
-		}
-
-		payload, execErr = s.executeImageEdit(r.Context(), imageEditRequest{
-			Model:          requestedModel,
-			Prompt:         prompt,
-			Images:         images,
-			Mask:           mask,
-			Size:           size,
-			Quality:        quality,
-			ResponseFormat: responseFormat,
-		}, r)
-		if execErr != nil {
-			err = execErr
-		} else {
-			data = compatResponseDataItems(payload)
-		}
-	}
-	if err != nil {
-		writeImageRequestError(w, err)
-		return
-	}
-	if payload != nil {
-		writeJSON(w, http.StatusOK, payload)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"created": time.Now().Unix(), "data": data})
-}
-
 type imageRequestMetadata struct {
 	size         string
 	quality      string
@@ -1243,9 +1173,9 @@ func (s *Server) runPureCPAImageRequest(
 	if admissionErr != nil {
 		err := admissionErr
 		if errors.Is(admissionErr, errImageAdmissionQueueFull) {
-			err = newRequestError("image_queue_full", "现在使用人数较多，请稍后使用。")
+			err = newRequestError("image_queue_full", "前方爆满，请稍后使用。")
 		} else if errors.Is(admissionErr, errImageAdmissionQueueTimeout) {
-			err = newRequestError("image_queue_timeout", "现在使用人数较多，请稍后使用。")
+			err = newRequestError("image_queue_timeout", "前方爆满，请稍后使用。")
 		}
 		entry := imageRequestLogEntry{
 			StartedAt:            startedAt.Format(time.RFC3339Nano),
@@ -1400,9 +1330,9 @@ func (s *Server) runImageRequestWithAdmission(ctx context.Context, authFile *acc
 		if admissionErr != nil {
 			err := admissionErr
 			if errors.Is(admissionErr, errImageAdmissionQueueFull) {
-				err = newRequestError("image_queue_full", "现在使用人数较多，请稍后使用。")
+				err = newRequestError("image_queue_full", "前方爆满，请稍后使用。")
 			} else if errors.Is(admissionErr, errImageAdmissionQueueTimeout) {
-				err = newRequestError("image_queue_timeout", "现在使用人数较多，请稍后使用。")
+				err = newRequestError("image_queue_timeout", "前方爆满，请稍后使用。")
 			}
 			entry := imageRequestLogEntry{
 				StartedAt:            startedAt.Format(time.RFC3339Nano),
@@ -1760,7 +1690,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		token = authCookieFromRequest(r)
 	}
 	if token != "" {
-		store, err := businessauth.NewStore(s.cfg)
+		store, err := s.newBusinessAuthStore()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "session store failed"})
 			return
@@ -1801,7 +1731,7 @@ func (s *Server) authSessionForToken(ctx context.Context, token string) (authSes
 }
 
 func (s *Server) persistentAuthSessionForToken(ctx context.Context, token string) (authSession, bool, error) {
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		return authSession{}, false, err
 	}
@@ -1895,7 +1825,7 @@ func (s *Server) loginAccountForCredentials(ctx context.Context, username, passw
 	if credential == "" || password == "" {
 		return loginAccount{}, false, nil
 	}
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		return loginAccount{}, false, err
 	}
@@ -1920,7 +1850,7 @@ func (s *Server) loginFailureMessage(ctx context.Context, credential string) (st
 	if credential == "" {
 		return "该账号未注册", nil
 	}
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		return "", err
 	}
@@ -1983,7 +1913,7 @@ func (s *Server) createAuthSession(ctx context.Context, account loginAccount) (s
 		return "", authSession{}, err
 	}
 	expiresAt := time.Now().Add(sessionTTL())
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		return "", authSession{}, err
 	}
@@ -2119,34 +2049,6 @@ func resolveStaticAsset(staticDir, requestPath string) string {
 	return ""
 }
 
-func readImagesFromMultipart(form *multipart.Form) ([][]byte, error) {
-	images := make([][]byte, 0)
-	for _, key := range []string{"image", "image[]"} {
-		files := form.File[key]
-		for _, fileHeader := range files {
-			data, err := readMultipartFile(fileHeader)
-			if err != nil {
-				return nil, err
-			}
-			images = append(images, data)
-		}
-	}
-
-	for _, key := range []string{"image_base64", "imageBase64"} {
-		if form.Value[key] == nil {
-			continue
-		}
-		for _, raw := range form.Value[key] {
-			decoded, err := decodeBase64Image(raw)
-			if err != nil {
-				return nil, err
-			}
-			images = append(images, decoded)
-		}
-	}
-	return images, nil
-}
-
 func readAuthFilesFromMultipart(form *multipart.Form) ([]accounts.ImportedAuthFile, error) {
 	if form == nil {
 		return nil, nil
@@ -2180,32 +2082,6 @@ func readAuthFilesFromMultipart(form *multipart.Form) ([]accounts.ImportedAuthFi
 	return files, nil
 }
 
-func readOptionalMultipartFile(form *multipart.Form, key string) ([]byte, error) {
-	files := form.File[key]
-	if len(files) == 0 {
-		return nil, nil
-	}
-	return readMultipartFile(files[0])
-}
-
-type inpaintRequest struct {
-	originalFileID  string
-	originalGenID   string
-	conversationID  string
-	parentMessageID string
-	sourceAccountID string
-}
-
-func parseInpaintRequest(r *http.Request) inpaintRequest {
-	return inpaintRequest{
-		originalFileID:  strings.TrimSpace(r.FormValue("original_file_id")),
-		originalGenID:   strings.TrimSpace(r.FormValue("original_gen_id")),
-		conversationID:  strings.TrimSpace(r.FormValue("conversation_id")),
-		parentMessageID: strings.TrimSpace(r.FormValue("parent_message_id")),
-		sourceAccountID: strings.TrimSpace(r.FormValue("source_account_id")),
-	}
-}
-
 func readMultipartFile(fileHeader *multipart.FileHeader) ([]byte, error) {
 	file, err := fileHeader.Open()
 	if err != nil {
@@ -2213,18 +2089,6 @@ func readMultipartFile(fileHeader *multipart.FileHeader) ([]byte, error) {
 	}
 	defer file.Close()
 	return io.ReadAll(file)
-}
-
-func decodeBase64Image(value string) ([]byte, error) {
-	cleaned := strings.TrimSpace(value)
-	if idx := strings.Index(cleaned, ","); idx >= 0 {
-		cleaned = cleaned[idx+1:]
-	}
-	decoded, err := base64.StdEncoding.DecodeString(cleaned)
-	if err != nil {
-		return nil, fmt.Errorf("invalid base64 image")
-	}
-	return decoded, nil
 }
 
 func (s *Server) findAccountByID(accountID string) (accounts.PublicAccount, error) {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"imagestudio/internal/config"
+	"imagestudio/internal/database"
 	"imagestudio/internal/sqlitedb"
 
 	"golang.org/x/crypto/bcrypt"
@@ -87,11 +88,32 @@ type BootstrapUser struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	driver string
+	ownDB  bool
 }
 
 func NewStore(cfg *config.Config) (*Store, error) {
-	rawPath := strings.TrimSpace(cfg.Storage.SQLitePath)
+	if strings.EqualFold(strings.TrimSpace(cfg.Database.Driver), "postgres") {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		db, err := database.Open(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		store := NewStoreWithDB(db, cfg.Database.Driver)
+		store.ownDB = true
+		if err := store.init(); err != nil {
+			_ = store.Close()
+			return nil, err
+		}
+		return store, nil
+	}
+	rawPath := strings.TrimSpace(firstNonEmpty(cfg.Storage.SQLitePath, cfg.Database.DSN))
 	if rawPath == "" {
 		return nil, fmt.Errorf("sqlite path is required")
 	}
@@ -100,7 +122,7 @@ func NewStore(cfg *config.Config) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, driver: "sqlite", ownDB: true}
 	if err := store.init(); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -108,14 +130,28 @@ func NewStore(cfg *config.Config) (*Store, error) {
 	return store, nil
 }
 
+func NewStoreWithDB(db *sql.DB, driver string) *Store {
+	driver = strings.ToLower(strings.TrimSpace(driver))
+	if driver == "" {
+		driver = "postgres"
+	}
+	return &Store{db: db, driver: driver}
+}
+
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
+		return nil
+	}
+	if !s.ownDB {
 		return nil
 	}
 	return s.db.Close()
 }
 
 func (s *Store) init() error {
+	if s.isPostgres() {
+		return nil
+	}
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS business_users (
 			id TEXT PRIMARY KEY,
@@ -223,11 +259,11 @@ func (s *Store) migrateBusinessUsersUID() error {
 	}
 	defer tx.Rollback()
 	for _, id := range ids {
-		uid, err := nextUIDInTx(context.Background(), tx)
+		uid, err := s.nextUIDInTx(context.Background(), tx)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`UPDATE business_users SET uid = ? WHERE id = ? AND uid = 0`, uid, id); err != nil {
+		if _, err := tx.Exec(s.rebind(`UPDATE business_users SET uid = ? WHERE id = ? AND uid = 0`), uid, id); err != nil {
 			return err
 		}
 	}
@@ -289,9 +325,9 @@ func (s *Store) EnsureBootstrapUser(ctx context.Context, user BootstrapUser) err
 		if existing.Email == "" || strings.HasSuffix(existing.Email, "@local.invalid") {
 			_, err := s.db.ExecContext(
 				ctx,
-				`UPDATE business_users SET email = ?, updated_at = ? WHERE id = ?`,
+				s.rebind(`UPDATE business_users SET email = ?, updated_at = ? WHERE id = ?`),
 				user.Email,
-				time.Now().UTC().Format(time.RFC3339Nano),
+				s.dbTime(time.Now().UTC()),
 				existing.ID,
 			)
 			return err
@@ -307,10 +343,10 @@ func (s *Store) EnsureBootstrapUser(ctx context.Context, user BootstrapUser) err
 	if ok {
 		_, err := s.db.ExecContext(
 			ctx,
-			`UPDATE business_users SET username = ?, email = ?, updated_at = ? WHERE id = ?`,
+			s.rebind(`UPDATE business_users SET username = ?, email = ?, updated_at = ? WHERE id = ?`),
 			user.Username,
 			user.Email,
-			now,
+			s.dbTimeText(now),
 			user.ID,
 		)
 		return err
@@ -325,14 +361,14 @@ func (s *Store) EnsureBootstrapUser(ctx context.Context, user BootstrapUser) err
 		return err
 	}
 	defer tx.Rollback()
-	uid, err := nextUIDInTx(ctx, tx)
+	uid, err := s.nextUIDInTx(ctx, tx)
 	if err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(
 		ctx,
-		`INSERT INTO business_users(id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.rebind(`INSERT INTO business_users(id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		user.ID,
 		uid,
 		user.Username,
@@ -340,9 +376,9 @@ func (s *Store) EnsureBootstrapUser(ctx context.Context, user BootstrapUser) err
 		passwordHash,
 		user.Role,
 		StatusActive,
-		"",
-		now,
-		now,
+		s.emptyTime(),
+		s.dbTimeText(now),
+		s.dbTimeText(now),
 	)
 	if err != nil {
 		return err
@@ -383,21 +419,12 @@ func (s *Store) GetUserByEmail(ctx context.Context, email string) (User, bool, e
 	var user User
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at
+		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at
 		 FROM business_users
-		 WHERE email = ?`,
+		 WHERE email = ?`),
 		email,
 	).Scan(
-		&user.ID,
-		&user.UID,
-		&user.Username,
-		&user.Email,
-		&user.PasswordHash,
-		&user.Role,
-		&user.Status,
-		&user.DeletedAt,
-		&user.CreatedAt,
-		&user.UpdatedAt,
+		s.userScanDest(&user)...,
 	)
 	if err == sql.ErrNoRows {
 		return User{}, false, nil
@@ -418,21 +445,12 @@ func (s *Store) GetUserByUsername(ctx context.Context, username string) (User, b
 	var user User
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at
+		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at
 		 FROM business_users
-		 WHERE username = ?`,
+		 WHERE username = ?`),
 		username,
 	).Scan(
-		&user.ID,
-		&user.UID,
-		&user.Username,
-		&user.Email,
-		&user.PasswordHash,
-		&user.Role,
-		&user.Status,
-		&user.DeletedAt,
-		&user.CreatedAt,
-		&user.UpdatedAt,
+		s.userScanDest(&user)...,
 	)
 	if err == sql.ErrNoRows {
 		return User{}, false, nil
@@ -458,6 +476,7 @@ func (s *Store) ListUsers(ctx context.Context, options ...ListUsersOptions) ([]U
 		args = append(args, StatusDeleted)
 	}
 	query += ` ORDER BY created_at ASC, username ASC`
+	query = s.rebind(query)
 
 	rows, err := s.db.QueryContext(
 		ctx,
@@ -473,16 +492,7 @@ func (s *Store) ListUsers(ctx context.Context, options ...ListUsersOptions) ([]U
 	for rows.Next() {
 		var user User
 		if err := rows.Scan(
-			&user.ID,
-			&user.UID,
-			&user.Username,
-			&user.Email,
-			&user.PasswordHash,
-			&user.Role,
-			&user.Status,
-			&user.DeletedAt,
-			&user.CreatedAt,
-			&user.UpdatedAt,
+			s.userScanDest(&user)...,
 		); err != nil {
 			return nil, err
 		}
@@ -521,14 +531,14 @@ func (s *Store) CreateEmailVerificationCode(ctx context.Context, email, purpose,
 		var createdAtRaw string
 		err := s.db.QueryRowContext(
 			ctx,
-			`SELECT created_at
+			s.rebind(`SELECT created_at
 			   FROM email_verification_codes
-			  WHERE email = ? AND purpose = ? AND consumed_at = ''
+			  WHERE email = ? AND purpose = ? AND consumed_at IS NULL
 			  ORDER BY created_at DESC
-			  LIMIT 1`,
+			  LIMIT 1`),
 			email,
 			purpose,
-		).Scan(&createdAtRaw)
+		).Scan(s.timeScanDest(&createdAtRaw))
 		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
@@ -541,16 +551,16 @@ func (s *Store) CreateEmailVerificationCode(ctx context.Context, email, purpose,
 	}
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO email_verification_codes(id, email, purpose, code_hash, attempts, consumed_at, expires_at, created_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.rebind(`INSERT INTO email_verification_codes(id, email, purpose, code_hash, attempts, consumed_at, expires_at, created_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`),
 		newVerificationID(),
 		email,
 		purpose,
 		emailVerificationCodeHash(email, purpose, code),
 		0,
-		"",
-		expiresAt.UTC().Format(time.RFC3339Nano),
-		now.Format(time.RFC3339Nano),
+		s.emptyTime(),
+		s.dbTime(expiresAt.UTC()),
+		s.dbTime(now),
 	)
 	return err
 }
@@ -572,14 +582,14 @@ func (s *Store) ConsumeEmailVerificationCode(ctx context.Context, email, purpose
 	var expiresAtRaw string
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, code_hash, attempts, expires_at
+		s.rebind(`SELECT id, code_hash, attempts, expires_at
 		   FROM email_verification_codes
-		  WHERE email = ? AND purpose = ? AND consumed_at = ''
+		  WHERE email = ? AND purpose = ? AND consumed_at IS NULL
 		  ORDER BY created_at DESC
-		  LIMIT 1`,
+		  LIMIT 1`),
 		email,
 		purpose,
-	).Scan(&id, &codeHash, &attempts, &expiresAtRaw)
+	).Scan(&id, &codeHash, &attempts, s.timeScanDest(&expiresAtRaw))
 	if err == sql.ErrNoRows {
 		return ErrVerificationInvalid
 	}
@@ -588,7 +598,7 @@ func (s *Store) ConsumeEmailVerificationCode(ctx context.Context, email, purpose
 	}
 	expiresAt, err := time.Parse(time.RFC3339Nano, expiresAtRaw)
 	if err != nil || !time.Now().UTC().Before(expiresAt) {
-		_, _ = s.db.ExecContext(ctx, `UPDATE email_verification_codes SET consumed_at = ? WHERE id = ?`, time.Now().UTC().Format(time.RFC3339Nano), id)
+		_, _ = s.db.ExecContext(ctx, s.rebind(`UPDATE email_verification_codes SET consumed_at = ? WHERE id = ?`), s.dbTime(time.Now().UTC()), id)
 		return ErrVerificationExpired
 	}
 	if attempts >= maxAttempts {
@@ -596,15 +606,15 @@ func (s *Store) ConsumeEmailVerificationCode(ctx context.Context, email, purpose
 	}
 	expected := emailVerificationCodeHash(email, purpose, code)
 	if subtle.ConstantTimeCompare([]byte(expected), []byte(codeHash)) != 1 {
-		_, _ = s.db.ExecContext(ctx, `UPDATE email_verification_codes SET attempts = attempts + 1 WHERE id = ?`, id)
+		_, _ = s.db.ExecContext(ctx, s.rebind(`UPDATE email_verification_codes SET attempts = attempts + 1 WHERE id = ?`), id)
 		return ErrVerificationInvalid
 	}
 	_, err = s.db.ExecContext(
 		ctx,
-		`UPDATE email_verification_codes
+		s.rebind(`UPDATE email_verification_codes
 		    SET consumed_at = ?
-		  WHERE id = ? AND consumed_at = ''`,
-		time.Now().UTC().Format(time.RFC3339Nano),
+		  WHERE id = ? AND consumed_at IS NULL`),
+		s.dbTime(time.Now().UTC()),
 		id,
 	)
 	return err
@@ -663,7 +673,7 @@ func (s *Store) CreateUserWithUsername(ctx context.Context, email, username, pas
 		return User{}, err
 	}
 	defer tx.Rollback()
-	uid, err := nextUIDInTx(ctx, tx)
+	uid, err := s.nextUIDInTx(ctx, tx)
 	if err != nil {
 		return User{}, err
 	}
@@ -682,8 +692,8 @@ func (s *Store) CreateUserWithUsername(ctx context.Context, email, username, pas
 	}
 	_, err = tx.ExecContext(
 		ctx,
-		`INSERT INTO business_users(id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.rebind(`INSERT INTO business_users(id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		user.ID,
 		user.UID,
 		user.Username,
@@ -691,9 +701,9 @@ func (s *Store) CreateUserWithUsername(ctx context.Context, email, username, pas
 		user.PasswordHash,
 		user.Role,
 		user.Status,
-		user.DeletedAt,
-		user.CreatedAt,
-		user.UpdatedAt,
+		s.emptyTime(),
+		s.dbTimeText(user.CreatedAt),
+		s.dbTimeText(user.UpdatedAt),
 	)
 	if err != nil {
 		return User{}, err
@@ -723,11 +733,11 @@ func (s *Store) SetUserStatus(ctx context.Context, id, status string) (User, boo
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	result, err := s.db.ExecContext(
 		ctx,
-		`UPDATE business_users
+		s.rebind(`UPDATE business_users
 		 SET status = ?, updated_at = ?
-		 WHERE id = ?`,
+		 WHERE id = ?`),
 		status,
-		now,
+		s.dbTimeText(now),
 		id,
 	)
 	if err != nil {
@@ -771,11 +781,11 @@ func (s *Store) ResetUserPassword(ctx context.Context, id, password string) (Use
 	}
 	result, err := s.db.ExecContext(
 		ctx,
-		`UPDATE business_users
+		s.rebind(`UPDATE business_users
 		 SET password_hash = ?, updated_at = ?
-		 WHERE id = ?`,
+		 WHERE id = ?`),
 		passwordHash,
-		time.Now().UTC().Format(time.RFC3339Nano),
+		s.dbTime(time.Now().UTC()),
 		id,
 	)
 	if err != nil {
@@ -815,7 +825,7 @@ func (s *Store) UpdateUser(ctx context.Context, id, username, password string) (
 	var existingID string
 	err = s.db.QueryRowContext(
 		ctx,
-		`SELECT id FROM business_users WHERE username = ? AND id <> ? LIMIT 1`,
+		s.rebind(`SELECT id FROM business_users WHERE username = ? AND id <> ? LIMIT 1`),
 		username,
 		id,
 	).Scan(&existingID)
@@ -830,11 +840,11 @@ func (s *Store) UpdateUser(ctx context.Context, id, username, password string) (
 	if password == "" {
 		result, err := s.db.ExecContext(
 			ctx,
-			`UPDATE business_users
+			s.rebind(`UPDATE business_users
 			 SET username = ?, updated_at = ?
-			 WHERE id = ?`,
+			 WHERE id = ?`),
 			username,
-			now,
+			s.dbTimeText(now),
 			id,
 		)
 		if err != nil {
@@ -857,12 +867,12 @@ func (s *Store) UpdateUser(ctx context.Context, id, username, password string) (
 	}
 	result, err := s.db.ExecContext(
 		ctx,
-		`UPDATE business_users
+		s.rebind(`UPDATE business_users
 		 SET username = ?, password_hash = ?, updated_at = ?
-		 WHERE id = ?`,
+		 WHERE id = ?`),
 		username,
 		passwordHash,
-		now,
+		s.dbTimeText(now),
 		id,
 	)
 	if err != nil {
@@ -911,11 +921,11 @@ func (s *Store) ChangeUserPassword(ctx context.Context, id, currentPassword, new
 	}
 	_, err = s.db.ExecContext(
 		ctx,
-		`UPDATE business_users
+		s.rebind(`UPDATE business_users
 		 SET password_hash = ?, updated_at = ?
-		 WHERE id = ?`,
+		 WHERE id = ?`),
 		passwordHash,
-		time.Now().UTC().Format(time.RFC3339Nano),
+		s.dbTime(time.Now().UTC()),
 		id,
 	)
 	if err != nil {
@@ -933,21 +943,12 @@ func (s *Store) GetUserByID(ctx context.Context, id string) (User, bool, error) 
 	var user User
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at
+		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at
 		 FROM business_users
-		 WHERE id = ?`,
+		 WHERE id = ?`),
 		id,
 	).Scan(
-		&user.ID,
-		&user.UID,
-		&user.Username,
-		&user.Email,
-		&user.PasswordHash,
-		&user.Role,
-		&user.Status,
-		&user.DeletedAt,
-		&user.CreatedAt,
-		&user.UpdatedAt,
+		s.userScanDest(&user)...,
 	)
 	if err == sql.ErrNoRows {
 		return User{}, false, nil
@@ -976,7 +977,7 @@ func (s *Store) DeleteUser(ctx context.Context, id string) (User, bool, error) {
 		var adminCount int
 		if err := s.db.QueryRowContext(
 			ctx,
-			`SELECT COUNT(*) FROM business_users WHERE role = ? AND status <> ?`,
+			s.rebind(`SELECT COUNT(*) FROM business_users WHERE role = ? AND status <> ?`),
 			RoleAdmin,
 			StatusDeleted,
 		).Scan(&adminCount); err != nil {
@@ -989,12 +990,12 @@ func (s *Store) DeleteUser(ctx context.Context, id string) (User, bool, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	result, err := s.db.ExecContext(
 		ctx,
-		`UPDATE business_users
+		s.rebind(`UPDATE business_users
 		 SET status = ?, deleted_at = ?, updated_at = ?
-		 WHERE id = ?`,
+		 WHERE id = ?`),
 		StatusDeleted,
-		now,
-		now,
+		s.dbTimeText(now),
+		s.dbTimeText(now),
 		id,
 	)
 	if err != nil {
@@ -1028,11 +1029,12 @@ func (s *Store) RestoreUser(ctx context.Context, id string) (User, bool, error) 
 	}
 	result, err := s.db.ExecContext(
 		ctx,
-		`UPDATE business_users
-		 SET status = ?, deleted_at = '', updated_at = ?
-		 WHERE id = ?`,
+		s.rebind(`UPDATE business_users
+		 SET status = ?, deleted_at = ?, updated_at = ?
+		 WHERE id = ?`),
 		StatusActive,
-		time.Now().UTC().Format(time.RFC3339Nano),
+		s.emptyTime(),
+		s.dbTime(time.Now().UTC()),
 		id,
 	)
 	if err != nil {
@@ -1052,12 +1054,12 @@ func (s *Store) RestoreUser(ctx context.Context, id string) (User, bool, error) 
 func (s *Store) DeletedUsersBefore(ctx context.Context, cutoff time.Time) ([]User, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at
+		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at
 		 FROM business_users
-		 WHERE status = ? AND deleted_at <> '' AND deleted_at <= ?
-		 ORDER BY deleted_at ASC`,
+		 WHERE status = ? AND deleted_at IS NOT NULL AND deleted_at <= ?
+		 ORDER BY deleted_at ASC`),
 		StatusDeleted,
-		cutoff.UTC().Format(time.RFC3339Nano),
+		s.dbTime(cutoff.UTC()),
 	)
 	if err != nil {
 		return nil, err
@@ -1068,16 +1070,7 @@ func (s *Store) DeletedUsersBefore(ctx context.Context, cutoff time.Time) ([]Use
 	for rows.Next() {
 		var user User
 		if err := rows.Scan(
-			&user.ID,
-			&user.UID,
-			&user.Username,
-			&user.Email,
-			&user.PasswordHash,
-			&user.Role,
-			&user.Status,
-			&user.DeletedAt,
-			&user.CreatedAt,
-			&user.UpdatedAt,
+			s.userScanDest(&user)...,
 		); err != nil {
 			return nil, err
 		}
@@ -1109,10 +1102,10 @@ func (s *Store) PurgeDeletedUser(ctx context.Context, id string) (User, bool, er
 		return User{}, false, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM user_sessions WHERE user_id = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM user_sessions WHERE user_id = ?`), id); err != nil {
 		return User{}, false, err
 	}
-	result, err := tx.ExecContext(ctx, `DELETE FROM business_users WHERE id = ? AND status = ?`, id, StatusDeleted)
+	result, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM business_users WHERE id = ? AND status = ?`), id, StatusDeleted)
 	if err != nil {
 		return User{}, false, err
 	}
@@ -1153,15 +1146,15 @@ func (s *Store) CreateSession(ctx context.Context, id, token string, user User, 
 	}
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO user_sessions(id, user_id, token_hash, expires_at, revoked_at, created_at, last_seen_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		s.rebind(`INSERT INTO user_sessions(id, user_id, token_hash, expires_at, revoked_at, created_at, last_seen_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?)`),
 		session.ID,
 		session.UserID,
 		session.TokenHash,
-		session.ExpiresAt,
-		"",
-		session.CreatedAt,
-		session.LastSeenAt,
+		s.dbTimeText(session.ExpiresAt),
+		s.emptyTime(),
+		s.dbTimeText(session.CreatedAt),
+		s.dbTimeText(session.LastSeenAt),
 	)
 	return session, err
 }
@@ -1173,34 +1166,26 @@ func (s *Store) GetSessionByToken(ctx context.Context, token string) (Session, b
 	}
 	var session Session
 	var user User
+	dest := []any{
+		&session.ID,
+		&session.UserID,
+		&session.TokenHash,
+		s.timeScanDest(&session.ExpiresAt),
+		s.timeScanDest(&session.RevokedAt),
+		s.timeScanDest(&session.CreatedAt),
+		s.timeScanDest(&session.LastSeenAt),
+	}
+	dest = append(dest, s.userScanDest(&user)...)
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT
+		s.rebind(`SELECT
 			s.id, s.user_id, s.token_hash, s.expires_at, s.revoked_at, s.created_at, s.last_seen_at,
 			u.id, u.uid, u.username, u.email, u.password_hash, u.role, u.status, u.deleted_at, u.created_at, u.updated_at
 		 FROM user_sessions s
 		 JOIN business_users u ON u.id = s.user_id
-		 WHERE s.token_hash = ?`,
+		 WHERE s.token_hash = ?`),
 		tokenHash,
-	).Scan(
-		&session.ID,
-		&session.UserID,
-		&session.TokenHash,
-		&session.ExpiresAt,
-		&session.RevokedAt,
-		&session.CreatedAt,
-		&session.LastSeenAt,
-		&user.ID,
-		&user.UID,
-		&user.Username,
-		&user.Email,
-		&user.PasswordHash,
-		&user.Role,
-		&user.Status,
-		&user.DeletedAt,
-		&user.CreatedAt,
-		&user.UpdatedAt,
-	)
+	).Scan(dest...)
 	if err == sql.ErrNoRows {
 		return Session{}, false, nil
 	}
@@ -1222,8 +1207,8 @@ func (s *Store) GetSessionByToken(ctx context.Context, token string) (Session, b
 	}
 	_, _ = s.db.ExecContext(
 		ctx,
-		`UPDATE user_sessions SET last_seen_at = ? WHERE id = ?`,
-		time.Now().UTC().Format(time.RFC3339Nano),
+		s.rebind(`UPDATE user_sessions SET last_seen_at = ? WHERE id = ?`),
+		s.dbTime(time.Now().UTC()),
 		session.ID,
 	)
 	return session, true, nil
@@ -1236,10 +1221,10 @@ func (s *Store) RevokeSessionByToken(ctx context.Context, token string) error {
 	}
 	_, err := s.db.ExecContext(
 		ctx,
-		`UPDATE user_sessions
+		s.rebind(`UPDATE user_sessions
 		 SET revoked_at = ?
-		 WHERE token_hash = ? AND revoked_at = ''`,
-		time.Now().UTC().Format(time.RFC3339Nano),
+		 WHERE token_hash = ? AND revoked_at IS NULL`),
+		s.dbTime(time.Now().UTC()),
 		tokenHash,
 	)
 	return err
@@ -1252,10 +1237,10 @@ func (s *Store) RevokeSessionsByUserID(ctx context.Context, userID string) error
 	}
 	_, err := s.db.ExecContext(
 		ctx,
-		`UPDATE user_sessions
+		s.rebind(`UPDATE user_sessions
 		 SET revoked_at = ?
-		 WHERE user_id = ? AND revoked_at = ''`,
-		time.Now().UTC().Format(time.RFC3339Nano),
+		 WHERE user_id = ? AND revoked_at IS NULL`),
+		s.dbTime(time.Now().UTC()),
 		userID,
 	)
 	return err
@@ -1369,7 +1354,7 @@ func (s *Store) nextUID(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
-	uid, err := nextUIDInTx(ctx, tx)
+	uid, err := s.nextUIDInTx(ctx, tx)
 	if err != nil {
 		return 0, err
 	}
@@ -1379,7 +1364,14 @@ func (s *Store) nextUID(ctx context.Context) (int64, error) {
 	return uid, nil
 }
 
-func nextUIDInTx(ctx context.Context, tx *sql.Tx) (int64, error) {
+func (s *Store) nextUIDInTx(ctx context.Context, tx *sql.Tx) (int64, error) {
+	if s.isPostgres() {
+		var uid int64
+		if err := tx.QueryRowContext(ctx, `SELECT nextval('business_user_uid_seq')`).Scan(&uid); err != nil {
+			return 0, err
+		}
+		return uid, nil
+	}
 	var current sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `SELECT MAX(uid) FROM business_users`).Scan(&current); err != nil {
 		return 0, err
@@ -1388,6 +1380,135 @@ func nextUIDInTx(ctx context.Context, tx *sql.Tx) (int64, error) {
 		return DefaultUIDStart, nil
 	}
 	return current.Int64 + 1, nil
+}
+
+func (s *Store) isPostgres() bool {
+	return strings.EqualFold(strings.TrimSpace(s.driver), "postgres")
+}
+
+func (s *Store) rebind(query string) string {
+	if !s.isPostgres() {
+		query = strings.ReplaceAll(query, "consumed_at IS NULL", "consumed_at = ''")
+		query = strings.ReplaceAll(query, "revoked_at IS NULL", "revoked_at = ''")
+		query = strings.ReplaceAll(query, "deleted_at IS NOT NULL", "deleted_at <> ''")
+		return query
+	}
+	var builder strings.Builder
+	index := 1
+	for _, r := range query {
+		if r == '?' {
+			builder.WriteString(fmt.Sprintf("$%d", index))
+			index++
+			continue
+		}
+		builder.WriteRune(r)
+	}
+	return builder.String()
+}
+
+func (s *Store) emptyTime() any {
+	if s.isPostgres() {
+		return nil
+	}
+	return ""
+}
+
+func (s *Store) dbTime(value time.Time) any {
+	if s.isPostgres() {
+		return value.UTC()
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func (s *Store) dbTimeText(value string) any {
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		return strings.TrimSpace(value)
+	}
+	return s.dbTime(parsed)
+}
+
+func (s *Store) timeScanDest(target *string) any {
+	if s.isPostgres() {
+		return &nullableTimeString{target: target}
+	}
+	return target
+}
+
+func (s *Store) userScanDest(user *User) []any {
+	if s.isPostgres() {
+		return []any{
+			&user.ID,
+			&user.UID,
+			&user.Username,
+			&user.Email,
+			&user.PasswordHash,
+			&user.Role,
+			&user.Status,
+			nullableStringDest(&user.DeletedAt),
+			&timeString{target: &user.CreatedAt},
+			&timeString{target: &user.UpdatedAt},
+		}
+	}
+	return []any{
+		&user.ID,
+		&user.UID,
+		&user.Username,
+		&user.Email,
+		&user.PasswordHash,
+		&user.Role,
+		&user.Status,
+		&user.DeletedAt,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	}
+}
+
+func nullableStringDest(target *string) any {
+	return &nullableTimeString{target: target}
+}
+
+type timeString struct {
+	target *string
+}
+
+func (s *timeString) Scan(value any) error {
+	text, err := scanTimeText(value)
+	if err != nil {
+		return err
+	}
+	*s.target = text
+	return nil
+}
+
+type nullableTimeString struct {
+	target *string
+}
+
+func (s *nullableTimeString) Scan(value any) error {
+	if value == nil {
+		*s.target = ""
+		return nil
+	}
+	text, err := scanTimeText(value)
+	if err != nil {
+		return err
+	}
+	*s.target = text
+	return nil
+}
+
+func scanTimeText(value any) (string, error) {
+	switch typed := value.(type) {
+	case time.Time:
+		return typed.UTC().Format(time.RFC3339Nano), nil
+	case string:
+		return typed, nil
+	case []byte:
+		return string(typed), nil
+	default:
+		return "", fmt.Errorf("unsupported time scan type %T", value)
+	}
 }
 
 func isDuplicateColumnError(err error) bool {

@@ -19,6 +19,7 @@ func TestApplyEnvConfigOverridesSetsStorageBootstrap(t *testing.T) {
 	t.Setenv("STORAGE_CONFIG_BACKEND", "redis")
 	t.Setenv("STORAGE_IMAGE_CONVERSATION_STORAGE", "server")
 	t.Setenv("STORAGE_IMAGE_DATA_STORAGE", "server")
+	t.Setenv("JOB_QUEUE_BACKEND", "local")
 	t.Setenv("REDIS_ADDR", "127.0.0.1:6379")
 	t.Setenv("REDIS_PASSWORD", "123456")
 	t.Setenv("REDIS_DB", "0")
@@ -39,6 +40,9 @@ func TestApplyEnvConfigOverridesSetsStorageBootstrap(t *testing.T) {
 	}
 	if cfg.Storage.ImageConversationStorage != "server" || cfg.Storage.ImageDataStorage != "server" {
 		t.Fatalf("expected image storage server/server, got %q/%q", cfg.Storage.ImageConversationStorage, cfg.Storage.ImageDataStorage)
+	}
+	if cfg.JobQueue.Backend != "local" {
+		t.Fatalf("JobQueue.Backend = %q, want local", cfg.JobQueue.Backend)
 	}
 }
 

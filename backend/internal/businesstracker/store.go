@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"imagestudio/internal/config"
+	"imagestudio/internal/database"
 	"imagestudio/internal/sqlitedb"
 )
 
@@ -82,10 +83,27 @@ type Summary struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	driver string
+	ownDB  bool
 }
 
 func NewStore(cfg *config.Config) (*Store, error) {
+	if database.IsPostgres(cfg.Database.Driver) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		db, err := database.Open(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		store := NewStoreWithDB(db, cfg.Database.Driver)
+		store.ownDB = true
+		return store, nil
+	}
 	rawPath := strings.TrimSpace(cfg.Storage.SQLitePath)
 	if rawPath == "" {
 		return nil, fmt.Errorf("sqlite path is required")
@@ -94,7 +112,7 @@ func NewStore(cfg *config.Config) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, driver: "sqlite", ownDB: true}
 	if err := store.init(); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -102,8 +120,19 @@ func NewStore(cfg *config.Config) (*Store, error) {
 	return store, nil
 }
 
+func NewStoreWithDB(db *sql.DB, driver string) *Store {
+	driver = strings.ToLower(strings.TrimSpace(driver))
+	if driver == "" {
+		driver = "postgres"
+	}
+	return &Store{db: db, driver: driver}
+}
+
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
+		return nil
+	}
+	if !s.ownDB {
 		return nil
 	}
 	return s.db.Close()
@@ -114,11 +143,14 @@ func (s *Store) DeleteUserRecords(ctx context.Context, userID string) error {
 	if userID == "" {
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx, `DELETE FROM business_image_tracker WHERE user_id = ?`, userID)
+	_, err := s.db.ExecContext(ctx, s.rebind(`DELETE FROM business_image_tracker WHERE user_id = ?`), userID)
 	return err
 }
 
 func (s *Store) init() error {
+	if s.isPostgres() {
+		return nil
+	}
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS business_image_tracker (
 			id TEXT PRIMARY KEY,
@@ -203,7 +235,7 @@ func (s *Store) Save(ctx context.Context, record Record) (Record, error) {
 
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO business_image_tracker(
+		s.rebind(`INSERT INTO business_image_tracker(
 			id, user_id, conversation_id, generation_id, turn_id, platform,
 			provider_id, provider_name, model, status, stage, error_code,
 			error_message, requested_count, actual_count, queue_wait_ms,
@@ -236,7 +268,7 @@ func (s *Store) Save(ctx context.Context, record Record) (Record, error) {
 			admitted_at = excluded.admitted_at,
 			upstream_started_at = excluded.upstream_started_at,
 			upstream_finished_at = excluded.upstream_finished_at,
-			finished_at = excluded.finished_at`,
+			finished_at = excluded.finished_at`),
 		record.ID,
 		record.UserID,
 		record.ConversationID,
@@ -288,7 +320,7 @@ func (s *Store) Summary(ctx context.Context, windowSeconds int64) (Summary, erro
 	var avgUpstreamMS float64
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT COUNT(*),
+		s.rebind(`SELECT COUNT(*),
 		        COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
 		        COALESCE(SUM(CASE WHEN status != ? THEN 1 ELSE 0 END), 0),
 		        COALESCE(SUM(requested_count), 0),
@@ -298,7 +330,7 @@ func (s *Store) Summary(ctx context.Context, windowSeconds int64) (Summary, erro
 		        COALESCE(AVG(NULLIF(upstream_duration_ms, 0)), 0),
 		        COALESCE(SUM(storage_bytes), 0)
 		 FROM business_image_tracker
-		 WHERE created_at >= ?`,
+		 WHERE created_at >= ?`),
 		StatusSucceeded,
 		StatusSucceeded,
 		windowStart,
@@ -349,7 +381,7 @@ func (s *Store) Summary(ctx context.Context, windowSeconds int64) (Summary, erro
 func (s *Store) platformSummary(ctx context.Context, windowStart string) ([]PlatformSummary, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT platform,
+		s.rebind(`SELECT platform,
 		        COUNT(*),
 		        COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
 		        COALESCE(SUM(CASE WHEN status != ? THEN 1 ELSE 0 END), 0),
@@ -357,7 +389,7 @@ func (s *Store) platformSummary(ctx context.Context, windowStart string) ([]Plat
 		 FROM business_image_tracker
 		 WHERE created_at >= ?
 		 GROUP BY platform
-		 ORDER BY COUNT(*) DESC, platform ASC`,
+		 ORDER BY COUNT(*) DESC, platform ASC`),
 		StatusSucceeded,
 		StatusSucceeded,
 		windowStart,
@@ -409,11 +441,11 @@ func (s *Store) fillLastPlatformError(ctx context.Context, item *PlatformSummary
 	}
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT error_code, error_message, created_at
+		s.rebind(`SELECT error_code, error_message, created_at
 		 FROM business_image_tracker
 		 WHERE created_at >= ? AND platform = ? AND status != ?
 		 ORDER BY created_at DESC
-		 LIMIT 1`,
+		 LIMIT 1`),
 		windowStart,
 		item.Platform,
 		StatusSucceeded,
@@ -438,7 +470,7 @@ func (s *Store) durationValues(ctx context.Context, column string, windowStart s
 	}
 	query += ` ORDER BY ` + column + ` ASC`
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx, s.rebind(query), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -464,7 +496,7 @@ func (s *Store) recentFailures(ctx context.Context, windowStart string, limit in
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, user_id, conversation_id, generation_id, turn_id, platform,
+		s.rebind(`SELECT id, user_id, conversation_id, generation_id, turn_id, platform,
 		        provider_id, provider_name, model, status, stage, error_code,
 		        error_message, requested_count, actual_count, queue_wait_ms,
 		        upstream_duration_ms, persist_duration_ms, total_duration_ms,
@@ -473,7 +505,7 @@ func (s *Store) recentFailures(ctx context.Context, windowStart string, limit in
 		 FROM business_image_tracker
 		 WHERE created_at >= ? AND status != ?
 		 ORDER BY created_at DESC
-		 LIMIT ?`,
+		 LIMIT ?`),
 		windowStart,
 		StatusSucceeded,
 		limit,
@@ -531,6 +563,14 @@ func scanRecord(scanner interface {
 		&item.FinishedAt,
 	)
 	return item, err
+}
+
+func (s *Store) isPostgres() bool {
+	return database.IsPostgres(s.driver)
+}
+
+func (s *Store) rebind(query string) string {
+	return database.Rebind(s.driver, query)
 }
 
 func percentile(values []int64, p float64) int64 {

@@ -114,6 +114,9 @@ function defaultSystemSettings(): BusinessSystemSettings {
       maxImageConcurrency: 8,
       imageQueueLimit: 32,
       imageQueueTimeoutSeconds: 20,
+      maxUserActiveJobs: 8,
+      maxProviderRunningJobs: 4,
+      maxQueuedJobs: 1000,
     },
     security: {
       imageFileAuthRequired: true,
@@ -196,6 +199,9 @@ function normalizeSettings(settings: BusinessSystemSettings): BusinessSystemSett
       maxImageConcurrency: normalizePositiveInt(next.runtime.maxImageConcurrency, 8, 128),
       imageQueueLimit: Math.min(10000, normalizeNonNegativeInt(next.runtime.imageQueueLimit)),
       imageQueueTimeoutSeconds: normalizePositiveInt(next.runtime.imageQueueTimeoutSeconds, 20, 3600),
+      maxUserActiveJobs: Math.min(10000, normalizeNonNegativeInt(next.runtime.maxUserActiveJobs)),
+      maxProviderRunningJobs: Math.min(10000, normalizeNonNegativeInt(next.runtime.maxProviderRunningJobs)),
+      maxQueuedJobs: Math.min(1000000, normalizeNonNegativeInt(next.runtime.maxQueuedJobs)),
     },
   };
 }
@@ -787,8 +793,65 @@ export default function SettingsPage() {
                   className={settingsInputClass}
                 />
               </Field>
+              <Field label="单用户活跃任务" hint="同一用户 queued/running job 的上限。填 0 表示不限制。">
+                <Input
+                  type="number"
+                  min="0"
+                  max="10000"
+                  step="1"
+                  value={settings.runtime.maxUserActiveJobs}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      runtime: {
+                        ...current.runtime,
+                        maxUserActiveJobs: Number(event.target.value),
+                      },
+                    }))
+                  }
+                  className={settingsInputClass}
+                />
+              </Field>
+              <Field label="单接入运行任务" hint="同一 provider 同时 running job 的上限。填 0 表示不限制。">
+                <Input
+                  type="number"
+                  min="0"
+                  max="10000"
+                  step="1"
+                  value={settings.runtime.maxProviderRunningJobs}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      runtime: {
+                        ...current.runtime,
+                        maxProviderRunningJobs: Number(event.target.value),
+                      },
+                    }))
+                  }
+                  className={settingsInputClass}
+                />
+              </Field>
+              <Field label="全站数据库排队" hint="PostgreSQL job 表 queued 状态总上限。填 0 表示不限制。">
+                <Input
+                  type="number"
+                  min="0"
+                  max="1000000"
+                  step="1"
+                  value={settings.runtime.maxQueuedJobs}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      runtime: {
+                        ...current.runtime,
+                        maxQueuedJobs: Number(event.target.value),
+                      },
+                    }))
+                  }
+                  className={settingsInputClass}
+                />
+              </Field>
               <div className={cn(adminSubPanelClass, "px-4 py-3 text-sm leading-6 text-[var(--app-text-secondary)]")}>
-                运维监控负责看实时状态，系统设置负责改运行规则。排队满或排队超时不会扣点。
+                运维监控负责看实时状态，系统设置负责改运行规则。排队满、排队超时或容量超限不会扣点。
               </div>
             </SettingSection>
 

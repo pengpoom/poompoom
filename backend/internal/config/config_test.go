@@ -172,6 +172,40 @@ func TestLoadMigratesLegacyMixOverrideToStudio(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsToPostgresDatabase(t *testing.T) {
+	cfg := New(t.TempDir())
+	if err := cfg.Load(); err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	if cfg.Database.Driver != "postgres" {
+		t.Fatalf("Database.Driver = %q, want postgres", cfg.Database.Driver)
+	}
+	if !strings.HasPrefix(cfg.Database.DSN, "postgres://") {
+		t.Fatalf("Database.DSN = %q, want postgres DSN", cfg.Database.DSN)
+	}
+	if cfg.Database.MaxOpenConns <= 1 || cfg.Database.MaxIdleConns <= 1 {
+		t.Fatalf("database pool = %d/%d, want PostgreSQL pool defaults", cfg.Database.MaxOpenConns, cfg.Database.MaxIdleConns)
+	}
+	if cfg.JobQueue.Backend != "local" {
+		t.Fatalf("JobQueue.Backend = %q, want local", cfg.JobQueue.Backend)
+	}
+}
+
+func TestValidateAcceptsRedisJobQueue(t *testing.T) {
+	cfg := New(t.TempDir())
+	if err := cfg.Load(); err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	cfg.JobQueue.Backend = "redis"
+
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() returned error: %v", err)
+	}
+	if cfg.JobQueue.Backend != "redis" {
+		t.Fatalf("JobQueue.Backend = %q, want redis", cfg.JobQueue.Backend)
+	}
+}
+
 func TestValidateMigratesLegacyCPAImageRoutesToStudioRoutes(t *testing.T) {
 	cfg := &Config{
 		ChatGPT: ChatGPTConfig{

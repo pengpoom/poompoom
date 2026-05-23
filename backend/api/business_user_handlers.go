@@ -12,7 +12,6 @@ import (
 	"imagestudio/internal/businessauth"
 	"imagestudio/internal/businesscredits"
 	"imagestudio/internal/businessimage"
-	"imagestudio/internal/businesstracker"
 )
 
 func paginationFromQuery(r *http.Request, prefix string, defaultPageSize int, maxPageSize int) (int, int, int) {
@@ -198,7 +197,7 @@ type businessDashboardResponse struct {
 }
 
 func (s *Server) handleGetBusinessDashboard(w http.ResponseWriter, r *http.Request) {
-	userStore, err := businessauth.NewStore(s.cfg)
+	userStore, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -210,7 +209,7 @@ func (s *Server) handleGetBusinessDashboard(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "usage store failed"})
 		return
@@ -229,7 +228,7 @@ func (s *Server) handleGetBusinessDashboard(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -346,7 +345,7 @@ func (s *Server) handleGetBusinessDashboard(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleListBusinessUsers(w http.ResponseWriter, r *http.Request) {
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -366,7 +365,7 @@ func (s *Server) handleListBusinessUsers(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "usage store failed"})
 		return
@@ -378,7 +377,7 @@ func (s *Server) handleListBusinessUsers(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -419,12 +418,12 @@ func (s *Server) purgeExpiredDeletedBusinessUsers(r *http.Request, userStore *bu
 		return nil
 	}
 
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		return err
 	}
 	defer imageStore.Close()
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		return err
 	}
@@ -490,7 +489,7 @@ func (s *Server) clearBusinessUserData(
 	if err := creditStore.DeleteUserCreditData(r.Context(), userID); err != nil {
 		return err
 	}
-	trackerStore, err := businesstracker.NewStore(s.cfg)
+	trackerStore, err := s.newBusinessTrackerStore()
 	if err != nil {
 		return err
 	}
@@ -505,7 +504,7 @@ func (s *Server) handleGetBusinessUserDetail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	userStore, err := businessauth.NewStore(s.cfg)
+	userStore, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -525,7 +524,7 @@ func (s *Server) handleGetBusinessUserDetail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "usage store failed"})
 		return
@@ -568,7 +567,7 @@ func (s *Server) handleGetBusinessUserDetail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -605,7 +604,7 @@ func (s *Server) handleGetBusinessMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authorization is invalid"})
 		return
 	}
-	userStore, err := businessauth.NewStore(s.cfg)
+	userStore, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -621,7 +620,7 @@ func (s *Server) handleGetBusinessMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -653,7 +652,7 @@ func (s *Server) handleChangeBusinessMePassword(w http.ResponseWriter, r *http.R
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "new password must be at least 6 characters"})
 		return
 	}
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -681,13 +680,13 @@ func (s *Server) handleListBusinessUsage(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authorization is invalid"})
 		return
 	}
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
 	}
 	defer creditStore.Close()
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "usage store failed"})
 		return
@@ -706,20 +705,20 @@ func (s *Server) handleListBusinessUsage(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleListAllBusinessUsage(w http.ResponseWriter, r *http.Request) {
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
 	}
 	defer creditStore.Close()
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "usage store failed"})
 		return
 	}
 	defer imageStore.Close()
 
-	userStore, err := businessauth.NewStore(s.cfg)
+	userStore, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -808,7 +807,7 @@ func (s *Server) handleCreateBusinessUser(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -847,7 +846,7 @@ func (s *Server) handleCreateBusinessUser(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if initialBalance > 0 {
-		creditStore, err := businesscredits.NewStore(s.cfg)
+		creditStore, err := s.newBusinessCreditStore()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 			return
@@ -871,7 +870,7 @@ func (s *Server) handleUpdateBusinessUser(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -921,7 +920,7 @@ func (s *Server) handleUpdateBusinessUserStatus(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -959,7 +958,7 @@ func (s *Server) handleDeleteBusinessUser(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -992,7 +991,7 @@ func (s *Server) handleRestoreBusinessUser(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "user id is required"})
 		return
 	}
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -1020,7 +1019,7 @@ func (s *Server) handlePurgeBusinessUser(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "user id is required"})
 		return
 	}
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -1030,13 +1029,13 @@ func (s *Server) handlePurgeBusinessUser(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "usage store failed"})
 		return
 	}
 	defer imageStore.Close()
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -1065,7 +1064,7 @@ func (s *Server) handleClearBusinessUserData(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "user id is required"})
 		return
 	}
-	userStore, err := businessauth.NewStore(s.cfg)
+	userStore, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -1084,13 +1083,13 @@ func (s *Server) handleClearBusinessUserData(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "user not found"})
 		return
 	}
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "usage store failed"})
 		return
 	}
 	defer imageStore.Close()
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -1109,7 +1108,7 @@ func (s *Server) handleGetBusinessCredit(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authorization is invalid"})
 		return
 	}
-	store, err := businesscredits.NewStore(s.cfg)
+	store, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -1144,7 +1143,7 @@ func (s *Server) handleSetBusinessUserCredit(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	userStore, err := businessauth.NewStore(s.cfg)
+	userStore, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -1165,7 +1164,7 @@ func (s *Server) handleSetBusinessUserCredit(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -1212,7 +1211,7 @@ func (s *Server) handleResetBusinessUserPassword(w http.ResponseWriter, r *http.
 		return
 	}
 
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return

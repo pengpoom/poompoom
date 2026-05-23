@@ -23,7 +23,7 @@ type businessProviderPayload struct {
 }
 
 func (s *Server) handleListBusinessAPIProviders(w http.ResponseWriter, r *http.Request) {
-	store, err := businessproviders.NewStore(s.cfg)
+	store, err := s.newBusinessProviderStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "provider store failed"})
 		return
@@ -46,7 +46,7 @@ func (s *Server) handleCreateBusinessAPIProvider(w http.ResponseWriter, r *http.
 	if !ok {
 		return
 	}
-	store, err := businessproviders.NewStore(s.cfg)
+	store, err := s.newBusinessProviderStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "provider store failed"})
 		return
@@ -65,7 +65,7 @@ func (s *Server) handleUpdateBusinessAPIProvider(w http.ResponseWriter, r *http.
 	if !ok {
 		return
 	}
-	store, err := businessproviders.NewStore(s.cfg)
+	store, err := s.newBusinessProviderStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "provider store failed"})
 		return
@@ -84,7 +84,7 @@ func (s *Server) handleUpdateBusinessAPIProvider(w http.ResponseWriter, r *http.
 }
 
 func (s *Server) handleSetDefaultBusinessAPIProvider(w http.ResponseWriter, r *http.Request) {
-	store, err := businessproviders.NewStore(s.cfg)
+	store, err := s.newBusinessProviderStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "provider store failed"})
 		return
@@ -103,7 +103,7 @@ func (s *Server) handleSetDefaultBusinessAPIProvider(w http.ResponseWriter, r *h
 }
 
 func (s *Server) handleDeleteBusinessAPIProvider(w http.ResponseWriter, r *http.Request) {
-	store, err := businessproviders.NewStore(s.cfg)
+	store, err := s.newBusinessProviderStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "provider store failed"})
 		return
@@ -122,7 +122,7 @@ func (s *Server) handleDeleteBusinessAPIProvider(w http.ResponseWriter, r *http.
 }
 
 func (s *Server) handleTestBusinessAPIProvider(w http.ResponseWriter, r *http.Request) {
-	store, err := businessproviders.NewStore(s.cfg)
+	store, err := s.newBusinessProviderStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "provider store failed"})
 		return

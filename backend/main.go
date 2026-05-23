@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 	"imagestudio/internal/cliproxy"
 	"imagestudio/internal/config"
 	"imagestudio/internal/configstore"
+	"imagestudio/internal/database"
 )
 
 func main() {
@@ -73,6 +75,16 @@ func main() {
 		}
 	}
 
+	db, err := openPrimaryDatabase(cfg)
+	if err != nil {
+		fatalStartup(logger, paths, "初始化数据库失败", err,
+			"请检查 database.driver、database.dsn 以及数据库服务是否可连接",
+		)
+	}
+	if db != nil {
+		defer db.Close()
+	}
+
 	store, err := accounts.NewStore(cfg)
 	if err != nil {
 		fatalStartup(logger, paths, "初始化账号存储失败", err)
@@ -87,7 +99,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           api.SetupRouter(cfg, store, syncClient),
+		Handler:           api.SetupRouterWithDatabase(cfg, store, syncClient, db),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -131,6 +143,23 @@ func main() {
 	defer cancel()
 	_ = server.Shutdown(shutCtx)
 	logger.Info("server stopped")
+}
+
+func openPrimaryDatabase(cfg *config.Config) (*sql.DB, error) {
+	if !strings.EqualFold(strings.TrimSpace(cfg.Database.Driver), "postgres") {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
 }
 
 func envString(key, fallback string) string {
@@ -187,6 +216,12 @@ func applyEnvConfigOverrides(cfg *config.Config) error {
 
 	putString("APP_AUTH_KEY", "app", "auth_key")
 	putString("APP_API_KEY", "app", "api_key")
+	putString("DATABASE_DRIVER", "database", "driver")
+	putString("DATABASE_DSN", "database", "dsn")
+	putInt("DATABASE_MAX_OPEN_CONNS", "database", "max_open_conns")
+	putInt("DATABASE_MAX_IDLE_CONNS", "database", "max_idle_conns")
+	putInt("DATABASE_CONN_MAX_LIFETIME_SECONDS", "database", "conn_max_lifetime_seconds")
+	putString("JOB_QUEUE_BACKEND", "job_queue", "backend")
 	putString("STORAGE_BACKEND", "storage", "backend")
 	putString("STORAGE_CONFIG_BACKEND", "storage", "config_backend")
 	putString("STORAGE_IMAGE_STORAGE", "storage", "image_storage")

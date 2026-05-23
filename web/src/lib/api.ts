@@ -78,6 +78,9 @@ export type BusinessSystemSettings = {
     maxImageConcurrency: number;
     imageQueueLimit: number;
     imageQueueTimeoutSeconds: number;
+    maxUserActiveJobs: number;
+    maxProviderRunningJobs: number;
+    maxQueuedJobs: number;
   };
   security: {
     imageFileAuthRequired: boolean;
@@ -481,6 +484,13 @@ export type RuntimeStatusResponse = {
     queueTimeoutMs: number;
     inflight: number;
     queued: number;
+  };
+  capacity?: {
+    maxUserActiveJobs: number;
+    maxProviderRunningJobs: number;
+    maxQueuedJobs: number;
+    queuedJobs: number;
+    error?: string;
   };
   recent: {
     windowSeconds: number;
@@ -1784,10 +1794,6 @@ export async function generateImageWithOptions(
   ]);
   const policyHeader = buildImageAccountPolicyHeader(policy);
   const normalizedCount = Math.max(1, count);
-  const businessProxyMode = isBusinessProxyMode();
-  const endpoint = businessProxyMode
-    ? "/api/image/generate"
-    : "/v1/images/generations";
   const body: Record<string, unknown> = {
     prompt,
     model,
@@ -1795,82 +1801,24 @@ export async function generateImageWithOptions(
     size: size?.trim() || undefined,
     quality,
     response_format: responseFormat,
+    mode: options.mode || "generate",
+    platform: options.platform?.trim() || undefined,
+    jobId: options.jobId?.trim() || undefined,
+    conversationId: options.conversationId?.trim() || undefined,
+    turnId: options.turnId?.trim() || undefined,
+    title: options.title?.trim() || undefined,
   };
-  if (businessProxyMode) {
-    body.mode = options.mode || "generate";
-    body.platform = options.platform?.trim() || undefined;
-    body.jobId = options.jobId?.trim() || undefined;
-    body.conversationId = options.conversationId?.trim() || undefined;
-    body.turnId = options.turnId?.trim() || undefined;
-    body.title = options.title?.trim() || undefined;
-    if (options.sourceImages?.length) {
-      body.sourceImages = options.sourceImages;
-    }
-    if (options.sourceReference) {
-      body.sourceReference = options.sourceReference;
-    }
+  if (options.sourceImages?.length) {
+    body.sourceImages = options.sourceImages;
   }
-  return httpRequest<ImageResponse>(endpoint, {
+  if (options.sourceReference) {
+    body.sourceReference = options.sourceReference;
+  }
+  return httpRequest<ImageResponse>("/api/image/generate", {
     method: "POST",
     headers: policyHeader
       ? { "X-Studio-Account-Policy": policyHeader }
       : undefined,
     body,
-  });
-}
-
-export async function editImage({
-  prompt,
-  images,
-  mask,
-  sourceReference,
-  size,
-  quality,
-  model = "gpt-image-2",
-}: {
-  prompt: string;
-  images: File[];
-  mask?: File | null;
-  sourceReference?: InpaintSourceReference;
-  size?: string;
-  quality?: ImageQuality;
-  model?: ImageModel;
-}) {
-  const formData = new FormData();
-  const [policy, responseFormat] = await Promise.all([
-    getImageAccountPolicyForRequest(),
-    getImageResponseFormatForRequest(),
-  ]);
-  const policyHeader = buildImageAccountPolicyHeader(policy);
-  formData.append("prompt", prompt);
-  formData.append("model", model);
-  formData.append("response_format", responseFormat);
-  if (size?.trim()) {
-    formData.append("size", size.trim());
-  }
-  if (quality) {
-    formData.append("quality", quality);
-  }
-  images.forEach((file) => formData.append("image", file));
-  if (mask) {
-    formData.append("mask", mask);
-  }
-  if (sourceReference) {
-    formData.append("original_file_id", sourceReference.original_file_id);
-    formData.append("original_gen_id", sourceReference.original_gen_id);
-    formData.append("source_account_id", sourceReference.source_account_id);
-    if (sourceReference.conversation_id) {
-      formData.append("conversation_id", sourceReference.conversation_id);
-    }
-    if (sourceReference.parent_message_id) {
-      formData.append("parent_message_id", sourceReference.parent_message_id);
-    }
-  }
-  return httpRequest<ImageResponse>("/v1/images/edits", {
-    method: "POST",
-    headers: policyHeader
-      ? { "X-Studio-Account-Policy": policyHeader }
-      : undefined,
-    body: formData,
   });
 }

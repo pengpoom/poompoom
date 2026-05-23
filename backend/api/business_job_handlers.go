@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"imagestudio/internal/businesscredits"
-	"imagestudio/internal/businessimage"
 	"imagestudio/internal/businessjobs"
 )
 
@@ -76,7 +74,7 @@ func sanitizeBusinessImageJobSourceImages(value any) any {
 
 func (s *Server) handleListBusinessImageJobs(w http.ResponseWriter, r *http.Request) {
 	s.reconcileStaleBusinessImageJobs(r.Context())
-	store, err := businessjobs.NewStore(s.cfg)
+	store, err := s.newBusinessJobStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "job store failed"})
 		return
@@ -108,7 +106,7 @@ func (s *Server) handleListBusinessImageJobs(w http.ResponseWriter, r *http.Requ
 
 func (s *Server) handleAdminListBusinessImageJobs(w http.ResponseWriter, r *http.Request) {
 	s.reconcileStaleBusinessImageJobs(r.Context())
-	store, err := businessjobs.NewStore(s.cfg)
+	store, err := s.newBusinessJobStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "job store failed"})
 		return
@@ -146,7 +144,7 @@ func (s *Server) handleAdminListBusinessImageJobs(w http.ResponseWriter, r *http
 
 func (s *Server) handleGetBusinessImageJob(w http.ResponseWriter, r *http.Request) {
 	s.reconcileStaleBusinessImageJobs(r.Context())
-	store, err := businessjobs.NewStore(s.cfg)
+	store, err := s.newBusinessJobStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "job store failed"})
 		return
@@ -166,7 +164,7 @@ func (s *Server) handleGetBusinessImageJob(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleCancelBusinessImageJob(w http.ResponseWriter, r *http.Request) {
-	store, err := businessjobs.NewStore(s.cfg)
+	store, err := s.newBusinessJobStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "job store failed"})
 		return
@@ -222,7 +220,7 @@ func (s *Server) refundCancelledPreUpstreamBusinessImageJob(ctx context.Context,
 	if job.CreditReserved <= 0 {
 		return job
 	}
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		return job
 	}
@@ -244,7 +242,7 @@ func (s *Server) refundCancelledPreUpstreamBusinessImageJob(ctx context.Context,
 }
 
 func (s *Server) saveBusinessImageJobSnapshot(ctx context.Context, job businessjobs.Job) businessjobs.Job {
-	store, err := businessjobs.NewStore(s.cfg)
+	store, err := s.newBusinessJobStore()
 	if err != nil {
 		return job
 	}
@@ -257,7 +255,7 @@ func (s *Server) saveBusinessImageJobSnapshot(ctx context.Context, job businessj
 }
 
 func (s *Server) markBusinessImageGenerationCancelled(ctx context.Context, userID string, generationID string) {
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		return
 	}

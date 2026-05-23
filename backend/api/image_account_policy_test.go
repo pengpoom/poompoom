@@ -7,7 +7,7 @@ import (
 )
 
 func TestParseRequestImageAccountRoutingPolicy(t *testing.T) {
-	req := httptest.NewRequest("POST", "/v1/images/generations", nil)
+	req := httptest.NewRequest("POST", "/api/image/generate", nil)
 	req.Header.Set(imageAccountPolicyHeader, base64.RawURLEncoding.EncodeToString([]byte(`{
 		"enabled": true,
 		"sortMode": "quota",
@@ -36,7 +36,7 @@ func TestParseRequestImageAccountRoutingPolicy(t *testing.T) {
 }
 
 func TestParseRequestImageAccountRoutingPolicyRejectsInvalidPayload(t *testing.T) {
-	req := httptest.NewRequest("POST", "/v1/images/generations", nil)
+	req := httptest.NewRequest("POST", "/api/image/generate", nil)
 	req.Header.Set(imageAccountPolicyHeader, "not-base64")
 
 	_, err := parseRequestImageAccountRoutingPolicy(req)

@@ -11,6 +11,7 @@ import (
 
 	"imagestudio/internal/businesscredits"
 	"imagestudio/internal/config"
+	"imagestudio/internal/database"
 	"imagestudio/internal/sqlitedb"
 )
 
@@ -167,10 +168,27 @@ type DeleteResult struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	driver string
+	ownDB  bool
 }
 
 func NewStore(cfg *config.Config) (*Store, error) {
+	if database.IsPostgres(cfg.Database.Driver) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		db, err := database.Open(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		store := NewStoreWithDB(db, cfg.Database.Driver)
+		store.ownDB = true
+		return store, nil
+	}
 	rawPath := strings.TrimSpace(cfg.Storage.SQLitePath)
 	if rawPath == "" {
 		return nil, fmt.Errorf("sqlite path is required")
@@ -180,7 +198,7 @@ func NewStore(cfg *config.Config) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, driver: "sqlite", ownDB: true}
 	if err := store.init(); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -188,14 +206,28 @@ func NewStore(cfg *config.Config) (*Store, error) {
 	return store, nil
 }
 
+func NewStoreWithDB(db *sql.DB, driver string) *Store {
+	driver = strings.ToLower(strings.TrimSpace(driver))
+	if driver == "" {
+		driver = "postgres"
+	}
+	return &Store{db: db, driver: driver}
+}
+
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
+		return nil
+	}
+	if !s.ownDB {
 		return nil
 	}
 	return s.db.Close()
 }
 
 func (s *Store) init() error {
+	if s.isPostgres() {
+		return nil
+	}
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS business_image_conversations (
 			id TEXT PRIMARY KEY,
@@ -270,12 +302,12 @@ func (s *Store) UpsertConversation(ctx context.Context, conversation Conversatio
 	}
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO business_image_conversations(id, user_id, title, created_at, updated_at)
+		s.rebind(`INSERT INTO business_image_conversations(id, user_id, title, created_at, updated_at)
 		 VALUES(?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 			title = excluded.title,
 			updated_at = excluded.updated_at
-		 WHERE business_image_conversations.user_id = excluded.user_id`,
+		 WHERE business_image_conversations.user_id = excluded.user_id`),
 		conversation.ID,
 		conversation.UserID,
 		conversation.Title,
@@ -300,7 +332,7 @@ func (s *Store) GetConversation(ctx context.Context, id string, userID ...string
 		query += ` AND user_id = ?`
 		args = append(args, whereUserID)
 	}
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(
+	err := s.db.QueryRowContext(ctx, s.rebind(query), args...).Scan(
 		&conversation.ID,
 		&conversation.UserID,
 		&conversation.Title,
@@ -323,11 +355,11 @@ func (s *Store) ListConversations(ctx context.Context, userID string, limit int)
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, user_id, title, created_at, updated_at
+		s.rebind(`SELECT id, user_id, title, created_at, updated_at
 		 FROM business_image_conversations
 		 WHERE user_id = ?
 		 ORDER BY updated_at DESC
-		 LIMIT ?`,
+		 LIMIT ?`),
 		userID,
 		limit,
 	)
@@ -391,7 +423,7 @@ func (s *Store) SaveGeneration(ctx context.Context, generation Generation) (Gene
 	}
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO business_image_generations(
+		s.rebind(`INSERT INTO business_image_generations(
 			id, user_id, conversation_id, turn_id, prompt, model, size, quality,
 			count, status, response_json, error, created_at, finished_at
 		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -407,7 +439,7 @@ func (s *Store) SaveGeneration(ctx context.Context, generation Generation) (Gene
 			response_json = excluded.response_json,
 			error = excluded.error,
 			finished_at = excluded.finished_at
-		 WHERE business_image_generations.user_id = excluded.user_id`,
+		 WHERE business_image_generations.user_id = excluded.user_id`),
 		generation.ID,
 		generation.UserID,
 		generation.ConversationID,
@@ -437,13 +469,13 @@ func (s *Store) MarkGenerationFinished(ctx context.Context, userID string, gener
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	res, err := s.db.ExecContext(
 		ctx,
-		`UPDATE business_image_generations
+		s.rebind(`UPDATE business_image_generations
 		    SET status = ?,
 		        error = ?,
 		        finished_at = ?
 		  WHERE status IN ('queued', 'running', 'cancel_requested')
 		    AND user_id = ?
-		    AND id = ?`,
+		    AND id = ?`),
 		status,
 		errorMessage,
 		now,
@@ -482,7 +514,7 @@ func (s *Store) SaveAsset(ctx context.Context, asset Asset) (Asset, error) {
 	}
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT INTO business_image_assets(
+		s.rebind(`INSERT INTO business_image_assets(
 			id, user_id, conversation_id, generation_id, file_name, file_path,
 			url, mime_type, size_bytes, sha256, created_at
 		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -494,7 +526,7 @@ func (s *Store) SaveAsset(ctx context.Context, asset Asset) (Asset, error) {
 			url = excluded.url,
 			mime_type = excluded.mime_type,
 			size_bytes = excluded.size_bytes,
-			sha256 = excluded.sha256`,
+			sha256 = excluded.sha256`),
 		asset.ID,
 		asset.UserID,
 		asset.ConversationID,
@@ -532,7 +564,7 @@ func (s *Store) ListGenerations(ctx context.Context, conversationID string, args
 		 ORDER BY created_at ASC
 		 LIMIT ?`
 	queryArgs = append(queryArgs, limit)
-	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
+	rows, err := s.db.QueryContext(ctx, s.rebind(query), queryArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -581,9 +613,9 @@ func (s *Store) ImageFileNamesForConversation(ctx context.Context, conversationI
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT response_json
+		s.rebind(`SELECT response_json
 		 FROM business_image_generations
-		 WHERE conversation_id = ? AND user_id = ?`,
+		 WHERE conversation_id = ? AND user_id = ?`),
 		conversationID,
 		userID,
 	)
@@ -606,9 +638,9 @@ func (s *Store) ImageFileNamesForUser(ctx context.Context, userID string) ([]str
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT response_json
+		s.rebind(`SELECT response_json
 		 FROM business_image_generations
-		 WHERE user_id = ?`,
+		 WHERE user_id = ?`),
 		userID,
 	)
 	if err != nil {
@@ -630,11 +662,11 @@ func (s *Store) ImageFileNameReferenced(ctx context.Context, fileName string) (b
 	var assetCount int
 	if err := s.db.QueryRowContext(
 		ctx,
-		`SELECT COUNT(*)
+		s.rebind(`SELECT COUNT(*)
 		 FROM business_image_assets a
 		 JOIN business_image_generations g
 		   ON g.id = a.generation_id AND g.user_id = a.user_id
-		 WHERE a.file_name = ?`,
+		 WHERE a.file_name = ?`),
 		fileName,
 	).Scan(&assetCount); err != nil {
 		return false, err
@@ -727,9 +759,9 @@ func (s *Store) AssetFileNamesForConversation(ctx context.Context, conversationI
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT file_name
+		s.rebind(`SELECT file_name
 		 FROM business_image_assets
-		 WHERE conversation_id = ? AND user_id = ?`,
+		 WHERE conversation_id = ? AND user_id = ?`),
 		conversationID,
 		userID,
 	)
@@ -744,9 +776,9 @@ func (s *Store) AssetFileNamesForUser(ctx context.Context, userID string) ([]str
 	userID = firstNonEmpty(userID, DevUserID)
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT file_name
+		s.rebind(`SELECT file_name
 		 FROM business_image_assets
-		 WHERE user_id = ?`,
+		 WHERE user_id = ?`),
 		userID,
 	)
 	if err != nil {
@@ -763,9 +795,9 @@ func (s *Store) AssetOwnerUserIDs(ctx context.Context, fileName string) ([]strin
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT DISTINCT user_id
+		s.rebind(`SELECT DISTINCT user_id
 		 FROM business_image_assets
-		 WHERE file_name = ?`,
+		 WHERE file_name = ?`),
 		fileName,
 	)
 	if err != nil {
@@ -796,8 +828,8 @@ func (s *Store) DeleteAssetsByFileName(ctx context.Context, fileName string) err
 	}
 	_, err := s.db.ExecContext(
 		ctx,
-		`DELETE FROM business_image_assets
-		 WHERE file_name = ?`,
+		s.rebind(`DELETE FROM business_image_assets
+		 WHERE file_name = ?`),
 		fileName,
 	)
 	return err
@@ -807,8 +839,8 @@ func (s *Store) DeleteAssetsByUser(ctx context.Context, userID string) error {
 	userID = firstNonEmpty(userID, DevUserID)
 	_, err := s.db.ExecContext(
 		ctx,
-		`DELETE FROM business_image_assets
-		 WHERE user_id = ?`,
+		s.rebind(`DELETE FROM business_image_assets
+		 WHERE user_id = ?`),
 		userID,
 	)
 	return err
@@ -830,14 +862,14 @@ func (s *Store) UserUsageFiltered(ctx context.Context, filter UsageSummaryFilter
 	}
 	generationRows, err := s.db.QueryContext(
 		ctx,
-		`SELECT user_id,
+		s.rebind(`SELECT user_id,
 		        COUNT(*) AS generation_count,
 		        SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS success_count,
 		        SUM(CASE WHEN status != 'succeeded' THEN 1 ELSE 0 END) AS failed_count,
 		        MAX(created_at) AS last_generated_at
 		 FROM business_image_generations
 		 `+generationWhereSQL+`
-		 GROUP BY user_id`,
+		 GROUP BY user_id`),
 		generationArgs...,
 	)
 	if err != nil {
@@ -869,7 +901,7 @@ func (s *Store) UserUsageFiltered(ctx context.Context, filter UsageSummaryFilter
 	}
 	assetRows, err := s.db.QueryContext(
 		ctx,
-		`SELECT asset.user_id,
+		s.rebind(`SELECT asset.user_id,
 		        COUNT(*) AS image_count,
 		        COALESCE(SUM(asset.size_bytes), 0) AS storage_bytes
 		 FROM business_image_assets AS asset
@@ -877,7 +909,7 @@ func (s *Store) UserUsageFiltered(ctx context.Context, filter UsageSummaryFilter
 		   ON generation.id = asset.generation_id
 		  AND generation.user_id = asset.user_id
 		 `+assetWhereSQL+`
-		 GROUP BY asset.user_id`,
+		 GROUP BY asset.user_id`),
 		assetArgs...,
 	)
 	if err != nil {
@@ -922,8 +954,8 @@ func (s *Store) ConversationTotalFiltered(ctx context.Context, filter UsageSumma
 		var count int64
 		err := s.db.QueryRowContext(
 			ctx,
-			`SELECT COUNT(*)
-		 FROM business_image_conversations`,
+			s.rebind(`SELECT COUNT(*)
+		 FROM business_image_conversations`),
 		).Scan(&count)
 		return count, err
 	}
@@ -936,8 +968,8 @@ func (s *Store) ConversationTotalFiltered(ctx context.Context, filter UsageSumma
 	var count int64
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT COUNT(DISTINCT conversation_id)
-		 FROM business_image_generations`+whereSQL,
+		s.rebind(`SELECT COUNT(DISTINCT conversation_id)
+		 FROM business_image_generations`+whereSQL),
 		args...,
 	).Scan(&count)
 	return count, err
@@ -960,7 +992,7 @@ func (s *Store) ModelUsageFiltered(ctx context.Context, filter UsageSummaryFilte
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT generation.model,
+		s.rebind(`SELECT generation.model,
 		        COUNT(*) AS generation_count,
 		        SUM(CASE WHEN generation.status = 'succeeded' THEN 1 ELSE 0 END) AS success_count,
 		        SUM(CASE WHEN generation.status != 'succeeded' THEN 1 ELSE 0 END) AS failed_count,
@@ -978,7 +1010,7 @@ func (s *Store) ModelUsageFiltered(ctx context.Context, filter UsageSummaryFilte
 		  AND ledger.user_id = generation.user_id`+whereSQL+`
 		 GROUP BY generation.model
 		 ORDER BY generation_count DESC, last_generated_at DESC
-		 LIMIT ?`,
+		 LIMIT ?`),
 		append([]any{
 			businesscredits.ReasonImageGenerationReserve,
 			businesscredits.ReasonImageGenerationRefund,
@@ -1068,8 +1100,8 @@ func (s *Store) UsageRecordsPage(ctx context.Context, filter UsageRecordFilter, 
 	var total int64
 	if err := s.db.QueryRowContext(
 		ctx,
-		`SELECT COUNT(*)
-		 FROM business_image_generations AS generation`+whereSQL,
+		s.rebind(`SELECT COUNT(*)
+		 FROM business_image_generations AS generation`+whereSQL),
 		filterArgs...,
 	).Scan(&total); err != nil {
 		return nil, 0, err
@@ -1096,7 +1128,7 @@ func (s *Store) UsageRecordsPage(ctx context.Context, filter UsageRecordFilter, 
 		 LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.db.QueryContext(ctx, s.rebind(query), args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1173,21 +1205,21 @@ func (s *Store) AssetsByUserPage(ctx context.Context, userID string, limit int, 
 	var total int64
 	if err := s.db.QueryRowContext(
 		ctx,
-		`SELECT COUNT(*)
+		s.rebind(`SELECT COUNT(*)
 		 FROM business_image_assets
-		 WHERE user_id = ?`,
+		 WHERE user_id = ?`),
 		userID,
 	).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, user_id, conversation_id, generation_id, file_name, file_path,
+		s.rebind(`SELECT id, user_id, conversation_id, generation_id, file_name, file_path,
 		        url, mime_type, size_bytes, sha256, created_at
 		 FROM business_image_assets
 		 WHERE user_id = ?
 		 ORDER BY created_at DESC, file_name DESC
-		 LIMIT ? OFFSET ?`,
+		 LIMIT ? OFFSET ?`),
 		userID,
 		limit,
 		offset,
@@ -1231,9 +1263,9 @@ func (s *Store) ConversationCount(ctx context.Context, userID string) (int64, er
 	var count int64
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT COUNT(*)
+		s.rebind(`SELECT COUNT(*)
 		 FROM business_image_conversations
-		 WHERE user_id = ?`,
+		 WHERE user_id = ?`),
 		userID,
 	).Scan(&count)
 	return count, err
@@ -1316,9 +1348,9 @@ func (s *Store) BackfillLegacyAssets(ctx context.Context, files map[string]Legac
 func (s *Store) storageAssets(ctx context.Context) ([]StorageAsset, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT user_id, conversation_id, generation_id, file_name, file_path, url, size_bytes
+		s.rebind(`SELECT user_id, conversation_id, generation_id, file_name, file_path, url, size_bytes
 		 FROM business_image_assets
-		 ORDER BY created_at ASC, file_name ASC`,
+		 ORDER BY created_at ASC, file_name ASC`),
 	)
 	if err != nil {
 		return nil, err
@@ -1364,7 +1396,7 @@ func (s *Store) storageReferences(ctx context.Context, legacyOnly bool) ([]Stora
 		 FROM business_image_generations AS generation
 		 WHERE generation.response_json IS NOT NULL
 		 ORDER BY generation.created_at ASC, generation.id ASC`
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx, s.rebind(query))
 	if err != nil {
 		return nil, err
 	}
@@ -1406,8 +1438,8 @@ func (s *Store) storageReferences(ctx context.Context, legacyOnly bool) ([]Stora
 func (s *Store) assetFileNameSet(ctx context.Context) (map[string]struct{}, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT file_name
-		 FROM business_image_assets`,
+		s.rebind(`SELECT file_name
+		 FROM business_image_assets`),
 	)
 	if err != nil {
 		return nil, err
@@ -1433,13 +1465,13 @@ func (s *Store) assetFileNameSet(ctx context.Context) (map[string]struct{}, erro
 func (s *Store) brokenAssets(ctx context.Context) ([]BrokenAsset, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT asset.file_name, asset.user_id, asset.generation_id
+		s.rebind(`SELECT asset.file_name, asset.user_id, asset.generation_id
 		 FROM business_image_assets AS asset
 		 LEFT JOIN business_image_generations AS generation
 		   ON generation.id = asset.generation_id
 		  AND generation.user_id = asset.user_id
 		 WHERE generation.id IS NULL
-		 ORDER BY asset.created_at ASC, asset.file_name ASC`,
+		 ORDER BY asset.created_at ASC, asset.file_name ASC`),
 	)
 	if err != nil {
 		return nil, err
@@ -1483,8 +1515,8 @@ func (s *Store) DeleteConversation(ctx context.Context, id string, userID string
 
 	generationResult, err := tx.ExecContext(
 		ctx,
-		`DELETE FROM business_image_generations
-		 WHERE conversation_id = ? AND user_id = ?`,
+		s.rebind(`DELETE FROM business_image_generations
+		 WHERE conversation_id = ? AND user_id = ?`),
 		id,
 		userID,
 	)
@@ -1493,8 +1525,8 @@ func (s *Store) DeleteConversation(ctx context.Context, id string, userID string
 	}
 	conversationResult, err := tx.ExecContext(
 		ctx,
-		`DELETE FROM business_image_conversations
-		 WHERE id = ? AND user_id = ?`,
+		s.rebind(`DELETE FROM business_image_conversations
+		 WHERE id = ? AND user_id = ?`),
 		id,
 		userID,
 	)
@@ -1528,8 +1560,8 @@ func (s *Store) ClearConversations(ctx context.Context, userID string) (DeleteRe
 
 	generationResult, err := tx.ExecContext(
 		ctx,
-		`DELETE FROM business_image_generations
-		 WHERE user_id = ?`,
+		s.rebind(`DELETE FROM business_image_generations
+		 WHERE user_id = ?`),
 		userID,
 	)
 	if err != nil {
@@ -1537,8 +1569,8 @@ func (s *Store) ClearConversations(ctx context.Context, userID string) (DeleteRe
 	}
 	conversationResult, err := tx.ExecContext(
 		ctx,
-		`DELETE FROM business_image_conversations
-		 WHERE user_id = ?`,
+		s.rebind(`DELETE FROM business_image_conversations
+		 WHERE user_id = ?`),
 		userID,
 	)
 	if err != nil {
@@ -1827,4 +1859,12 @@ func compactStrings(values []string) []string {
 		items = append(items, trimmed)
 	}
 	return items
+}
+
+func (s *Store) isPostgres() bool {
+	return database.IsPostgres(s.driver)
+}
+
+func (s *Store) rebind(query string) string {
+	return database.Rebind(s.driver, query)
 }

@@ -61,6 +61,20 @@ function numberText(value: number | undefined) {
   return Number(value || 0).toLocaleString();
 }
 
+function limitText(value: number | undefined) {
+  const normalized = Number(value || 0);
+  return normalized > 0 ? normalized.toLocaleString() : "不限";
+}
+
+function runtimeCapacity(runtime: RuntimeStatusResponse | null) {
+  return runtime?.capacity ?? {
+    maxUserActiveJobs: 0,
+    maxProviderRunningJobs: 0,
+    maxQueuedJobs: 0,
+    queuedJobs: 0,
+  };
+}
+
 function formatDateTime(value: string | undefined) {
   const date = new Date(value || "");
   if (Number.isNaN(date.getTime())) {
@@ -396,6 +410,7 @@ export default function OperationsPage() {
   const defaultProviders = useMemo(() => defaultProviderNames(providers), [providers]);
   const recentFailure = tracker?.recentFailures[0];
   const system = runtime?.system;
+  const capacity = runtimeCapacity(runtime);
   const usernamesByID = useMemo(() => {
     const next = new Map<string, string>();
     users.forEach((user) => next.set(user.id, user.username));
@@ -445,7 +460,7 @@ export default function OperationsPage() {
           </section>
         ) : null}
 
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <MetricCard
             label="并发"
             value={loading ? "-" : `${numberText(runtime?.admission.inflight)}/${numberText(runtime?.admission.maxConcurrency)}`}
@@ -459,6 +474,13 @@ export default function OperationsPage() {
             sub={`上限 ${numberText(runtime?.admission.queueLimit)} / 超时 ${formatDurationMs(runtime?.admission.queueTimeoutMs)}`}
             icon={Clock3}
             color="text-amber-300"
+          />
+          <MetricCard
+            label="数据库队列"
+            value={loading ? "-" : `${numberText(capacity.queuedJobs)}/${limitText(capacity.maxQueuedJobs)}`}
+            sub={`单用户 ${limitText(capacity.maxUserActiveJobs)} / 接入 ${limitText(capacity.maxProviderRunningJobs)}`}
+            icon={Database}
+            color="text-cyan-300"
           />
           <MetricCard
             label="成功率"

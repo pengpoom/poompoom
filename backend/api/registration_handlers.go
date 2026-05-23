@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"imagestudio/internal/businessauth"
-	"imagestudio/internal/businesscredits"
 	"imagestudio/internal/businesssettings"
 )
 
@@ -58,7 +57,7 @@ func (s *Server) handleSendRegistrationVerificationCode(w http.ResponseWriter, r
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "registration email is not configured"})
 		return
 	}
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -127,7 +126,7 @@ func (s *Server) handleRegisterBusinessUser(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "password must be at least 6 characters"})
 		return
 	}
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -163,7 +162,7 @@ func (s *Server) handleRegisterBusinessUser(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if settings.User.DefaultCredits > 0 {
-		creditStore, err := businesscredits.NewStore(s.cfg)
+		creditStore, err := s.newBusinessCreditStore()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 			return

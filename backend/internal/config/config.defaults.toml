@@ -29,6 +29,16 @@ prefer_remote_refresh = true
 refresh_workers = 6
 image_quota_refresh_ttl_seconds = 120
 
+[database]
+driver = "postgres"
+dsn = "postgres://image_studio:image_studio@127.0.0.1:5432/image_studio?sslmode=disable"
+max_open_conns = 20
+max_idle_conns = 10
+conn_max_lifetime_seconds = 300
+
+[job_queue]
+backend = "local"
+
 [storage]
 backend = "current"
 config_backend = "file"

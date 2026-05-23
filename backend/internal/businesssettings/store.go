@@ -10,6 +10,7 @@ import (
 
 	"imagestudio/internal/businessproviders"
 	"imagestudio/internal/config"
+	"imagestudio/internal/database"
 	"imagestudio/internal/sqlitedb"
 )
 
@@ -66,6 +67,9 @@ type RuntimeSettings struct {
 	MaxImageConcurrency      int `json:"maxImageConcurrency"`
 	ImageQueueLimit          int `json:"imageQueueLimit"`
 	ImageQueueTimeoutSeconds int `json:"imageQueueTimeoutSeconds"`
+	MaxUserActiveJobs        int `json:"maxUserActiveJobs"`
+	MaxProviderRunningJobs   int `json:"maxProviderRunningJobs"`
+	MaxQueuedJobs            int `json:"maxQueuedJobs"`
 }
 
 type SecuritySettings struct {
@@ -86,10 +90,27 @@ type Response struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	driver string
+	ownDB  bool
 }
 
 func NewStore(cfg *config.Config) (*Store, error) {
+	if database.IsPostgres(cfg.Database.Driver) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		db, err := database.Open(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		store := NewStoreWithDB(db, cfg.Database.Driver)
+		store.ownDB = true
+		return store, nil
+	}
 	rawPath := strings.TrimSpace(cfg.Storage.SQLitePath)
 	if rawPath == "" {
 		return nil, fmt.Errorf("sqlite path is required")
@@ -98,7 +119,7 @@ func NewStore(cfg *config.Config) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, driver: "sqlite", ownDB: true}
 	if err := store.init(); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -106,8 +127,19 @@ func NewStore(cfg *config.Config) (*Store, error) {
 	return store, nil
 }
 
+func NewStoreWithDB(db *sql.DB, driver string) *Store {
+	driver = strings.ToLower(strings.TrimSpace(driver))
+	if driver == "" {
+		driver = "postgres"
+	}
+	return &Store{db: db, driver: driver}
+}
+
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
+		return nil
+	}
+	if !s.ownDB {
 		return nil
 	}
 	return s.db.Close()
@@ -123,7 +155,7 @@ func (s *Store) GetWithFound(ctx context.Context) (Settings, bool, error) {
 	var raw []byte
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT value_json FROM business_system_settings WHERE key = ?`,
+		s.rebind(`SELECT value_json FROM business_system_settings WHERE key = ?`),
 		settingsKey,
 	).Scan(&raw)
 	if err == sql.ErrNoRows {
@@ -150,11 +182,11 @@ func (s *Store) Save(ctx context.Context, settings Settings) (Settings, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = s.db.ExecContext(
 		ctx,
-		`INSERT INTO business_system_settings(key, value_json, created_at, updated_at)
+		s.rebind(`INSERT INTO business_system_settings(key, value_json, created_at, updated_at)
 		 VALUES(?, ?, ?, ?)
 		 ON CONFLICT(key) DO UPDATE SET
 		   value_json = excluded.value_json,
-		   updated_at = excluded.updated_at`,
+		   updated_at = excluded.updated_at`),
 		settingsKey,
 		raw,
 		now,
@@ -204,6 +236,9 @@ func Defaults() Settings {
 			MaxImageConcurrency:      8,
 			ImageQueueLimit:          32,
 			ImageQueueTimeoutSeconds: 20,
+			MaxUserActiveJobs:        8,
+			MaxProviderRunningJobs:   4,
+			MaxQueuedJobs:            1000,
 		},
 		Security: SecuritySettings{
 			ImageFileAuthRequired: true,
@@ -286,6 +321,24 @@ func Normalize(settings Settings) Settings {
 	if settings.Runtime.ImageQueueTimeoutSeconds > 3600 {
 		settings.Runtime.ImageQueueTimeoutSeconds = 3600
 	}
+	if settings.Runtime.MaxUserActiveJobs < 0 {
+		settings.Runtime.MaxUserActiveJobs = defaults.Runtime.MaxUserActiveJobs
+	}
+	if settings.Runtime.MaxUserActiveJobs > 10000 {
+		settings.Runtime.MaxUserActiveJobs = 10000
+	}
+	if settings.Runtime.MaxProviderRunningJobs < 0 {
+		settings.Runtime.MaxProviderRunningJobs = defaults.Runtime.MaxProviderRunningJobs
+	}
+	if settings.Runtime.MaxProviderRunningJobs > 10000 {
+		settings.Runtime.MaxProviderRunningJobs = 10000
+	}
+	if settings.Runtime.MaxQueuedJobs < 0 {
+		settings.Runtime.MaxQueuedJobs = defaults.Runtime.MaxQueuedJobs
+	}
+	if settings.Runtime.MaxQueuedJobs > 1000000 {
+		settings.Runtime.MaxQueuedJobs = 1000000
+	}
 	return settings
 }
 
@@ -309,6 +362,9 @@ func WithConfigRuntime(settings Settings, cfg *config.Config) Settings {
 		MaxImageConcurrency:      maxConcurrency,
 		ImageQueueLimit:          queueLimit,
 		ImageQueueTimeoutSeconds: int(queueTimeout / time.Second),
+		MaxUserActiveJobs:        settings.Runtime.MaxUserActiveJobs,
+		MaxProviderRunningJobs:   settings.Runtime.MaxProviderRunningJobs,
+		MaxQueuedJobs:            settings.Runtime.MaxQueuedJobs,
 	}
 	return Normalize(settings)
 }
@@ -329,6 +385,9 @@ func CreditCostForPlatform(settings Settings, platform string, count int) int64 
 }
 
 func (s *Store) init() error {
+	if s.isPostgres() {
+		return nil
+	}
 	_, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS business_system_settings (
 		key TEXT PRIMARY KEY,
 		value_json BLOB NOT NULL,
@@ -336,6 +395,14 @@ func (s *Store) init() error {
 		updated_at TEXT NOT NULL
 	);`)
 	return err
+}
+
+func (s *Store) isPostgres() bool {
+	return database.IsPostgres(s.driver)
+}
+
+func (s *Store) rebind(query string) string {
+	return database.Rebind(s.driver, query)
 }
 
 func normalizeRole(value string) string {

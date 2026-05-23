@@ -186,7 +186,7 @@ describe("business image history adapter", () => {
           status: "failed",
           stage: "admission",
           errorCode: "image_queue_timeout",
-          errorMessage: "现在使用人数较多，请稍后使用。",
+          errorMessage: "前方爆满，请稍后使用。",
           queueWaitMs: 5000,
           upstreamDurationMs: 0,
           persistDurationMs: 0,
@@ -206,14 +206,14 @@ describe("business image history adapter", () => {
     expect(conversation.turns?.[0]).toMatchObject({
       id: "turn-1-gen-1",
       status: "error",
-      error: "现在使用人数较多，请稍后使用。",
+      error: "前方爆满，请稍后使用。",
       waitingDetail: "admission",
       waitingSince: "2026-05-17T10:01:00Z",
       finishedAt: "2026-05-17T10:01:05Z",
     });
     expect(conversation.turns?.[0]?.images[0]).toMatchObject({
       status: "error",
-      error: "现在使用人数较多，请稍后使用。",
+      error: "前方爆满，请稍后使用。",
     });
   });
 

@@ -30,25 +30,45 @@ func (s *Server) startBusinessImageJobMaintenanceAsync() {
 
 func (s *Server) startBusinessImageJobWorker() {
 	s.businessJobWorkerOnce.Do(func() {
-		if s.businessJobWorkerWake == nil {
-			s.businessJobWorkerWake = make(chan struct{}, 1)
+		if s.businessJobDispatcher == nil {
+			dispatcher, err := newBusinessJobDispatcher(s.cfg)
+			if err != nil {
+				slog.Error("init business job dispatcher failed", slog.Any("error", err))
+				dispatcher = newLocalBusinessJobDispatcher()
+			}
+			s.businessJobDispatcher = dispatcher
 		}
 		go s.businessImageJobWorkerLoop()
 	})
 }
 
 func (s *Server) wakeBusinessImageJobWorker() {
+	s.notifyBusinessImageJob(businessjobs.Job{})
+}
+
+func (s *Server) notifyBusinessImageJob(job businessjobs.Job) {
 	s.startBusinessImageJobWorker()
-	select {
-	case s.businessJobWorkerWake <- struct{}{}:
-	default:
+	if s.businessJobDispatcher == nil {
+		return
 	}
+	_ = s.businessJobDispatcher.Notify(context.Background(), businessJobNotification{
+		JobID:  cleanJobNotificationID(job.ID),
+		UserID: strings.TrimSpace(job.UserID),
+	})
 }
 
 func (s *Server) businessImageJobWorkerLoop() {
-	for range s.businessJobWorkerWake {
+	if s.businessJobDispatcher == nil {
+		return
+	}
+	for notification := range s.businessJobDispatcher.Notifications() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		recovered := s.drainQueuedBusinessImageJobs(ctx)
+		recovered := 0
+		if notification.JobID != "" {
+			recovered = s.runQueuedBusinessImageJob(ctx, notification.JobID)
+		} else {
+			recovered = s.drainQueuedBusinessImageJobs(ctx)
+		}
 		cancel()
 		if recovered > 0 {
 			slog.Info("started queued business image jobs", slog.Int("claimed", recovered))
@@ -86,7 +106,7 @@ func (s *Server) runBusinessImageJobReconcileOnce() {
 }
 
 func (s *Server) recoverQueuedBusinessImageJobs(ctx context.Context) int {
-	store, err := businessjobs.NewStore(s.cfg)
+	store, err := s.newBusinessJobStore()
 	if err != nil {
 		return 0
 	}
@@ -97,7 +117,11 @@ func (s *Server) recoverQueuedBusinessImageJobs(ctx context.Context) int {
 	}
 	recovered := 0
 	for _, job := range jobs {
-		claimed, ok, err := store.ClaimQueued(ctx, job.ID, job.UserID)
+		workerID := "local"
+		if s.businessJobDispatcher != nil {
+			workerID = s.businessJobDispatcher.WorkerID()
+		}
+		claimed, ok, err := store.ClaimQueuedBy(ctx, job.ID, job.UserID, workerID)
 		if err != nil || !ok {
 			continue
 		}
@@ -107,6 +131,26 @@ func (s *Server) recoverQueuedBusinessImageJobs(ctx context.Context) int {
 		recovered++
 	}
 	return recovered
+}
+
+func (s *Server) runQueuedBusinessImageJob(ctx context.Context, jobID string) int {
+	store, err := s.newBusinessJobStore()
+	if err != nil {
+		return 0
+	}
+	defer store.Close()
+	workerID := "local"
+	if s.businessJobDispatcher != nil {
+		workerID = s.businessJobDispatcher.WorkerID()
+	}
+	claimed, ok, err := store.ClaimQueuedByJobID(ctx, jobID, workerID)
+	if err != nil || !ok {
+		return 0
+	}
+	payload := payloadForRecoveredBusinessImageJob(claimed)
+	startedAt := parseJobCreatedAt(claimed.CreatedAt)
+	go s.runProviderImageGenerateJob(claimed.UserID, payload, startedAt)
+	return 1
 }
 
 func payloadForRecoveredBusinessImageJob(job businessjobs.Job) map[string]any {
@@ -146,6 +190,10 @@ func payloadForRecoveredBusinessImageJob(job businessjobs.Job) map[string]any {
 		payload["response_format"] = "url"
 	}
 	return payload
+}
+
+func cleanJobNotificationID(value string) string {
+	return strings.TrimSpace(value)
 }
 
 func parseJobCreatedAt(value string) time.Time {

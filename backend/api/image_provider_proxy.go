@@ -30,6 +30,9 @@ import (
 )
 
 const maxImageProviderRequestBytes = 96 << 20
+
+var imageSourceFetchClient = &http.Client{Timeout: 30 * time.Second}
+
 const maxImageProviderResponseBytes = 80 << 20
 const maxProviderImageGenerationAttempts = 2
 const imageProviderOpenAICompatible = "openai_compatible"
@@ -130,12 +133,16 @@ func providerImageGenerateError(statusCode int, code, message string) providerIm
 
 func providerImageGenerateAdmissionError(err error) providerImageGenerateResult {
 	if errors.Is(err, errImageAdmissionQueueFull) {
-		return providerImageGenerateError(http.StatusTooManyRequests, "image_queue_full", "现在使用人数较多，请稍后使用。")
+		return providerImageGenerateError(http.StatusTooManyRequests, "image_queue_full", imageBusyMessage)
 	}
 	if errors.Is(err, errImageAdmissionQueueTimeout) {
-		return providerImageGenerateError(http.StatusGatewayTimeout, "image_queue_timeout", "现在使用人数较多，请稍后使用。")
+		return providerImageGenerateError(http.StatusGatewayTimeout, "image_queue_timeout", imageBusyMessage)
 	}
-	return providerImageGenerateError(http.StatusGatewayTimeout, "image_queue_cancelled", "现在使用人数较多，请稍后使用。")
+	return providerImageGenerateError(http.StatusGatewayTimeout, "image_queue_cancelled", imageBusyMessage)
+}
+
+func providerImageCapacityError(code string) providerImageGenerateResult {
+	return providerImageGenerateError(http.StatusTooManyRequests, code, businessJobCapacityMessage(code))
 }
 
 func (result providerImageGenerateResult) write(w http.ResponseWriter) {
@@ -227,7 +234,7 @@ func (s *Server) handleProviderImageGenerateSubmit(w http.ResponseWriter, r *htt
 		return
 	}
 
-	s.wakeBusinessImageJobWorker()
+	s.notifyBusinessImageJob(job)
 
 	writeJSON(w, http.StatusAccepted, providerImageGenerateJobPayload{
 		Job:            job,
@@ -332,6 +339,7 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 	if err != nil {
 		return businessjobs.Job{}, newProviderImageGenerateSubmitError(providerImageGenerateError(http.StatusInternalServerError, "provider_not_configured", err.Error()))
 	}
+	systemSettings := s.businessSystemSettingsForContext(ctx)
 	prompt := strings.TrimSpace(stringValue(payload["prompt"]))
 	if prompt == "" {
 		return businessjobs.Job{}, newProviderImageGenerateSubmitError(providerImageGenerateError(http.StatusBadRequest, "invalid_request", "prompt is required"))
@@ -350,7 +358,6 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 	if requestedCount <= 0 {
 		requestedCount = 1
 	}
-	systemSettings := s.businessSystemSettingsForContext(ctx)
 	if systemSettings.Generation.MaxCount > 0 && requestedCount > systemSettings.Generation.MaxCount {
 		return businessjobs.Job{}, newProviderImageGenerateSubmitError(providerImageGenerateError(http.StatusBadRequest, "invalid_request", fmt.Sprintf("单次最多生成 %d 张图片", systemSettings.Generation.MaxCount)))
 	}
@@ -383,13 +390,16 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 		CreatedAt:      startedAt.Format(time.RFC3339Nano),
 		QueuedAt:       startedAt.Format(time.RFC3339Nano),
 	}
-	store, err := businessjobs.NewStore(s.cfg)
+	store, err := s.newBusinessJobStore()
 	if err != nil {
 		return businessjobs.Job{}, err
 	}
 	defer store.Close()
-	saved, err := store.Save(ctx, job)
+	saved, err := store.SaveQueuedWithCapacity(ctx, job, businessJobCapacityLimits(systemSettings))
 	if err != nil {
+		if capacityCode := businessJobCapacityErrorCode(err); capacityCode != "" {
+			return businessjobs.Job{}, newProviderImageGenerateSubmitError(providerImageCapacityError(capacityCode))
+		}
 		return businessjobs.Job{}, err
 	}
 	s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, businessjobs.StatusQueued, "", startedAt)
@@ -461,7 +471,7 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	defer cancelJobContext()
 
 	saveJob := func(next businessjobs.Job) {
-		store, err := businessjobs.NewStore(s.cfg)
+		store, err := s.newBusinessJobStore()
 		if err != nil {
 			return
 		}
@@ -469,6 +479,15 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		if current, ok, getErr := store.Get(context.Background(), next.ID, next.UserID); getErr == nil && ok {
 			if current.CreditRefunded > next.CreditRefunded {
 				next.CreditRefunded = current.CreditRefunded
+			}
+			if next.ClaimedBy == "" {
+				next.ClaimedBy = current.ClaimedBy
+			}
+			if next.ClaimedAt == "" {
+				next.ClaimedAt = current.ClaimedAt
+			}
+			if next.Attempts < current.Attempts {
+				next.Attempts = current.Attempts
 			}
 			if shouldPreserveCurrentBusinessImageJob(current, next) {
 				job = current
@@ -482,6 +501,18 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		if err == nil {
 			job = saved
 		}
+	}
+	saveRunningJob := func(next businessjobs.Job, settings businesssettings.Settings) error {
+		store, err := s.newBusinessJobStore()
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		saved, err := store.SaveRunningWithProviderCapacity(context.Background(), next, businessJobCapacityLimits(settings))
+		if err == nil {
+			job = saved
+		}
+		return err
 	}
 	finishJob := func(status, stage, errorCode, errorMessage string) {
 		finishedAt := time.Now().UTC()
@@ -580,9 +611,9 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 			finishTracker(businesstracker.StatusFailed, "cancelled", "cancelled", "任务已取消")
 			return providerImageGenerateError(http.StatusConflict, "cancelled", "任务已取消")
 		}
-		s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", "现在使用人数较多，请稍后使用。", startedAt)
-		finishJob(businessjobs.StatusFailed, "admission", imageAdmissionErrorCode(admissionErr), "现在使用人数较多，请稍后使用。")
-		finishTracker(businesstracker.StatusFailed, "admission", imageAdmissionErrorCode(admissionErr), "现在使用人数较多，请稍后使用。")
+		s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", imageBusyMessage, startedAt)
+		finishJob(businessjobs.StatusFailed, "admission", imageAdmissionErrorCode(admissionErr), imageBusyMessage)
+		finishTracker(businesstracker.StatusFailed, "admission", imageAdmissionErrorCode(admissionErr), imageBusyMessage)
 		return providerImageGenerateAdmissionError(admissionErr)
 	}
 	defer releaseAdmission()
@@ -593,7 +624,20 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	job.Status = businessjobs.StatusRunning
 	job.Stage = "running"
 	job.StartedAt = tracker.AdmittedAt
-	saveJob(job)
+	job.LeaseUntil = time.Now().UTC().Add(s.imageProviderRequestTimeout() + defaultStaleRunningGrace).Format(time.RFC3339Nano)
+	if err := saveRunningJob(job, systemSettings); err != nil {
+		if capacityCode := businessJobCapacityErrorCode(err); capacityCode != "" {
+			message := businessJobCapacityMessage(capacityCode)
+			s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", message, startedAt)
+			finishJob(businessjobs.StatusFailed, "provider_capacity", capacityCode, message)
+			finishTracker(businesstracker.StatusFailed, "provider_capacity", capacityCode, message)
+			return providerImageCapacityError(capacityCode)
+		}
+		s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", err.Error(), startedAt)
+		finishJob(businessjobs.StatusFailed, "provider_capacity", "provider_capacity_check_failed", err.Error())
+		finishTracker(businesstracker.StatusFailed, "provider_capacity", "provider_capacity_check_failed", err.Error())
+		return providerImageGenerateError(http.StatusInternalServerError, "provider_capacity_check_failed", err.Error())
+	}
 	if execution.AfterRunningMarked != nil {
 		execution.AfterRunningMarked()
 	}
@@ -604,7 +648,7 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	}
 	s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "running", "", startedAt)
 
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", "credit store failed", startedAt)
 		finishJob(businessjobs.StatusFailed, "credit", "credit_store_failed", "credit store failed")
@@ -799,7 +843,7 @@ func (s *Server) recordProviderImageGenerationPlaceholder(ctx context.Context, u
 	if conversationID == "" || turnID == "" {
 		return
 	}
-	store, err := businessimage.NewStore(s.cfg)
+	store, err := s.newBusinessImageStore()
 	if err != nil {
 		return
 	}
@@ -850,7 +894,7 @@ func (s *Server) recordProviderImageGenerationPlaceholder(ctx context.Context, u
 }
 
 func (s *Server) saveBusinessImageTracker(ctx context.Context, record businesstracker.Record) {
-	store, err := businesstracker.NewStore(s.cfg)
+	store, err := s.newBusinessTrackerStore()
 	if err != nil {
 		return
 	}
@@ -891,7 +935,7 @@ func extractProviderImageGenerateMetadata(payload map[string]any) providerImageG
 	return providerImageGenerateMetadata{
 		ConversationID: strings.TrimSpace(stringValue(payload["conversationId"])),
 		TurnID:         strings.TrimSpace(stringValue(payload["turnId"])),
-		JobID:          strings.TrimSpace(firstNonEmpty(stringValue(payload["jobId"]), stringValue(payload["taskId"]))),
+		JobID:          strings.TrimSpace(stringValue(payload["jobId"])),
 		Title:          strings.TrimSpace(stringValue(payload["title"])),
 		Platform:       strings.TrimSpace(stringValue(payload["platform"])),
 	}
@@ -1025,7 +1069,7 @@ func (s *Server) resolveProviderSourceImageBytes(source providerImageSource) ([]
 		}
 		return data, nil
 	}
-	resp, err := compatImageFetchClient.Get(rawURL)
+	resp, err := imageSourceFetchClient.Get(rawURL)
 	if err != nil {
 		return nil, &providerGenerationError{
 			HTTPStatus: http.StatusBadGateway,
@@ -1065,7 +1109,7 @@ func (s *Server) recordProviderImageGeneration(ctx context.Context, userID strin
 	if conversationID == "" || turnID == "" {
 		return result
 	}
-	store, err := businessimage.NewStore(s.cfg)
+	store, err := s.newBusinessImageStore()
 	if err != nil {
 		return result
 	}
@@ -1726,7 +1770,7 @@ func (s *Server) saveBusinessImageBytes(ctx context.Context, payload []byte, use
 }
 
 func (s *Server) recordBusinessImageAsset(ctx context.Context, userID, conversationID, generationID, fileName, path, mimeType string, sizeBytes int64, sha256Hex string) {
-	store, err := businessimage.NewStore(s.cfg)
+	store, err := s.newBusinessImageStore()
 	if err != nil {
 		return
 	}
@@ -1938,7 +1982,7 @@ func (s *Server) imageProviderProxyConfig(requestedPlatform ...string) (imagePro
 }
 
 func (s *Server) defaultBusinessAPIProvider(platform string) (businessproviders.Provider, bool, error) {
-	store, err := businessproviders.NewStore(s.cfg)
+	store, err := s.newBusinessProviderStore()
 	if err != nil {
 		return businessproviders.Provider{}, false, err
 	}

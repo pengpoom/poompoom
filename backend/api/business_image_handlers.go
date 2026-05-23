@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Server) handleListBusinessImageConversations(w http.ResponseWriter, r *http.Request) {
-	store, err := businessimage.NewStore(s.cfg)
+	store, err := s.newBusinessImageStore()
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "business_image_store_failed", err.Error())
 		return
@@ -31,7 +31,7 @@ func (s *Server) handleListBusinessImageConversations(w http.ResponseWriter, r *
 }
 
 func (s *Server) handleGetBusinessImageConversation(w http.ResponseWriter, r *http.Request) {
-	store, err := businessimage.NewStore(s.cfg)
+	store, err := s.newBusinessImageStore()
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "business_image_store_failed", err.Error())
 		return
@@ -56,7 +56,7 @@ func (s *Server) handleGetBusinessImageConversation(w http.ResponseWriter, r *ht
 }
 
 func (s *Server) handleDeleteBusinessImageConversation(w http.ResponseWriter, r *http.Request) {
-	store, err := businessimage.NewStore(s.cfg)
+	store, err := s.newBusinessImageStore()
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "business_image_store_failed", err.Error())
 		return
@@ -96,7 +96,7 @@ func (s *Server) handleDeleteBusinessImageConversation(w http.ResponseWriter, r 
 }
 
 func (s *Server) handleClearBusinessImageConversations(w http.ResponseWriter, r *http.Request) {
-	store, err := businessimage.NewStore(s.cfg)
+	store, err := s.newBusinessImageStore()
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "business_image_store_failed", err.Error())
 		return

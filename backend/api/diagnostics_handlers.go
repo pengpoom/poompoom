@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"imagestudio/internal/buildinfo"
-	"imagestudio/internal/businessproviders"
 
 	"github.com/redis/go-redis/v9"
 	_ "modernc.org/sqlite"
@@ -94,6 +93,14 @@ type runtimeGoStatus struct {
 	Queued     int `json:"queued"`
 }
 
+type runtimeCapacityStatus struct {
+	MaxUserActiveJobs      int    `json:"maxUserActiveJobs"`
+	MaxProviderRunningJobs int    `json:"maxProviderRunningJobs"`
+	MaxQueuedJobs          int    `json:"maxQueuedJobs"`
+	QueuedJobs             int64  `json:"queuedJobs"`
+	Error                  string `json:"error,omitempty"`
+}
+
 type runtimeSystemStatus struct {
 	CPU      runtimeCPUStatus      `json:"cpu"`
 	Memory   runtimeMemoryStatus   `json:"memory"`
@@ -112,7 +119,8 @@ type runtimeStatusResponse struct {
 		Inflight       int   `json:"inflight"`
 		Queued         int   `json:"queued"`
 	} `json:"admission"`
-	Recent struct {
+	Capacity runtimeCapacityStatus `json:"capacity"`
+	Recent   struct {
 		WindowSeconds    int    `json:"windowSeconds"`
 		FailureCount     int    `json:"failureCount"`
 		LastError        string `json:"lastError,omitempty"`
@@ -174,6 +182,7 @@ func (s *Server) collectRuntimeStatus(ctx context.Context) runtimeStatusResponse
 		out.Admission.Inflight = snapshot.Inflight
 		out.Admission.Queued = snapshot.Queued
 	}
+	out.Capacity = s.collectRuntimeCapacityStatus(ctx)
 	out.Recent.WindowSeconds = 600
 	windowStart := now.Add(-10 * time.Minute)
 	for _, item := range s.reqLogs.list(200) {
@@ -194,6 +203,28 @@ func (s *Server) collectRuntimeStatus(ctx context.Context) runtimeStatusResponse
 
 	out.System = s.collectRuntimeSystemStatus(ctx, out.Admission.Inflight, out.Admission.Queued)
 	return out
+}
+
+func (s *Server) collectRuntimeCapacityStatus(ctx context.Context) runtimeCapacityStatus {
+	limits := businessJobCapacityLimits(s.businessSystemSettingsForContext(ctx))
+	status := runtimeCapacityStatus{
+		MaxUserActiveJobs:      limits.MaxUserActiveJobs,
+		MaxProviderRunningJobs: limits.MaxProviderRunningJobs,
+		MaxQueuedJobs:          limits.MaxQueuedJobs,
+	}
+	store, err := s.newBusinessJobStore()
+	if err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	defer store.Close()
+	queued, err := store.CountQueued(ctx)
+	if err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	status.QueuedJobs = queued
+	return status
 }
 
 func (s *Server) collectRuntimeSystemStatus(ctx context.Context, inflight int, queued int) runtimeSystemStatus {
@@ -487,7 +518,8 @@ func runtimeRedisEnabled(s *Server) bool {
 		strings.EqualFold(strings.TrimSpace(s.cfg.Storage.ConfigBackend), "redis") ||
 		strings.EqualFold(strings.TrimSpace(s.cfg.Storage.ImageStorage), "redis") ||
 		strings.EqualFold(strings.TrimSpace(s.cfg.Storage.ImageConversationStorage), "redis") ||
-		strings.EqualFold(strings.TrimSpace(s.cfg.Storage.ImageDataStorage), "redis")
+		strings.EqualFold(strings.TrimSpace(s.cfg.Storage.ImageDataStorage), "redis") ||
+		strings.EqualFold(strings.TrimSpace(s.cfg.JobQueue.Backend), "redis")
 }
 
 func roundPercent(value float64) float64 {
@@ -519,7 +551,7 @@ func (s *Server) runStartupCheck(ctx context.Context) startupCheckResponse {
 	})
 
 	addCheck("api_providers", "API 接入", func() (string, string, string) {
-		store, err := businessproviders.NewStore(s.cfg)
+		store, err := s.newBusinessProviderStore()
 		if err != nil {
 			return checkStatusFail, fmt.Sprintf("读取 API 接入失败：%v", err), ""
 		}

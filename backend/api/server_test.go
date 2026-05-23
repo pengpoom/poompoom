@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -26,6 +25,23 @@ import (
 	"imagestudio/internal/imagehistory"
 	_ "modernc.org/sqlite"
 )
+
+func newSQLiteServerTestConfig(t *testing.T, rootDir ...string) *config.Config {
+	t.Helper()
+	root := t.TempDir()
+	if len(rootDir) > 0 {
+		root = rootDir[0]
+	}
+	cfg := config.New(root)
+	if err := cfg.Load(); err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	cfg.Database.Driver = "sqlite"
+	cfg.Database.DSN = cfg.Storage.SQLitePath
+	cfg.Database.MaxOpenConns = 1
+	cfg.Database.MaxIdleConns = 1
+	return cfg
+}
 
 func TestShouldUseOfficialResponses(t *testing.T) {
 	tests := []struct {
@@ -81,10 +97,7 @@ func TestPasswordLoginIssuesRoleSession(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "owner")
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"username":"owner","password":"owner-pass"}`))
@@ -168,10 +181,7 @@ func TestPasswordLoginRejectsUserFromAdminRoutes(t *testing.T) {
 	t.Setenv("TEST_USERNAME", "tester")
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"username":"tester","password":"tester-pass"}`))
@@ -206,10 +216,7 @@ func TestPasswordLoginRateLimitsRepeatedFailures(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "owner")
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 
 	for attempt := 0; attempt < 5; attempt++ {
@@ -237,10 +244,7 @@ func TestPasswordLoginSuccessClearsFailureCount(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "owner")
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 
 	for attempt := 0; attempt < 4; attempt++ {
@@ -274,10 +278,7 @@ func TestPasswordLoginSuccessClearsFailureCount(t *testing.T) {
 }
 
 func TestRegistrationDisabledByDefault(t *testing.T) {
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/register/code", strings.NewReader(`{"email":"new@example.com"}`))
@@ -290,10 +291,7 @@ func TestRegistrationDisabledByDefault(t *testing.T) {
 }
 
 func TestEmailVerificationRegistrationCreatesUserAndSession(t *testing.T) {
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	settingsStore, err := businesssettings.NewStore(cfg)
 	if err != nil {
 		t.Fatalf("open business settings store: %v", err)
@@ -390,10 +388,7 @@ func TestAdminCanManageBusinessUsers(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "owner")
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 
@@ -871,10 +866,7 @@ func TestBusinessSystemSettingsAffectDefaultUserCredits(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "owner")
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 
@@ -938,10 +930,7 @@ func TestRuntimeStatusUsesPersistedBusinessSettingsOnFirstLoad(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
 	rootDir := t.TempDir()
-	cfg := config.New(rootDir)
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t, rootDir)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 
@@ -967,10 +956,7 @@ func TestRuntimeStatusUsesPersistedBusinessSettingsOnFirstLoad(t *testing.T) {
 		t.Fatalf("update settings status = %d, body = %s", settingsRec.Code, settingsRec.Body.String())
 	}
 
-	reloadedCfg := config.New(rootDir)
-	if err := reloadedCfg.Load(); err != nil {
-		t.Fatalf("Load(reloaded) returned error: %v", err)
-	}
+	reloadedCfg := newSQLiteServerTestConfig(t, rootDir)
 	reloadedServer := NewServer(reloadedCfg, nil, nil)
 	reloadedToken := loginForTest(t, reloadedServer, "owner", "owner-pass")
 
@@ -1006,10 +992,7 @@ func TestMaintenanceModeBlocksNewImageSubmissionsAndResetsOnRestart(t *testing.T
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
 	rootDir := t.TempDir()
-	cfg := config.New(rootDir)
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t, rootDir)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 	userToken := loginForTest(t, server, "tester", "tester-pass")
@@ -1071,10 +1054,7 @@ func TestBusinessUserManagementRequiresAdmin(t *testing.T) {
 	t.Setenv("TEST_USERNAME", "tester")
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	userToken := loginForTest(t, server, "tester", "tester-pass")
 
@@ -1091,10 +1071,7 @@ func TestAdminCanDeleteBusinessUser(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "owner")
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 
@@ -1265,10 +1242,7 @@ func TestListBusinessUsersPurgesExpiredDeletedUser(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
 	rootDir := t.TempDir()
-	cfg := config.New(rootDir)
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t, rootDir)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 
@@ -1423,10 +1397,7 @@ func TestConfiguredImageRoute(t *testing.T) {
 
 func TestMigrateImageFilesSkipsNestedTargetDirectory(t *testing.T) {
 	rootDir := t.TempDir()
-	cfg := config.New(rootDir)
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t, rootDir)
 	server := NewServer(cfg, nil, nil)
 
 	oldDir := filepath.Join(rootDir, "data", "tmp", "image")
@@ -1457,10 +1428,7 @@ func TestMigrateImageFilesSkipsNestedTargetDirectory(t *testing.T) {
 
 func TestResolveImageFilePathUsesConfiguredAndLegacyImageDirsOnly(t *testing.T) {
 	rootDir := t.TempDir()
-	cfg := config.New(rootDir)
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t, rootDir)
 	cfg.Storage.ImageDir = "data/new-images"
 	server := NewServer(cfg, nil, nil)
 
@@ -1515,10 +1483,7 @@ func TestBusinessImageJobsAreScopedToCurrentUser(t *testing.T) {
 	t.Setenv("TEST_USERNAME", "tester")
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 	userToken := loginForTest(t, server, "tester", "tester-pass")
@@ -1599,10 +1564,7 @@ func TestAdminCanListBusinessImageJobsWithFilters(t *testing.T) {
 	t.Setenv("TEST_USERNAME", "tester")
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 
@@ -1689,10 +1651,7 @@ func TestCancelBusinessImageJobMarksQueuedJobCancelled(t *testing.T) {
 	t.Setenv("TEST_USERNAME", "tester")
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	userToken := loginForTest(t, server, "tester", "tester-pass")
 
@@ -1780,10 +1739,7 @@ func TestCancelBusinessImageJobRefundsBeforeUpstreamOnly(t *testing.T) {
 	t.Setenv("TEST_USERNAME", "tester")
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	userToken := loginForTest(t, server, "tester", "tester-pass")
 
@@ -1904,10 +1860,7 @@ func TestCancelBusinessImageJobActiveRunningJobFinalizesCancelled(t *testing.T) 
 	t.Setenv("TEST_USERNAME", "tester")
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	userToken := loginForTest(t, server, "tester", "tester-pass")
 
@@ -1969,10 +1922,7 @@ func TestStaleBusinessImageJobReconcileMarksRunningFailedAndRefundsCredits(t *te
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 	t.Setenv("IMAGE_JOB_STALE_TIMEOUT_SECONDS", "1")
 
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	userToken := loginForTest(t, server, "tester", "tester-pass")
 
@@ -2110,10 +2060,7 @@ func TestStaleBusinessImageJobReconcileMarksRunningFailedAndRefundsCredits(t *te
 func TestStaleBusinessImageJobReconcileDoesNotRefundUpstreamCancel(t *testing.T) {
 	t.Setenv("IMAGE_JOB_STALE_TIMEOUT_SECONDS", "1")
 
-	cfg := config.New(t.TempDir())
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 
 	creditStore, err := businesscredits.NewStore(cfg)
@@ -2233,10 +2180,7 @@ func loginForTest(t *testing.T, server *Server, username, password string) strin
 
 func TestImportImageConversationsIntoSQLiteTarget(t *testing.T) {
 	rootDir := t.TempDir()
-	cfg := config.New(rootDir)
-	if err := cfg.Load(); err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
+	cfg := newSQLiteServerTestConfig(t, rootDir)
 	cfg.App.AuthKey = "test-auth"
 	server := NewServer(cfg, nil, nil)
 
@@ -2417,44 +2361,6 @@ func TestResolveImageAcquireError(t *testing.T) {
 	}
 }
 
-func TestNormalizeGenerateImageSize(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{
-			name:  "empty size uses default upstream behavior",
-			input: "",
-			want:  "",
-		},
-		{
-			name:  "supported landscape size passes through",
-			input: "1536x1024",
-			want:  "1536x1024",
-		},
-		{
-			name:  "uppercase separator is normalized",
-			input: "1024X1536",
-			want:  "1024x1536",
-		},
-		{
-			name:  "unsupported large size now passes through normalized",
-			input: "8192x8192",
-			want:  "8192x8192",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := normalizeGenerateImageSize(tt.input)
-			if got != tt.want {
-				t.Fatalf("normalizeGenerateImageSize() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestIsImageRateLimitError(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2497,276 +2403,5 @@ func TestIsTransientImageStreamError(t *testing.T) {
 				t.Fatalf("isTransientImageStreamError() = %v, want %v", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestStudioPaidResolutionUsesPaidAccount(t *testing.T) {
-	server, recorder := newImageModeCompatTestServerWithOptions(t, imageModeCompatScenario{
-		imageMode:   "studio",
-		accountType: "Plus",
-		freeRoute:   "legacy",
-		freeModel:   "auto",
-		paidRoute:   "responses",
-		paidModel:   "gpt-5.4-mini",
-	}, compatTestServerOptions{
-		accounts: []compatSeedAccount{
-			{
-				fileName:    "free.json",
-				accessToken: "token-free-priority",
-				accountType: "Free",
-				priority:    100,
-				quota:       5,
-				status:      "正常",
-			},
-			{
-				fileName:    "paid.json",
-				accessToken: "token-paid",
-				accountType: "Plus",
-				priority:    1,
-				quota:       5,
-				status:      "正常",
-			},
-		},
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"prompt":"test prompt","size":"2560x1440","quality":"high","response_format":"b64_json"}`))
-	req.Header.Set("Authorization", "Bearer "+server.cfg.App.APIKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	rec := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-
-	entries := server.reqLogs.list(1)
-	if len(entries) != 1 {
-		t.Fatalf("log entries = %d, want 1", len(entries))
-	}
-	entry := entries[0]
-	if entry.AccountType != "Plus" {
-		t.Fatalf("account type = %q, want %q", entry.AccountType, "Plus")
-	}
-	if entry.Size != "2560x1440" {
-		t.Fatalf("log size = %q, want %q", entry.Size, "2560x1440")
-	}
-	if entry.Quality != "high" {
-		t.Fatalf("log quality = %q, want %q", entry.Quality, "high")
-	}
-	if entry.ImageToolModel != "gpt-5.4-mini" {
-		t.Fatalf("log image tool model = %q, want %q", entry.ImageToolModel, "gpt-5.4-mini")
-	}
-	if entry.PromptLength != 11 {
-		t.Fatalf("log prompt length = %d, want 11", entry.PromptLength)
-	}
-	if recorder.lastFactory != "responses" {
-		t.Fatalf("last factory = %q, want %q", recorder.lastFactory, "responses")
-	}
-	if got := recorder.callSequence[len(recorder.callSequence)-1]; !strings.Contains(got, "token-paid") {
-		t.Fatalf("call sequence = %v, want paid token selected", recorder.callSequence)
-	}
-}
-
-func TestStudioRateLimitedAccountRetriesWithNextAccount(t *testing.T) {
-	server, recorder := newImageModeCompatTestServerWithOptions(t, imageModeCompatScenario{
-		imageMode:   "studio",
-		accountType: "Free",
-		freeRoute:   "legacy",
-		freeModel:   "auto",
-		paidRoute:   "responses",
-		paidModel:   "gpt-5.4-mini",
-	}, compatTestServerOptions{
-		accounts: []compatSeedAccount{
-			{
-				fileName:    "limited.json",
-				accessToken: "token-limited",
-				accountType: "Free",
-				priority:    100,
-				quota:       5,
-				status:      "正常",
-			},
-			{
-				fileName:    "fallback.json",
-				accessToken: "token-fallback",
-				accountType: "Free",
-				priority:    10,
-				quota:       5,
-				status:      "正常",
-			},
-		},
-		behavior: compatClientBehavior{
-			officialGenerateErrors: map[string]error{
-				"token-limited": errors.New("backend-api failed: HTTP 429 too many requests"),
-			},
-		},
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"prompt":"test prompt","response_format":"b64_json"}`))
-	req.Header.Set("Authorization", "Bearer "+server.cfg.App.APIKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	rec := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-
-	if len(recorder.callSequence) != 2 {
-		t.Fatalf("call sequence = %v, want two attempts", recorder.callSequence)
-	}
-	if !strings.Contains(recorder.callSequence[0], "token-limited") || !strings.Contains(recorder.callSequence[1], "token-fallback") {
-		t.Fatalf("call sequence = %v, want limited then fallback", recorder.callSequence)
-	}
-
-	limitedAccount, err := server.getStore().GetAccountByToken("token-limited")
-	if err != nil {
-		t.Fatalf("GetAccountByToken(limited) returned error: %v", err)
-	}
-	if limitedAccount.Status != "限流" {
-		t.Fatalf("limited account status = %q, want %q", limitedAccount.Status, "限流")
-	}
-	if limitedAccount.Quota != 0 {
-		t.Fatalf("limited account quota = %d, want 0", limitedAccount.Quota)
-	}
-}
-
-func TestStudioResponsesRateLimitedAccountRetriesWithNextAccount(t *testing.T) {
-	server, recorder := newImageModeCompatTestServerWithOptions(t, imageModeCompatScenario{
-		imageMode:   "studio",
-		accountType: "Plus",
-		freeRoute:   "legacy",
-		freeModel:   "auto",
-		paidRoute:   "responses",
-		paidModel:   "gpt-5.4-mini",
-	}, compatTestServerOptions{
-		accounts: []compatSeedAccount{
-			{
-				fileName:    "limited-paid.json",
-				accessToken: "token-limited-paid",
-				accountType: "Plus",
-				priority:    100,
-				quota:       5,
-				status:      "正常",
-			},
-			{
-				fileName:    "fallback-paid.json",
-				accessToken: "token-fallback-paid",
-				accountType: "Plus",
-				priority:    10,
-				quota:       5,
-				status:      "正常",
-			},
-		},
-		behavior: compatClientBehavior{
-			responsesGenerateErrors: map[string]error{
-				"token-limited-paid": errors.New("responses failed: HTTP 429 too many requests"),
-			},
-		},
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"prompt":"test prompt","size":"2560x1440","quality":"high","response_format":"b64_json"}`))
-	req.Header.Set("Authorization", "Bearer "+server.cfg.App.APIKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	rec := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-
-	if recorder.lastFactory != "responses" {
-		t.Fatalf("last factory = %q, want %q", recorder.lastFactory, "responses")
-	}
-	if len(recorder.callSequence) != 2 {
-		t.Fatalf("call sequence = %v, want two attempts", recorder.callSequence)
-	}
-	if !strings.Contains(recorder.callSequence[0], "token-limited-paid") || !strings.Contains(recorder.callSequence[1], "token-fallback-paid") {
-		t.Fatalf("call sequence = %v, want limited then fallback responses account", recorder.callSequence)
-	}
-
-	limitedAccount, err := server.getStore().GetAccountByToken("token-limited-paid")
-	if err != nil {
-		t.Fatalf("GetAccountByToken(limited paid) returned error: %v", err)
-	}
-	if limitedAccount.Status != "限流" {
-		t.Fatalf("limited paid account status = %q, want %q", limitedAccount.Status, "限流")
-	}
-	if limitedAccount.Quota != 0 {
-		t.Fatalf("limited paid account quota = %d, want 0", limitedAccount.Quota)
-	}
-}
-
-func TestStudioPaidResolutionFallsBackOutsideSelectedFreeOnlyGroup(t *testing.T) {
-	server, recorder := newImageModeCompatTestServerWithOptions(t, imageModeCompatScenario{
-		imageMode:   "studio",
-		accountType: "Plus",
-		freeRoute:   "legacy",
-		freeModel:   "auto",
-		paidRoute:   "responses",
-		paidModel:   "gpt-5.4-mini",
-	}, compatTestServerOptions{
-		accounts: []compatSeedAccount{
-			{
-				fileName:    "free-1.json",
-				accessToken: "token-free-1",
-				accountType: "Free",
-				priority:    10,
-				quota:       5,
-				status:      "正常",
-			},
-			{
-				fileName:    "free-2.json",
-				accessToken: "token-free-2",
-				accountType: "Free",
-				priority:    9,
-				quota:       5,
-				status:      "正常",
-			},
-			{
-				fileName:    "paid-1.json",
-				accessToken: "token-paid-1",
-				accountType: "Plus",
-				priority:    8,
-				quota:       5,
-				status:      "正常",
-			},
-		},
-	})
-
-	policyHeader := base64.RawURLEncoding.EncodeToString([]byte(`{
-		"enabled": true,
-		"sortMode": "imported_at",
-		"groupSize": 2,
-		"enabledGroupIndexes": [0],
-		"reserveMode": "daily_first_seen_percent",
-		"reservePercent": 20
-	}`))
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"prompt":"test prompt","size":"2560x1440","quality":"high","response_format":"b64_json"}`))
-	req.Header.Set("Authorization", "Bearer "+server.cfg.App.APIKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(imageAccountPolicyHeader, policyHeader)
-
-	rec := httptest.NewRecorder()
-	server.Handler().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
-	}
-	if recorder.lastFactory != "responses" {
-		t.Fatalf("last factory = %q, want responses", recorder.lastFactory)
-	}
-	if got := recorder.callSequence[len(recorder.callSequence)-1]; !strings.Contains(got, "token-paid-1") {
-		t.Fatalf("call sequence = %v, want paid fallback selected", recorder.callSequence)
-	}
-	entries := server.reqLogs.list(1)
-	if len(entries) != 1 {
-		t.Fatalf("log entries = %d, want 1", len(entries))
-	}
-	if entries[0].RoutingPolicyApplied {
-		t.Fatalf("expected fallback outside selected groups to skip policy-applied log flag, got %#v", entries[0])
 	}
 }

@@ -70,6 +70,18 @@ type AccountsConfig struct {
 	ImageQuotaRefreshTTLSeconds int  `toml:"image_quota_refresh_ttl_seconds"`
 }
 
+type DatabaseConfig struct {
+	Driver                 string `toml:"driver"`
+	DSN                    string `toml:"dsn"`
+	MaxOpenConns           int    `toml:"max_open_conns"`
+	MaxIdleConns           int    `toml:"max_idle_conns"`
+	ConnMaxLifetimeSeconds int    `toml:"conn_max_lifetime_seconds"`
+}
+
+type JobQueueConfig struct {
+	Backend string `toml:"backend"`
+}
+
 type StorageConfig struct {
 	Backend                  string `toml:"backend"`
 	ConfigBackend            string `toml:"config_backend"`
@@ -149,6 +161,8 @@ type Config struct {
 	Server    ServerConfig    `toml:"server"`
 	ChatGPT   ChatGPTConfig   `toml:"chatgpt"`
 	Accounts  AccountsConfig  `toml:"accounts"`
+	Database  DatabaseConfig  `toml:"database"`
+	JobQueue  JobQueueConfig  `toml:"job_queue"`
 	Storage   StorageConfig   `toml:"storage"`
 	Sync      SyncConfig      `toml:"sync"`
 	Log       LogConfig       `toml:"log"`
@@ -440,6 +454,8 @@ func (c *Config) copyFrom(other *Config) {
 	c.Server = other.Server
 	c.ChatGPT = other.ChatGPT
 	c.Accounts = other.Accounts
+	c.Database = other.Database
+	c.JobQueue = other.JobQueue
 	c.Storage = other.Storage
 	c.Sync = other.Sync
 	c.Log = other.Log
@@ -553,6 +569,31 @@ func (c *Config) validate() error {
 	if c.Accounts.ImageQuotaRefreshTTLSeconds <= 0 {
 		c.Accounts.ImageQuotaRefreshTTLSeconds = 120
 	}
+	c.Database.Driver = normalizeDatabaseDriver(c.Database.Driver)
+	if strings.TrimSpace(c.Database.DSN) == "" {
+		if c.Database.Driver == "postgres" {
+			c.Database.DSN = "postgres://image_studio:image_studio@127.0.0.1:5432/image_studio?sslmode=disable"
+		} else {
+			c.Database.DSN = "data/image-studio.db"
+		}
+	}
+	if c.Database.MaxOpenConns <= 0 {
+		if c.Database.Driver == "postgres" {
+			c.Database.MaxOpenConns = 20
+		} else {
+			c.Database.MaxOpenConns = 1
+		}
+	}
+	if c.Database.MaxIdleConns <= 0 {
+		if c.Database.Driver == "postgres" {
+			c.Database.MaxIdleConns = 10
+		} else {
+			c.Database.MaxIdleConns = 1
+		}
+	}
+	if c.Database.ConnMaxLifetimeSeconds <= 0 {
+		c.Database.ConnMaxLifetimeSeconds = 300
+	}
 	if strings.TrimSpace(c.Storage.AuthDir) == "" {
 		c.Storage.AuthDir = "data/auths"
 	}
@@ -600,6 +641,7 @@ func (c *Config) validate() error {
 
 	c.APIAccess.Platform = normalizeAPIAccessPlatform(c.APIAccess.Platform)
 	c.CPA.RouteStrategy = normalizeCPAImageRouteStrategy(c.CPA.RouteStrategy)
+	c.JobQueue.Backend = normalizeJobQueueBackend(c.JobQueue.Backend)
 	c.Storage.Backend = normalizeStorageBackend(c.Storage.Backend)
 	c.Storage.ConfigBackend = normalizeConfigBackend(c.Storage.ConfigBackend)
 	legacyImageStorage := strings.ToLower(strings.TrimSpace(c.Storage.ImageStorage))
@@ -696,6 +738,28 @@ func normalizeStorageBackend(value string) string {
 		return "redis"
 	default:
 		return "current"
+	}
+}
+
+func normalizeJobQueueBackend(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "local":
+		return "local"
+	case "redis":
+		return "redis"
+	default:
+		return "local"
+	}
+}
+
+func normalizeDatabaseDriver(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "postgres", "postgresql", "pg":
+		return "postgres"
+	case "sqlite", "sqlite3":
+		return "sqlite"
+	default:
+		return "sqlite"
 	}
 }
 
