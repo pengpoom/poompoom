@@ -454,6 +454,8 @@ export default function ImagePage() {
   const [imageQuality, setImageQuality] = useState<ImageQuality>("high");
   const [providerPlatform, setProviderPlatform] =
     useState<APIAccessPlatform>("gpt-image");
+  const [selectionEditorProviderPlatform, setSelectionEditorProviderPlatform] =
+    useState<APIAccessPlatform>("gpt-image");
   const [composerResetKey, setComposerResetKey] = useState(0);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [isDesktopLayout, setIsDesktopLayout] = useState(() =>
@@ -503,6 +505,14 @@ export default function ImagePage() {
     selectedConversationId,
     makeId,
   });
+  useEffect(() => {
+    if (!editorTarget) {
+      return;
+    }
+    setSelectionEditorProviderPlatform(
+      editorTarget.providerPlatform ?? providerPlatform,
+    );
+  }, [editorTarget, providerPlatform]);
   const displayedConversations = conversations;
   const processingConversationIds = useMemo(
     () =>
@@ -1533,12 +1543,15 @@ export default function ImagePage() {
         imageQualityOptions={imageQualityOptions}
         imageQualityDisabled={!isImageQualityEnabled}
         imageQualityDisabledReason={imageQualityDisabledReason}
+        providerPlatform={selectionEditorProviderPlatform}
+        providerPlatformOptions={providerPlatformOptions}
         onImageAspectRatioChange={(value) =>
           setImageAspectRatio(value as ImageAspectRatio)
         }
         onImageResolutionTierChange={(value) =>
           setImageResolutionTier(value as ImageResolutionTier)
         }
+        onProviderPlatformChange={setSelectionEditorProviderPlatform}
         onImageQualityChange={(value) => setImageQuality(value as ImageQuality)}
         onClose={closeSelectionEditor}
         onSubmit={async (payload) => {

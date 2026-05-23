@@ -176,6 +176,7 @@ export function useImageSubmit({
       aspectRatio: _aspectRatio,
       resolutionTier: _resolutionTier,
       quality: overrideQuality,
+      providerPlatform: overrideProviderPlatform,
     }: {
       prompt: string;
       mask: {
@@ -185,6 +186,7 @@ export function useImageSubmit({
       aspectRatio?: string;
       resolutionTier?: string;
       quality?: string;
+      providerPlatform?: APIAccessPlatform;
     }) => {
       if (isSelectionEditDispatchingRef.current || !editorTarget) {
         return;
@@ -201,10 +203,16 @@ export function useImageSubmit({
       const nextQuality = supportsEditableOutputOptions
         ? normalizeImageQuality(overrideQuality, imageQuality)
         : imageQuality;
+      const nextProviderPlatform =
+        overrideProviderPlatform ?? editorTarget.providerPlatform ?? providerPlatform;
+      const baseModel =
+        editorTarget.providerPlatform === nextProviderPlatform
+          ? editorTarget.model
+          : imageModel;
       const turnId = makeId();
       const jobId = makeId();
       const now = new Date().toISOString();
-      const requestModel = imageModelForPlatform(providerPlatform, imageModel);
+      const requestModel = imageModelForPlatform(nextProviderPlatform, baseModel);
       const draftTurn = createConversationTurn({
         turnId,
         title: buildConversationTitle("edit", prompt),
@@ -217,7 +225,7 @@ export function useImageSubmit({
           ? imageResolutionAccess
           : undefined,
         quality: supportsEditableOutputOptions ? nextQuality : undefined,
-        providerPlatform,
+        providerPlatform: nextProviderPlatform,
         sourceImages: [
           buildSourceReference({
             id: makeId(),
@@ -269,7 +277,7 @@ export function useImageSubmit({
           count: 1,
           size: supportsEditableOutputOptions ? imageSize : undefined,
           quality: nextQuality,
-          platform: providerPlatform,
+          platform: nextProviderPlatform,
           jobId,
           conversationId,
           turnId,

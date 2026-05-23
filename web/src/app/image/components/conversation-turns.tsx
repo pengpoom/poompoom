@@ -15,6 +15,7 @@ import { toast } from "sonner";
 
 import { HtmlImage as Image } from "@/components/html-image";
 import { cn } from "@/lib/utils";
+import type { APIAccessPlatform, ImageModel } from "@/lib/api";
 import type {
   ImageConversationTurn,
   ImageMode,
@@ -235,7 +236,7 @@ type ConversationTurnsProps = {
   formatProcessingDuration: (seconds: number) => string;
   onOpenSelectionEditor: (
     conversationId: string,
-    turnId: string,
+    turn: { model?: ImageModel; providerPlatform?: APIAccessPlatform },
     image: StoredImage,
     imageName: string,
   ) => void;
@@ -269,7 +270,7 @@ type GeneratedImageCardProps = {
   formatProcessingDuration: (seconds: number) => string;
   onOpenSelectionEditor: (
     conversationId: string,
-    turnId: string,
+    turn: { model?: ImageModel; providerPlatform?: APIAccessPlatform },
     image: StoredImage,
     imageName: string,
   ) => void;
@@ -366,7 +367,7 @@ function GeneratedImageCard({
                 className={iconButtonClass}
                 onClick={(event) => {
                   event.stopPropagation();
-                  onOpenSelectionEditor(conversationId, turn.id, image, downloadName);
+                  onOpenSelectionEditor(conversationId, turn, image, downloadName);
                 }}
                 title="编辑"
                 aria-label="编辑"

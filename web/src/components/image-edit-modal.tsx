@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { ArrowUp, Brush, ChevronDown, LoaderCircle, Redo2, Trash2, Undo2, X } from "lucide-react";
+import { ArrowUp, Brush, ChevronDown, Cpu, LoaderCircle, Redo2, Trash2, Undo2, X } from "lucide-react";
 import { toast } from "sonner";
 
+import type { APIAccessPlatform } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -50,9 +51,12 @@ type ImageEditModalProps = {
   imageQualityOptions?: Array<{ label: string; value: string; description: string }>;
   imageQualityDisabled?: boolean;
   imageQualityDisabledReason?: string;
+  providerPlatform?: APIAccessPlatform;
+  providerPlatformOptions?: Array<{ label: string; value: APIAccessPlatform; disabled?: boolean }>;
   onImageAspectRatioChange?: (value: string) => void;
   onImageResolutionTierChange?: (value: string) => void;
   onImageQualityChange?: (value: string) => void;
+  onProviderPlatformChange?: (value: APIAccessPlatform) => void;
   onClose: () => void;
   onSubmit: (payload: {
     prompt: string;
@@ -60,6 +64,7 @@ type ImageEditModalProps = {
     aspectRatio?: string;
     resolutionTier?: string;
     quality?: string;
+    providerPlatform?: APIAccessPlatform;
   }) => Promise<void>;
 };
 
@@ -118,9 +123,12 @@ export function ImageEditModal({
   imageQualityOptions = [],
   imageQualityDisabled = false,
   imageQualityDisabledReason = "",
+  providerPlatform = "gpt-image",
+  providerPlatformOptions = [],
   onImageAspectRatioChange,
   onImageResolutionTierChange,
   onImageQualityChange,
+  onProviderPlatformChange,
   onClose,
   onSubmit,
 }: ImageEditModalProps) {
@@ -490,11 +498,12 @@ export function ImageEditModal({
       const mask = await buildMaskPayload();
       await onSubmit({
         prompt: trimmedPrompt,
-        mask,
-        aspectRatio: allowOutputOptions ? imageAspectRatio : undefined,
-        resolutionTier: allowOutputOptions ? imageResolutionTier : undefined,
-        quality: allowOutputOptions ? imageQuality : undefined,
-      });
+      mask,
+      aspectRatio: allowOutputOptions ? imageAspectRatio : undefined,
+      resolutionTier: allowOutputOptions ? imageResolutionTier : undefined,
+      quality: allowOutputOptions ? imageQuality : undefined,
+      providerPlatform,
+    });
     } catch (error) {
       const message = error instanceof Error ? error.message : "提交编辑失败";
       toast.error(message);
@@ -679,6 +688,29 @@ export function ImageEditModal({
             <div className="min-w-0 flex-1">
               {allowOutputOptions ? (
                 <div className="hide-scrollbar -mx-1 mb-2 flex items-center gap-2 overflow-x-auto px-1 pb-1">
+                  <Select
+                    value={providerPlatform}
+                    onValueChange={(value) =>
+                      onProviderPlatformChange?.(value as APIAccessPlatform)
+                    }
+                  >
+                    <SelectTrigger className="h-9 w-[156px] shrink-0 rounded-full border-[var(--app-border)] bg-[var(--app-bg-surface)] text-[13px] font-medium text-[var(--app-text-secondary)] shadow-none focus-visible:ring-0 sm:w-[172px] sm:text-sm">
+                      <Cpu className="size-4 shrink-0" />
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {providerPlatformOptions.map((item) => (
+                        <SelectItem
+                          key={item.value}
+                          value={item.value}
+                          disabled={item.disabled}
+                        >
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+
                   <Select
                     value={imageAspectRatio}
                     onValueChange={(value) => onImageAspectRatioChange?.(value)}

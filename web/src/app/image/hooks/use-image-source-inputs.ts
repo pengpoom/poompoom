@@ -3,6 +3,7 @@
 import { useCallback, useState, type ClipboardEvent as ReactClipboardEvent } from "react";
 import { toast } from "sonner";
 
+import type { APIAccessPlatform, ImageModel } from "@/lib/api";
 import type { ImageMode } from "@/store/image-conversations";
 import type { StoredImage, StoredSourceImage } from "@/store/image-conversations";
 
@@ -13,6 +14,8 @@ export type EditorTarget = {
   image: StoredImage | null;
   imageName: string;
   sourceDataUrl: string;
+  model?: ImageModel;
+  providerPlatform?: APIAccessPlatform;
 };
 
 type UseImageSourceInputsOptions = {
@@ -82,7 +85,7 @@ export function useImageSourceInputs({
     setSourceImages((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
-  const openSelectionEditor = useCallback((conversationId: string, _turnId: string, image: StoredImage, imageName: string) => {
+  const openSelectionEditor = useCallback((conversationId: string, turn: { model?: ImageModel; providerPlatform?: APIAccessPlatform }, image: StoredImage, imageName: string) => {
     const dataUrl = buildImageDataUrl(image);
     if (!dataUrl) {
       toast.error("当前图片没有可复用的数据");
@@ -93,6 +96,8 @@ export function useImageSourceInputs({
       image,
       imageName,
       sourceDataUrl: dataUrl,
+      model: turn.model,
+      providerPlatform: turn.providerPlatform,
     });
   }, []);
 
