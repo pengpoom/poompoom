@@ -151,7 +151,7 @@ func (s *Server) handleTestBusinessAPIProvider(w http.ResponseWriter, r *http.Re
 		"response_format": "b64_json",
 	}
 	started := time.Now()
-	body, _, err := executeProviderImageGeneration(r.Context(), providerCfg, payload, 1, providerImageGenerationHooks{})
+	body, _, err := executeProviderImageGeneration(r.Context(), providerCfg, payload, 1, providerResolvedEditInput{}, providerImageGenerationHooks{})
 	durationMs := time.Since(started).Milliseconds()
 	if err != nil {
 		providerErr := providerGenerationErrorDetails(err)

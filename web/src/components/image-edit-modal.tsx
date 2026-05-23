@@ -27,7 +27,7 @@ type Stroke = {
 };
 
 type MaskPayload = {
-  file: File;
+  dataUrl: string;
   previewDataUrl: string;
 };
 
@@ -102,18 +102,6 @@ function renderStroke(
   });
   ctx.stroke();
   ctx.restore();
-}
-
-async function canvasToBlob(canvas: HTMLCanvasElement) {
-  return new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (blob) {
-        resolve(blob);
-        return;
-      }
-      reject(new Error("无法导出遮罩"));
-    }, "image/png");
-  });
 }
 
 export function ImageEditModal({
@@ -481,9 +469,8 @@ export function ImageEditModal({
       renderStroke(previewCtx, stroke, previewCanvas.width, previewCanvas.height, "rgba(80, 120, 255, 0.42)");
     });
 
-    const blob = await canvasToBlob(exportCanvas);
     return {
-      file: new File([blob], "mask.png", { type: "image/png" }),
+      dataUrl: exportCanvas.toDataURL("image/png"),
       previewDataUrl: previewCanvas.toDataURL("image/png"),
     };
   };

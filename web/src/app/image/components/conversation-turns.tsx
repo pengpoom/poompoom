@@ -199,6 +199,30 @@ async function copyPromptToClipboard(prompt: string) {
   }
 }
 
+async function copyImageToClipboard(imageDataUrl: string) {
+  if (!imageDataUrl) {
+    toast.warning("没有可复制的图片");
+    return;
+  }
+
+  try {
+    if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+      throw new Error("clipboard image unsupported");
+    }
+    const response = await fetch(imageDataUrl);
+    const blob = await response.blob();
+    const type = blob.type || "image/png";
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        [type]: blob,
+      }),
+    ]);
+    toast.success("图片已复制");
+  } catch {
+    toast.error("当前浏览器不支持直接复制图片，请使用下载");
+  }
+}
+
 type ConversationTurnsProps = {
   conversationId: string;
   turns: ImageConversationTurn[];
@@ -214,11 +238,6 @@ type ConversationTurnsProps = {
     turnId: string,
     image: StoredImage,
     imageName: string,
-  ) => void;
-  onSeedFromResult: (
-    conversationId: string,
-    image: StoredImage,
-    nextMode: ImageMode,
   ) => void;
   onRetryTurn: (
     conversationId: string,
@@ -254,11 +273,6 @@ type GeneratedImageCardProps = {
     image: StoredImage,
     imageName: string,
   ) => void;
-  onSeedFromResult: (
-    conversationId: string,
-    image: StoredImage,
-    nextMode: ImageMode,
-  ) => void;
   onRetryTurn: (
     conversationId: string,
     turn: ImageConversationTurn,
@@ -280,7 +294,6 @@ function GeneratedImageCard({
   formatConversationTime,
   formatProcessingDuration,
   onOpenSelectionEditor,
-  onSeedFromResult,
   onRetryTurn,
   onCancelTurn,
 }: GeneratedImageCardProps) {
@@ -331,7 +344,7 @@ function GeneratedImageCard({
                 className={iconButtonClass}
                 onClick={(event) => {
                   event.stopPropagation();
-                  onSeedFromResult(conversationId, image, "edit");
+                  void copyImageToClipboard(imageDataUrl);
                 }}
                 title="复制"
                 aria-label="复制"
@@ -470,7 +483,6 @@ export const ConversationTurns = memo(function ConversationTurns({
   formatConversationTime,
   formatProcessingDuration,
   onOpenSelectionEditor,
-  onSeedFromResult,
   onRetryTurn,
   onCancelTurn,
 }: ConversationTurnsProps) {
@@ -550,7 +562,6 @@ export const ConversationTurns = memo(function ConversationTurns({
                       formatConversationTime={formatConversationTime}
                       formatProcessingDuration={formatProcessingDuration}
                       onOpenSelectionEditor={onOpenSelectionEditor}
-                      onSeedFromResult={onSeedFromResult}
                       onRetryTurn={onRetryTurn}
                       onCancelTurn={onCancelTurn}
                     />

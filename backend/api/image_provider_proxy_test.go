@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -213,6 +214,214 @@ func TestProviderImageGenerateProxiesOpenAICompatibleRequest(t *testing.T) {
 	}
 	if job.RequestedCount != 1 || job.ActualCount != 1 || job.StorageBytes <= 0 {
 		t.Fatalf("job stats = requested:%d actual:%d storage:%d", job.RequestedCount, job.ActualCount, job.StorageBytes)
+	}
+}
+
+func TestProviderImageEditProxiesOpenAICompatibleMultipartRequest(t *testing.T) {
+	var gotAuth string
+	var gotPath string
+	var gotPrompt string
+	var gotModel string
+	var gotImage []byte
+	var gotMask []byte
+	imageB64 := base64.StdEncoding.EncodeToString([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 8, 9})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		if err := r.ParseMultipartForm(8 << 20); err != nil {
+			t.Fatalf("parse multipart: %v", err)
+		}
+		gotPrompt = r.FormValue("prompt")
+		gotModel = r.FormValue("model")
+		imageFile, _, err := r.FormFile("image")
+		if err != nil {
+			t.Fatalf("image file missing: %v", err)
+		}
+		gotImage, _ = io.ReadAll(imageFile)
+		_ = imageFile.Close()
+		maskFile, _, err := r.FormFile("mask")
+		if err != nil {
+			t.Fatalf("mask file missing: %v", err)
+		}
+		gotMask, _ = io.ReadAll(maskFile)
+		_ = maskFile.Close()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data": []map[string]any{
+				{"b64_json": imageB64, "revised_prompt": "edited cat"},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	t.Setenv("IMAGE_PROVIDER", "openai_compatible")
+	t.Setenv("IMAGE_BASE_URL", upstream.URL)
+	t.Setenv("IMAGE_API_KEY", "provider-key")
+	t.Setenv("IMAGE_MODEL", "gpt-image-test")
+
+	cfg := newBusinessImageTestConfig(t)
+	cfg.Storage.ImageDir = "data/business-images"
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 5)
+	server := NewServer(cfg, nil, nil)
+	sourceImage := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("source-image"))
+	sourceMask := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("source-mask"))
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/image/generate",
+		strings.NewReader(`{"mode":"edit","prompt":"make it blue","n":1,"conversationId":"conv-edit","turnId":"turn-edit","jobId":"job-edit","sourceImages":[{"id":"src","role":"image","name":"source.png","dataUrl":"`+sourceImage+`"},{"id":"mask","role":"mask","name":"mask.png","dataUrl":"`+sourceMask+`"}]}`),
+	)
+	rec := httptest.NewRecorder()
+
+	server.handleProviderImageGenerate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/v1/images/edits" {
+		t.Fatalf("upstream path = %q, want /v1/images/edits", gotPath)
+	}
+	if gotAuth != "Bearer provider-key" {
+		t.Fatalf("Authorization = %q", gotAuth)
+	}
+	if gotPrompt != "make it blue" || gotModel != "gpt-image-test" {
+		t.Fatalf("multipart fields prompt/model = %q/%q", gotPrompt, gotModel)
+	}
+	if string(gotImage) != "source-image" || string(gotMask) != "source-mask" {
+		t.Fatalf("multipart image/mask = %q/%q", string(gotImage), string(gotMask))
+	}
+
+	jobStore, err := businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open job store: %v", err)
+	}
+	defer jobStore.Close()
+	job, ok, err := jobStore.Get(context.Background(), "job-edit", businessimage.DevUserID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if !ok {
+		t.Fatal("job not found")
+	}
+	var savedPayload map[string]any
+	if err := json.Unmarshal(job.PayloadJSON, &savedPayload); err != nil {
+		t.Fatalf("decode job payload: %v", err)
+	}
+	savedSources, ok := savedPayload["sourceImages"].([]any)
+	if !ok || len(savedSources) != 2 {
+		t.Fatalf("saved sourceImages = %#v", savedPayload["sourceImages"])
+	}
+	for _, raw := range savedSources {
+		source, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("saved source = %#v", raw)
+		}
+		if strings.TrimSpace(stringValue(source["dataUrl"])) != "" {
+			t.Fatalf("source payload still contains dataUrl: %#v", source)
+		}
+		url := strings.TrimSpace(stringValue(source["url"]))
+		if !strings.HasPrefix(url, "/v1/files/image/business-") {
+			t.Fatalf("source url = %q", url)
+		}
+	}
+}
+
+func TestProviderImageEditSubmitRunsWorkerAndExposesPayload(t *testing.T) {
+	t.Setenv("TEST_USERNAME", "tester")
+	t.Setenv("TEST_PASSWORD", "tester-pass")
+
+	var gotPath string
+	imageB64 := base64.StdEncoding.EncodeToString([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := r.ParseMultipartForm(8 << 20); err != nil {
+			t.Fatalf("parse multipart: %v", err)
+		}
+		if _, _, err := r.FormFile("image"); err != nil {
+			t.Fatalf("image file missing: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data": []map[string]any{
+				{"b64_json": imageB64, "revised_prompt": "edited cat"},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	t.Setenv("IMAGE_PROVIDER", "openai_compatible")
+	t.Setenv("IMAGE_BASE_URL", upstream.URL)
+	t.Setenv("IMAGE_API_KEY", "provider-key")
+	t.Setenv("IMAGE_MODEL", "gpt-image-test")
+
+	cfg := newBusinessImageTestConfig(t)
+	cfg.Storage.ImageDir = "data/business-images"
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 5)
+	server := NewServer(cfg, nil, nil)
+	sourceImage := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("source-image"))
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/image/generate",
+		strings.NewReader(`{"mode":"edit","prompt":"make it blue","n":1,"conversationId":"conv-edit-submit","turnId":"turn-edit-submit","jobId":"job-edit-submit","sourceImages":[{"id":"src","role":"image","name":"source.png","dataUrl":"`+sourceImage+`"}]}`),
+	)
+	req.Header.Set("Authorization", "Bearer "+defaultUserAuthKey)
+	rec := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	jobStore, err := businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open job store: %v", err)
+	}
+	defer jobStore.Close()
+	var job businessjobs.Job
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		var ok bool
+		job, ok, err = jobStore.Get(context.Background(), "job-edit-submit", businessimage.DevUserID)
+		if err != nil {
+			t.Fatalf("get job: %v", err)
+		}
+		if ok && job.Status == businessjobs.StatusSucceeded {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if job.Status != businessjobs.StatusSucceeded {
+		t.Fatalf("job status = %q, body = %s", job.Status, rec.Body.String())
+	}
+	if gotPath != "/v1/images/edits" {
+		t.Fatalf("upstream path = %q, want /v1/images/edits", gotPath)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/business/jobs/job-edit-submit", nil)
+	getReq.Header.Set("Authorization", "Bearer "+defaultUserAuthKey)
+	getRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get job status = %d, body = %s", getRec.Code, getRec.Body.String())
+	}
+	var payload struct {
+		Item struct {
+			Payload struct {
+				Mode         string `json:"mode"`
+				SourceImages []struct {
+					Role    string `json:"role"`
+					URL     string `json:"url"`
+					DataURL string `json:"dataUrl"`
+				} `json:"sourceImages"`
+			} `json:"payload"`
+		} `json:"item"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode job payload: %v", err)
+	}
+	if payload.Item.Payload.Mode != "edit" || len(payload.Item.Payload.SourceImages) != 1 {
+		t.Fatalf("public payload = %#v", payload.Item.Payload)
+	}
+	if payload.Item.Payload.SourceImages[0].DataURL != "" || !strings.HasPrefix(payload.Item.Payload.SourceImages[0].URL, "/v1/files/image/business-") {
+		t.Fatalf("public source image = %#v", payload.Item.Payload.SourceImages[0])
 	}
 }
 
@@ -657,6 +866,93 @@ func TestProviderImageGenerateProxiesGeminiBananaRequest(t *testing.T) {
 	}
 	if strings.Contains(string(generation.Response), "b64_json") {
 		t.Fatalf("generation response should persist image URL instead of b64_json: %s", generation.Response)
+	}
+}
+
+func TestProviderImageEditProxiesGeminiBananaInlineImageRequest(t *testing.T) {
+	var gotPayload map[string]any
+	imageB64 := base64.StdEncoding.EncodeToString([]byte("gemini-edit-image"))
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
+			t.Fatalf("decode Gemini payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"candidates": []map[string]any{
+				{
+					"content": map[string]any{
+						"parts": []map[string]any{
+							{"text": "edited"},
+							{"inlineData": map[string]any{
+								"mimeType": "image/png",
+								"data":     imageB64,
+							}},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := newBusinessImageTestConfig(t)
+	cfg.Storage.ImageDir = "data/business-images"
+	providerStore, err := businessproviders.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open provider store: %v", err)
+	}
+	_, err = providerStore.Create(context.Background(), businessproviders.MutationInput{
+		Name:         "banana",
+		Platform:     businessproviders.PlatformGeminiBanana,
+		BaseURL:      upstream.URL,
+		APIKey:       "banana-key",
+		DefaultModel: "gemini-2.5-flash-image",
+		Enabled:      true,
+		IsDefault:    true,
+	})
+	_ = providerStore.Close()
+	if err != nil {
+		t.Fatalf("create gemini provider: %v", err)
+	}
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 5)
+
+	server := NewServer(cfg, nil, nil)
+	sourceImage := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("source-image"))
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/image/generate",
+		strings.NewReader(`{"mode":"edit","prompt":"make it blue","platform":"gemini-banana","conversationId":"conv-gemini-edit","turnId":"turn-gemini-edit","jobId":"job-gemini-edit","sourceImages":[{"id":"src","role":"image","name":"source.png","dataUrl":"`+sourceImage+`"}]}`),
+	)
+	rec := httptest.NewRecorder()
+
+	server.handleProviderImageGenerate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	contents, ok := gotPayload["contents"].([]any)
+	if !ok || len(contents) != 1 {
+		t.Fatalf("contents = %#v", gotPayload["contents"])
+	}
+	firstContent, ok := contents[0].(map[string]any)
+	if !ok {
+		t.Fatalf("content = %#v", contents[0])
+	}
+	parts, ok := firstContent["parts"].([]any)
+	if !ok || len(parts) < 2 {
+		t.Fatalf("parts = %#v", firstContent["parts"])
+	}
+	var foundInline bool
+	for _, rawPart := range parts {
+		part, ok := rawPart.(map[string]any)
+		if !ok {
+			continue
+		}
+		if inline, ok := part["inlineData"].(map[string]any); ok && inline["data"] == base64.StdEncoding.EncodeToString([]byte("source-image")) {
+			foundInline = true
+		}
+	}
+	if !foundInline {
+		t.Fatalf("Gemini payload missing source inlineData: %#v", parts)
 	}
 }
 

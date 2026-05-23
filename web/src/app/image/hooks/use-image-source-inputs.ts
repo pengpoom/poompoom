@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, type ClipboardEvent as ReactClipboardEvent, type RefObject } from "react";
+import { useCallback, useState, type ClipboardEvent as ReactClipboardEvent } from "react";
 import { toast } from "sonner";
 
 import type { ImageMode } from "@/store/image-conversations";
@@ -18,9 +18,6 @@ export type EditorTarget = {
 type UseImageSourceInputsOptions = {
   mode: ImageMode;
   selectedConversationId: string | null;
-  setMode: (mode: ImageMode) => void;
-  focusConversation: (conversationId: string) => void;
-  textareaRef: RefObject<HTMLTextAreaElement | null>;
   makeId: () => string;
 };
 
@@ -33,34 +30,9 @@ async function fileToDataUrl(file: File) {
   });
 }
 
-function buildStoredSourceImageFromURL(payload: {
-  id: string;
-  role: "image" | "mask";
-  name: string;
-  url: string;
-}): StoredSourceImage {
-  if (payload.url.startsWith("data:")) {
-    return {
-      id: payload.id,
-      role: payload.role,
-      name: payload.name,
-      dataUrl: payload.url,
-    };
-  }
-  return {
-    id: payload.id,
-    role: payload.role,
-    name: payload.name,
-    url: payload.url,
-  };
-}
-
 export function useImageSourceInputs({
   mode,
   selectedConversationId,
-  setMode,
-  focusConversation,
-  textareaRef,
   makeId,
 }: UseImageSourceInputsOptions) {
   const [sourceImages, setSourceImages] = useState<StoredSourceImage[]>([]);
@@ -110,25 +82,6 @@ export function useImageSourceInputs({
     setSourceImages((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
-  const seedFromResult = useCallback((conversationId: string, image: StoredImage, nextMode: ImageMode) => {
-    const dataUrl = buildImageDataUrl(image);
-    if (!dataUrl) {
-      toast.error("当前图片没有可复用的数据");
-      return;
-    }
-    focusConversation(conversationId);
-    setMode(nextMode);
-    setSourceImages([
-      buildStoredSourceImageFromURL({
-        id: makeId(),
-        role: "image",
-        name: "source.png",
-        url: dataUrl,
-      }),
-    ]);
-    textareaRef.current?.focus();
-  }, [focusConversation, makeId, setMode, textareaRef]);
-
   const openSelectionEditor = useCallback((conversationId: string, _turnId: string, image: StoredImage, imageName: string) => {
     const dataUrl = buildImageDataUrl(image);
     if (!dataUrl) {
@@ -175,7 +128,6 @@ export function useImageSourceInputs({
     appendFiles,
     handlePromptPaste,
     removeSourceImage,
-    seedFromResult,
     openSelectionEditor,
     openSourceSelectionEditor,
     closeSelectionEditor,

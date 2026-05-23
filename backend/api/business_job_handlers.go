@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,6 +12,67 @@ import (
 	"imagestudio/internal/businessimage"
 	"imagestudio/internal/businessjobs"
 )
+
+type businessImageJobView struct {
+	businessjobs.Job
+	Payload map[string]any `json:"payload,omitempty"`
+}
+
+func businessImageJobViewFromJob(job businessjobs.Job) businessImageJobView {
+	return businessImageJobView{
+		Job:     job,
+		Payload: businessImageJobPublicPayload(job),
+	}
+}
+
+func businessImageJobPublicPayload(job businessjobs.Job) map[string]any {
+	if len(job.PayloadJSON) == 0 {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(job.PayloadJSON, &payload); err != nil {
+		return nil
+	}
+	if payload == nil {
+		return nil
+	}
+	return sanitizeBusinessImageJobPayload(payload)
+}
+
+func sanitizeBusinessImageJobPayload(payload map[string]any) map[string]any {
+	next := make(map[string]any, len(payload))
+	for key, value := range payload {
+		if key == "sourceImages" {
+			next[key] = sanitizeBusinessImageJobSourceImages(value)
+			continue
+		}
+		next[key] = value
+	}
+	return next
+}
+
+func sanitizeBusinessImageJobSourceImages(value any) any {
+	items, ok := value.([]any)
+	if !ok {
+		return value
+	}
+	next := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		source, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		clean := make(map[string]any, len(source))
+		for key, value := range source {
+			if key == "dataUrl" {
+				continue
+			}
+			clean[key] = value
+		}
+		next = append(next, clean)
+	}
+	return next
+}
 
 func (s *Server) handleListBusinessImageJobs(w http.ResponseWriter, r *http.Request) {
 	s.reconcileStaleBusinessImageJobs(r.Context())
@@ -37,7 +99,11 @@ func (s *Server) handleListBusinessImageJobs(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	views := make([]businessImageJobView, 0, len(items))
+	for _, item := range items {
+		views = append(views, businessImageJobViewFromJob(item))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": views})
 }
 
 func (s *Server) handleAdminListBusinessImageJobs(w http.ResponseWriter, r *http.Request) {
@@ -64,8 +130,12 @@ func (s *Server) handleAdminListBusinessImageJobs(w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
+	views := make([]businessImageJobView, 0, len(items))
+	for _, item := range items {
+		views = append(views, businessImageJobViewFromJob(item))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": items,
+		"items": views,
 		"page": paginationMeta{
 			Page:     page,
 			PageSize: pageSize,
@@ -92,7 +162,7 @@ func (s *Server) handleGetBusinessImageJob(w http.ResponseWriter, r *http.Reques
 		writeAPIError(w, http.StatusNotFound, "business_job_not_found", "job not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"item": item})
+	writeJSON(w, http.StatusOK, map[string]any{"item": businessImageJobViewFromJob(item)})
 }
 
 func (s *Server) handleCancelBusinessImageJob(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +205,7 @@ func (s *Server) handleCancelBusinessImageJob(w http.ResponseWriter, r *http.Req
 	}
 	s.markBusinessImageGenerationCancelled(context.Background(), userID, item.GenerationID)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"item":            item,
+		"item":            businessImageJobViewFromJob(item),
 		"activeCancelled": activeCancelled,
 	})
 }

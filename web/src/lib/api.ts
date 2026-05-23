@@ -117,6 +117,14 @@ export type InpaintSourceReference = {
   source_account_id: string;
 };
 
+export type ImageSourcePayload = {
+  id: string;
+  role: "image" | "mask";
+  name: string;
+  dataUrl?: string;
+  url?: string;
+};
+
 export type Account = {
   id: string;
   fileName: string;
@@ -1064,6 +1072,7 @@ export type BusinessImageJob = {
   startedAt?: string;
   finishedAt?: string;
   updatedAt: string;
+  payload?: Record<string, unknown>;
 };
 
 type BusinessImageJobListResponse = {
@@ -1754,6 +1763,7 @@ export async function generateImage(
 export async function generateImageWithOptions(
   prompt: string,
   options: {
+    mode?: "generate" | "edit";
     model?: ImageModel;
     count?: number;
     size?: string;
@@ -1763,6 +1773,8 @@ export async function generateImageWithOptions(
     conversationId?: string;
     turnId?: string;
     title?: string;
+    sourceImages?: ImageSourcePayload[];
+    sourceReference?: InpaintSourceReference;
   } = {},
 ) {
   const { model = "gpt-image-2", count = 1, size, quality = "high" } = options;
@@ -1785,11 +1797,18 @@ export async function generateImageWithOptions(
     response_format: responseFormat,
   };
   if (businessProxyMode) {
+    body.mode = options.mode || "generate";
     body.platform = options.platform?.trim() || undefined;
     body.jobId = options.jobId?.trim() || undefined;
     body.conversationId = options.conversationId?.trim() || undefined;
     body.turnId = options.turnId?.trim() || undefined;
     body.title = options.title?.trim() || undefined;
+    if (options.sourceImages?.length) {
+      body.sourceImages = options.sourceImages;
+    }
+    if (options.sourceReference) {
+      body.sourceReference = options.sourceReference;
+    }
   }
   return httpRequest<ImageResponse>(endpoint, {
     method: "POST",

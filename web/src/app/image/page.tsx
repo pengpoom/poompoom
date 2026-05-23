@@ -495,16 +495,12 @@ export default function ImagePage() {
     appendFiles,
     handlePromptPaste,
     removeSourceImage,
-    seedFromResult,
     openSelectionEditor,
     openSourceSelectionEditor,
     closeSelectionEditor,
   } = useImageSourceInputs({
     mode,
     selectedConversationId,
-    setMode,
-    focusConversation,
-    textareaRef,
     makeId,
   });
   const displayedConversations = conversations;
@@ -604,7 +600,13 @@ export default function ImagePage() {
         turnId: selectedConversationProcessingTurn.id,
         mode: selectedConversationProcessingTurn.mode,
         count: selectedConversationProcessingTurn.count,
-        variant: "standard",
+        variant:
+          selectedConversationProcessingTurn.mode === "edit" &&
+          selectedConversationProcessingTurn.sourceImages?.some(
+            (source) => source.role === "mask",
+          )
+            ? "selection-edit"
+            : "standard",
       };
     },
     [selectedConversation, selectedConversationProcessingTurn],
@@ -1427,7 +1429,6 @@ export default function ImagePage() {
                 formatConversationTime={formatConversationTime}
                 formatProcessingDuration={formatProcessingDuration}
                 onOpenSelectionEditor={openSelectionEditor}
-                onSeedFromResult={seedFromResult}
                 onRetryTurn={handleRetryTurn}
                 onCancelTurn={handleCancelTurn}
               />

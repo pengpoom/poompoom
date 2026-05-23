@@ -325,8 +325,15 @@ export function PromptComposer({
   const modeLabel = modeOptions.find((item) => item.value === mode)?.label ?? "模式";
   const hasComposerContent = imagePrompt.trim().length > 0 || sourceImages.length > 0;
   const shouldFocusAfterExpandRef = useRef(false);
+  const [isDesktopComposer, setIsDesktopComposer] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.matchMedia("(min-width: 1024px)").matches;
+  });
   const [isMobileComposerExpanded, setIsMobileComposerExpanded] = useState(hasComposerContent);
   const isMobileComposerCollapsed = !isMobileComposerExpanded;
+  const isComposerCollapsed = !isDesktopComposer && isMobileComposerCollapsed;
   const showMobileExpandedSections = !isMobileComposerCollapsed;
 
   const focusTextarea = useCallback(() => {
@@ -344,6 +351,15 @@ export function PromptComposer({
       setIsMobileComposerExpanded(true);
     }
   }, [hasComposerContent]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 1024px)");
+    const syncDesktopComposer = () => setIsDesktopComposer(media.matches);
+
+    syncDesktopComposer();
+    media.addEventListener("change", syncDesktopComposer);
+    return () => media.removeEventListener("change", syncDesktopComposer);
+  }, []);
 
   useEffect(() => {
     if (composerResetKey === undefined) {
@@ -382,10 +398,10 @@ export function PromptComposer({
         data-image-composer="panel"
         className={cn(
           "mx-auto w-full max-w-[920px] rounded-[18px] border border-[var(--app-border)] bg-[var(--app-bg-elevated)] px-3 py-3 shadow-[var(--app-shadow-floating)] backdrop-blur-2xl sm:px-4 sm:py-4",
-          isMobileComposerCollapsed ? "min-h-[86px] lg:min-h-[118px]" : "min-h-[164px] lg:min-h-[118px]",
+          isComposerCollapsed ? "min-h-[86px] lg:min-h-[118px]" : "min-h-[164px] lg:min-h-[118px]",
         )}
         onPointerDown={(event) => {
-          if (!isMobileComposerCollapsed) {
+          if (!isComposerCollapsed) {
             return;
           }
           event.preventDefault();
@@ -450,7 +466,7 @@ export function PromptComposer({
         ) : null}
 
         <div className="relative">
-          {isMobileComposerCollapsed ? (
+          {isComposerCollapsed ? (
             <button
               type="button"
               className="flex min-h-[42px] w-full items-start px-1 text-left text-[14px] font-medium leading-6 text-[var(--app-text-muted)]"

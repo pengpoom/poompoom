@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,7 +29,7 @@ import (
 	"imagestudio/internal/businesstracker"
 )
 
-const maxImageProviderRequestBytes = 4 << 20
+const maxImageProviderRequestBytes = 96 << 20
 const maxImageProviderResponseBytes = 80 << 20
 const maxProviderImageGenerationAttempts = 2
 const imageProviderOpenAICompatible = "openai_compatible"
@@ -52,6 +53,24 @@ type providerImageGenerateMetadata struct {
 	JobID          string
 	Title          string
 	Platform       string
+}
+
+type providerImageSource struct {
+	ID      string
+	Role    string
+	Name    string
+	DataURL string
+	URL     string
+}
+
+type providerEditAsset struct {
+	Source providerImageSource
+	Data   []byte
+}
+
+type providerResolvedEditInput struct {
+	Images []providerEditAsset
+	Mask   *providerEditAsset
 }
 
 type providerImageGenerateExecution struct {
@@ -230,6 +249,77 @@ func providerImagePayloadJSON(payload map[string]any) []byte {
 	return raw
 }
 
+func (s *Server) prepareProviderImagePayload(ctx context.Context, userID string, payload map[string]any) (map[string]any, providerResolvedEditInput, error) {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if !providerPayloadIsEdit(payload) {
+		return payload, providerResolvedEditInput{}, nil
+	}
+	editInput, err := s.resolveProviderEditInputs(payload)
+	if err != nil {
+		return payload, providerResolvedEditInput{}, err
+	}
+	nextPayload := cloneProviderPayload(payload)
+	sourceImages := make([]map[string]any, 0, len(editInput.Images)+1)
+	conversationID := strings.TrimSpace(stringValue(nextPayload["conversationId"]))
+	generationID := firstNonEmpty(
+		strings.TrimSpace(stringValue(nextPayload["jobId"])),
+		strings.TrimSpace(stringValue(nextPayload["turnId"])),
+	)
+	for index, image := range editInput.Images {
+		sourceImages = append(sourceImages, s.providerEditAssetPayload(ctx, userID, conversationID, generationID, index, image))
+	}
+	if editInput.Mask != nil {
+		sourceImages = append(sourceImages, s.providerEditAssetPayload(ctx, userID, conversationID, generationID, len(sourceImages), *editInput.Mask))
+	}
+	nextPayload["sourceImages"] = sourceImages
+	return nextPayload, editInput, nil
+}
+
+func cloneProviderPayload(payload map[string]any) map[string]any {
+	next := make(map[string]any, len(payload))
+	for key, value := range payload {
+		next[key] = value
+	}
+	return next
+}
+
+func (s *Server) providerEditAssetPayload(ctx context.Context, userID, conversationID, generationID string, index int, asset providerEditAsset) map[string]any {
+	source := map[string]any{
+		"id":   strings.TrimSpace(asset.Source.ID),
+		"role": firstNonEmpty(strings.TrimSpace(asset.Source.Role), "image"),
+		"name": firstNonEmpty(strings.TrimSpace(asset.Source.Name), fmt.Sprintf("source-%d.png", index+1)),
+	}
+	if url := strings.TrimSpace(asset.Source.URL); url != "" {
+		source["url"] = url
+		return source
+	}
+	if len(asset.Data) == 0 || conversationID == "" || generationID == "" {
+		if dataURL := strings.TrimSpace(asset.Source.DataURL); dataURL != "" {
+			source["dataUrl"] = dataURL
+		}
+		return source
+	}
+	mimeType := http.DetectContentType(asset.Data)
+	fileName := strings.TrimSpace(asset.Source.Name)
+	if fileName == "" {
+		fileName = fmt.Sprintf("source-%d%s", index+1, extensionForImageMIME(mimeType))
+	}
+	if ext := filepath.Ext(fileName); ext == "" {
+		fileName += extensionForImageMIME(mimeType)
+	}
+	url, _, err := s.saveBusinessImageBytes(ctx, asset.Data, userID, conversationID, generationID, index, fileName)
+	if err != nil {
+		if dataURL := strings.TrimSpace(asset.Source.DataURL); dataURL != "" {
+			source["dataUrl"] = dataURL
+		}
+		return source
+	}
+	source["url"] = url
+	return source
+}
+
 func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string, payload map[string]any, startedAt time.Time) (businessjobs.Job, error) {
 	if payload == nil {
 		payload = map[string]any{}
@@ -252,6 +342,10 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 	if normalizePositiveInt(payload["n"]) <= 0 {
 		payload["n"] = 1
 	}
+	if strings.TrimSpace(metadata.JobID) == "" {
+		metadata.JobID = businessjobs.NewJobID()
+		payload["jobId"] = metadata.JobID
+	}
 	requestedCount := normalizePositiveInt(payload["n"])
 	if requestedCount <= 0 {
 		requestedCount = 1
@@ -260,9 +354,12 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 	if systemSettings.Generation.MaxCount > 0 && requestedCount > systemSettings.Generation.MaxCount {
 		return businessjobs.Job{}, newProviderImageGenerateSubmitError(providerImageGenerateError(http.StatusBadRequest, "invalid_request", fmt.Sprintf("单次最多生成 %d 张图片", systemSettings.Generation.MaxCount)))
 	}
-	if strings.TrimSpace(metadata.JobID) == "" {
-		metadata.JobID = businessjobs.NewJobID()
-		payload["jobId"] = metadata.JobID
+	payload, _, err = s.prepareProviderImagePayload(ctx, userID, payload)
+	if err != nil {
+		if providerErr, ok := err.(*providerGenerationError); ok {
+			return businessjobs.Job{}, newProviderImageGenerateSubmitError(providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, providerErr.Message))
+		}
+		return businessjobs.Job{}, err
 	}
 	generationID := firstNonEmpty(metadata.JobID, metadata.TurnID)
 	job := businessjobs.Job{
@@ -354,6 +451,7 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		Platform:       tracker.Platform,
 		Status:         businessjobs.StatusQueued,
 		Stage:          "received",
+		PayloadJSON:    providerImagePayloadJSON(payload),
 		CreatedAt:      startedAt.Format(time.RFC3339Nano),
 		QueuedAt:       startedAt.Format(time.RFC3339Nano),
 	}
@@ -375,6 +473,9 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 			if shouldPreserveCurrentBusinessImageJob(current, next) {
 				job = current
 				return
+			}
+			if len(next.PayloadJSON) == 0 && len(current.PayloadJSON) > 0 {
+				next.PayloadJSON = current.PayloadJSON
 			}
 		}
 		saved, err := store.Save(context.Background(), next)
@@ -565,6 +666,21 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	if strings.TrimSpace(stringValue(payload["response_format"])) == "" {
 		payload["response_format"] = "b64_json"
 	}
+	var editInput providerResolvedEditInput
+	payload, editInput, err = s.prepareProviderImagePayload(ctx, userID, payload)
+	if err != nil {
+		job.PayloadJSON = providerImagePayloadJSON(payload)
+		saveJob(job)
+		providerErr := providerGenerationErrorDetails(err)
+		refundCredits(creditCost)
+		job.CreditRefunded = refundedCredits
+		s.recordProviderImageGeneration(ctx, userID, metadata, payload, providerErr.ResponseBody, "failed", providerErr.Message, startedAt)
+		finishJob(businessjobs.StatusFailed, "validation", providerErr.Code, providerErr.Message)
+		finishTracker(businesstracker.StatusFailed, "validation", providerErr.Code, providerErr.Message)
+		return providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, providerErr.Message)
+	}
+	job.PayloadJSON = providerImagePayloadJSON(payload)
+	saveJob(job)
 	providerPayload := buildProviderImageGeneratePayload(payload)
 
 	if latestJob, ok := s.businessImageJobByID(job.ID, userID); ok && businessJobCancelled(latestJob) {
@@ -596,7 +712,9 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		job.Stage = "upstream"
 		saveJob(job)
 	}
-	body, contentType, err := executeProviderImageGenerationWithRetry(ctx, providerCfg, providerPayload, requestedCount, providerImageGenerationHooks{
+	var body []byte
+	var contentType string
+	body, contentType, err = executeProviderImageGenerationWithRetry(ctx, providerCfg, providerPayload, requestedCount, editInput, providerImageGenerationHooks{
 		BeforeUpstreamAttempt: markUpstreamStarted,
 	})
 	upstreamFinishedAt := time.Now().UTC()
@@ -783,6 +901,7 @@ func buildProviderImageGeneratePayload(payload map[string]any) map[string]any {
 	allowed := map[string]struct{}{
 		"prompt":          {},
 		"model":           {},
+		"mode":            {},
 		"n":               {},
 		"size":            {},
 		"quality":         {},
@@ -791,6 +910,8 @@ func buildProviderImageGeneratePayload(payload map[string]any) map[string]any {
 		"style":           {},
 		"moderation":      {},
 		"user":            {},
+		"sourceImages":    {},
+		"sourceReference": {},
 	}
 	next := map[string]any{}
 	for key, value := range payload {
@@ -800,6 +921,128 @@ func buildProviderImageGeneratePayload(payload map[string]any) map[string]any {
 		next[key] = value
 	}
 	return next
+}
+
+func providerPayloadIsEdit(payload map[string]any) bool {
+	if strings.EqualFold(strings.TrimSpace(stringValue(payload["mode"])), "edit") {
+		return true
+	}
+	return len(providerImageSourcesFromPayload(payload["sourceImages"])) > 0
+}
+
+func providerImageSourcesFromPayload(raw any) []providerImageSource {
+	items, ok := raw.([]any)
+	if !ok || len(items) == 0 {
+		return nil
+	}
+	sources := make([]providerImageSource, 0, len(items))
+	for _, item := range items {
+		source, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		normalized := providerImageSource{
+			ID:      strings.TrimSpace(stringValue(source["id"])),
+			Role:    firstNonEmpty(strings.TrimSpace(stringValue(source["role"])), "image"),
+			Name:    strings.TrimSpace(stringValue(source["name"])),
+			DataURL: strings.TrimSpace(stringValue(source["dataUrl"])),
+			URL:     strings.TrimSpace(stringValue(source["url"])),
+		}
+		if normalized.DataURL == "" && normalized.URL == "" {
+			continue
+		}
+		sources = append(sources, normalized)
+	}
+	return sources
+}
+
+func (s *Server) resolveProviderEditInputs(payload map[string]any) (providerResolvedEditInput, error) {
+	sources := providerImageSourcesFromPayload(payload["sourceImages"])
+	result := providerResolvedEditInput{Images: make([]providerEditAsset, 0, len(sources))}
+	for _, source := range sources {
+		data, err := s.resolveProviderSourceImageBytes(source)
+		if err != nil {
+			return providerResolvedEditInput{}, err
+		}
+		asset := providerEditAsset{
+			Source: source,
+			Data:   data,
+		}
+		if strings.EqualFold(strings.TrimSpace(source.Role), "mask") {
+			result.Mask = &asset
+			continue
+		}
+		result.Images = append(result.Images, asset)
+	}
+	if len(result.Images) == 0 {
+		return providerResolvedEditInput{}, &providerGenerationError{
+			HTTPStatus: http.StatusBadRequest,
+			Code:       "image_required",
+			Message:    "编辑模式至少需要一张源图",
+		}
+	}
+	return result, nil
+}
+
+func (s *Server) resolveProviderSourceImageBytes(source providerImageSource) ([]byte, error) {
+	if strings.TrimSpace(source.DataURL) != "" {
+		payload, _, err := decodeBase64ImagePayload(source.DataURL)
+		if err != nil {
+			return nil, &providerGenerationError{
+				HTTPStatus: http.StatusBadRequest,
+				Code:       "invalid_source_image",
+				Message:    err.Error(),
+			}
+		}
+		return payload, nil
+	}
+	rawURL := strings.TrimSpace(source.URL)
+	if rawURL == "" {
+		return nil, &providerGenerationError{
+			HTTPStatus: http.StatusBadRequest,
+			Code:       "invalid_source_image",
+			Message:    "source image is empty",
+		}
+	}
+	if index := strings.Index(rawURL, "/v1/files/image/"); index >= 0 {
+		name := rawURL[index+len("/v1/files/image/"):]
+		name = strings.ReplaceAll(name, "/", "-")
+		path := s.resolveImageFilePath(name)
+		if path == "" {
+			return nil, &providerGenerationError{
+				HTTPStatus: http.StatusBadRequest,
+				Code:       "source_image_not_found",
+				Message:    "source image not found",
+			}
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, &providerGenerationError{
+				HTTPStatus: http.StatusBadRequest,
+				Code:       "source_image_not_found",
+				Message:    err.Error(),
+			}
+		}
+		return data, nil
+	}
+	resp, err := compatImageFetchClient.Get(rawURL)
+	if err != nil {
+		return nil, &providerGenerationError{
+			HTTPStatus: http.StatusBadGateway,
+			Code:       "source_image_fetch_failed",
+			Message:    err.Error(),
+		}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, &providerGenerationError{
+			HTTPStatus:     http.StatusBadGateway,
+			UpstreamStatus: resp.StatusCode,
+			Code:           "source_image_fetch_failed",
+			Message:        fmt.Sprintf("fetch image returned %d", resp.StatusCode),
+		}
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, int64(max(1, s.cfg.App.MaxUploadSizeMB))<<20))
 }
 
 type providerImageGenerationRecordResult struct {
@@ -967,14 +1210,14 @@ func providerGenerationErrorDetails(err error) providerGenerationError {
 	}
 }
 
-func executeProviderImageGenerationWithRetry(ctx context.Context, cfg imageProviderProxyConfig, payload map[string]any, requestedCount int, hooks providerImageGenerationHooks) ([]byte, string, error) {
+func executeProviderImageGenerationWithRetry(ctx context.Context, cfg imageProviderProxyConfig, payload map[string]any, requestedCount int, editInput providerResolvedEditInput, hooks providerImageGenerationHooks) ([]byte, string, error) {
 	var (
 		body        []byte
 		contentType string
 		err         error
 	)
 	for attempt := 1; attempt <= maxProviderImageGenerationAttempts; attempt++ {
-		body, contentType, err = executeProviderImageGeneration(ctx, cfg, payload, requestedCount, hooks)
+		body, contentType, err = executeProviderImageGeneration(ctx, cfg, payload, requestedCount, editInput, hooks)
 		if err == nil {
 			return body, contentType, nil
 		}
@@ -1005,12 +1248,15 @@ func isRetryableProviderGenerationError(ctx context.Context, err error) bool {
 	}
 }
 
-func executeProviderImageGeneration(ctx context.Context, cfg imageProviderProxyConfig, payload map[string]any, requestedCount int, hooks providerImageGenerationHooks) ([]byte, string, error) {
+func executeProviderImageGeneration(ctx context.Context, cfg imageProviderProxyConfig, payload map[string]any, requestedCount int, editInput providerResolvedEditInput, hooks providerImageGenerationHooks) ([]byte, string, error) {
 	switch cfg.Provider {
 	case imageProviderGeminiBanana:
-		body, err := executeGeminiBananaImageGeneration(ctx, cfg, payload, requestedCount, hooks)
+		body, err := executeGeminiBananaImageGeneration(ctx, cfg, payload, requestedCount, editInput, hooks)
 		return body, "application/json", err
 	case imageProviderOpenAICompatible:
+		if len(editInput.Images) > 0 {
+			return executeOpenAICompatibleImageEdit(ctx, cfg, payload, editInput, hooks)
+		}
 		return executeOpenAICompatibleImageGeneration(ctx, cfg, payload, hooks)
 	default:
 		return nil, "", &providerGenerationError{
@@ -1019,6 +1265,102 @@ func executeProviderImageGeneration(ctx context.Context, cfg imageProviderProxyC
 			Message:    fmt.Sprintf("unsupported provider %q", cfg.Provider),
 		}
 	}
+}
+
+func executeOpenAICompatibleImageEdit(ctx context.Context, cfg imageProviderProxyConfig, payload map[string]any, editInput providerResolvedEditInput, hooks providerImageGenerationHooks) ([]byte, string, error) {
+	if len(editInput.Images) == 0 {
+		return nil, "", &providerGenerationError{
+			HTTPStatus: http.StatusBadRequest,
+			Code:       "image_required",
+			Message:    "编辑模式至少需要一张源图",
+		}
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	fields := map[string]string{
+		"prompt":          strings.TrimSpace(stringValue(payload["prompt"])),
+		"model":           strings.TrimSpace(stringValue(payload["model"])),
+		"response_format": strings.TrimSpace(stringValue(payload["response_format"])),
+		"size":            strings.TrimSpace(stringValue(payload["size"])),
+		"quality":         strings.TrimSpace(stringValue(payload["quality"])),
+	}
+	for key, value := range fields {
+		if value != "" {
+			if err := writer.WriteField(key, value); err != nil {
+				return nil, "", &providerGenerationError{HTTPStatus: http.StatusBadRequest, Code: "invalid_request", Message: err.Error()}
+			}
+		}
+	}
+	for index, image := range editInput.Images {
+		name := fmt.Sprintf("image-%d%s", index+1, extensionForImageMIME(http.DetectContentType(image.Data)))
+		part, err := writer.CreateFormFile("image", name)
+		if err != nil {
+			return nil, "", &providerGenerationError{HTTPStatus: http.StatusBadRequest, Code: "invalid_request", Message: err.Error()}
+		}
+		if _, err := part.Write(image.Data); err != nil {
+			return nil, "", &providerGenerationError{HTTPStatus: http.StatusBadRequest, Code: "invalid_request", Message: err.Error()}
+		}
+	}
+	if editInput.Mask != nil && len(editInput.Mask.Data) > 0 {
+		part, err := writer.CreateFormFile("mask", "mask.png")
+		if err != nil {
+			return nil, "", &providerGenerationError{HTTPStatus: http.StatusBadRequest, Code: "invalid_request", Message: err.Error()}
+		}
+		if _, err := part.Write(editInput.Mask.Data); err != nil {
+			return nil, "", &providerGenerationError{HTTPStatus: http.StatusBadRequest, Code: "invalid_request", Message: err.Error()}
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", &providerGenerationError{HTTPStatus: http.StatusBadRequest, Code: "invalid_request", Message: err.Error()}
+	}
+
+	upstreamURL := cfg.BaseURL + "/images/edits"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, &body)
+	if err != nil {
+		return nil, "", &providerGenerationError{
+			HTTPStatus: http.StatusInternalServerError,
+			Code:       "provider_request_failed",
+			Message:    "create provider request failed",
+		}
+	}
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{Timeout: cfg.RequestTimeout}
+	if hooks.BeforeUpstreamAttempt != nil {
+		hooks.BeforeUpstreamAttempt()
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", &providerGenerationError{
+			HTTPStatus: http.StatusBadGateway,
+			Code:       "provider_request_failed",
+			Message:    err.Error(),
+		}
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxImageProviderResponseBytes))
+	if err != nil {
+		return nil, "", &providerGenerationError{
+			HTTPStatus: http.StatusBadGateway,
+			Code:       "provider_response_failed",
+			Message:    err.Error(),
+		}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", &providerGenerationError{
+			HTTPStatus:     http.StatusBadGateway,
+			UpstreamStatus: resp.StatusCode,
+			Code:           "provider_error",
+			Message:        summarizeCPAError(responseBody),
+			ResponseBody:   responseBody,
+		}
+	}
+	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	return responseBody, contentType, nil
 }
 
 func executeOpenAICompatibleImageGeneration(ctx context.Context, cfg imageProviderProxyConfig, payload map[string]any, hooks providerImageGenerationHooks) ([]byte, string, error) {
@@ -1079,7 +1421,7 @@ func executeOpenAICompatibleImageGeneration(ctx context.Context, cfg imageProvid
 	return body, contentType, nil
 }
 
-func executeGeminiBananaImageGeneration(ctx context.Context, cfg imageProviderProxyConfig, payload map[string]any, requestedCount int, hooks providerImageGenerationHooks) ([]byte, error) {
+func executeGeminiBananaImageGeneration(ctx context.Context, cfg imageProviderProxyConfig, payload map[string]any, requestedCount int, editInput providerResolvedEditInput, hooks providerImageGenerationHooks) ([]byte, error) {
 	prompt := strings.TrimSpace(stringValue(payload["prompt"]))
 	if prompt == "" {
 		return nil, &providerGenerationError{
@@ -1095,7 +1437,7 @@ func executeGeminiBananaImageGeneration(ctx context.Context, cfg imageProviderPr
 	data := make([]map[string]any, 0, requestedCount)
 	var lastErr error
 	for index := 0; index < requestedCount; index++ {
-		items, err := executeSingleGeminiBananaImageGeneration(ctx, client, cfg, payload, prompt, hooks)
+		items, err := executeSingleGeminiBananaImageGeneration(ctx, client, cfg, payload, prompt, editInput, hooks)
 		if err != nil {
 			lastErr = err
 			if len(data) == 0 {
@@ -1133,8 +1475,8 @@ func executeGeminiBananaImageGeneration(ctx context.Context, cfg imageProviderPr
 	return body, nil
 }
 
-func executeSingleGeminiBananaImageGeneration(ctx context.Context, client *http.Client, cfg imageProviderProxyConfig, payload map[string]any, prompt string, hooks providerImageGenerationHooks) ([]map[string]any, error) {
-	raw, err := json.Marshal(buildGeminiBananaRequestPayload(payload, prompt, cfg.Model))
+func executeSingleGeminiBananaImageGeneration(ctx context.Context, client *http.Client, cfg imageProviderProxyConfig, payload map[string]any, prompt string, editInput providerResolvedEditInput, hooks providerImageGenerationHooks) ([]map[string]any, error) {
+	raw, err := json.Marshal(buildGeminiBananaRequestPayload(payload, prompt, cfg.Model, editInput))
 	if err != nil {
 		return nil, &providerGenerationError{
 			HTTPStatus: http.StatusBadRequest,
@@ -1191,14 +1533,35 @@ func executeSingleGeminiBananaImageGeneration(ctx context.Context, client *http.
 	return items, nil
 }
 
-func buildGeminiBananaRequestPayload(payload map[string]any, prompt string, model string) map[string]any {
+func buildGeminiBananaRequestPayload(payload map[string]any, prompt string, model string, editInput providerResolvedEditInput) map[string]any {
+	parts := []map[string]any{{"text": prompt}}
+	for _, image := range editInput.Images {
+		if len(image.Data) == 0 {
+			continue
+		}
+		parts = append(parts, map[string]any{
+			"inlineData": map[string]any{
+				"mimeType": http.DetectContentType(image.Data),
+				"data":     base64.StdEncoding.EncodeToString(image.Data),
+			},
+		})
+	}
+	if editInput.Mask != nil && len(editInput.Mask.Data) > 0 {
+		parts = append(parts, map[string]any{
+			"text": "The next image is an edit mask. Only modify the masked area and preserve unmasked content.",
+		})
+		parts = append(parts, map[string]any{
+			"inlineData": map[string]any{
+				"mimeType": http.DetectContentType(editInput.Mask.Data),
+				"data":     base64.StdEncoding.EncodeToString(editInput.Mask.Data),
+			},
+		})
+	}
 	request := map[string]any{
 		"contents": []map[string]any{
 			{
-				"role": "user",
-				"parts": []map[string]any{
-					{"text": prompt},
-				},
+				"role":  "user",
+				"parts": parts,
 			},
 		},
 		"generationConfig": map[string]any{
@@ -1315,25 +1678,29 @@ func countProviderImageItems(responseBody []byte) int {
 }
 
 func (s *Server) saveBusinessImageBase64(ctx context.Context, raw, userID, conversationID, generationID string, index int) (string, int64, error) {
-	payload, mimeType, err := decodeBase64ImagePayload(raw)
+	payload, _, err := decodeBase64ImagePayload(raw)
 	if err != nil {
 		return "", 0, err
 	}
 	if len(payload) == 0 {
 		return "", 0, fmt.Errorf("image is empty")
 	}
+	return s.saveBusinessImageBytes(ctx, payload, userID, conversationID, generationID, index, "")
+}
+
+func (s *Server) saveBusinessImageBytes(ctx context.Context, payload []byte, userID, conversationID, generationID string, index int, nameHint string) (string, int64, error) {
+	if len(payload) == 0 {
+		return "", 0, fmt.Errorf("image is empty")
+	}
+	mimeType := http.DetectContentType(payload)
 	sum := sha256.Sum256(payload)
 	shaHex := hex.EncodeToString(sum[:])
 	ext := extensionForImageMIME(mimeType)
-	filename := fmt.Sprintf(
-		"business-%s-%s-%s-%d-%x%s",
-		sanitizeFileToken(userID),
-		sanitizeFileToken(conversationID),
-		sanitizeFileToken(generationID),
-		index,
-		sum[:8],
-		ext,
-	)
+	kind := sanitizeFileTokenWithFallback(strings.TrimSuffix(filepath.Base(nameHint), filepath.Ext(nameHint)), "")
+	if kind == "" {
+		kind = "image"
+	}
+	filename := fmt.Sprintf("business-%s-%s-%s-%s-%d-%x%s", sanitizeFileToken(userID), sanitizeFileToken(conversationID), sanitizeFileToken(generationID), kind, index, sum[:8], ext)
 	dir := s.cfg.ResolvePath(s.cfg.Storage.ImageDir)
 	if strings.TrimSpace(dir) == "" {
 		dir = s.cfg.ResolvePath(defaultImageDir)
@@ -1428,9 +1795,13 @@ func extensionForImageMIME(mimeType string) string {
 }
 
 func sanitizeFileToken(value string) string {
+	return sanitizeFileTokenWithFallback(value, "unknown")
+}
+
+func sanitizeFileTokenWithFallback(value string, fallback string) string {
 	cleaned := strings.TrimSpace(value)
 	if cleaned == "" {
-		return "unknown"
+		return fallback
 	}
 	var builder strings.Builder
 	for _, r := range cleaned {
@@ -1449,7 +1820,7 @@ func sanitizeFileToken(value string) string {
 	}
 	result := strings.Trim(builder.String(), "-")
 	if result == "" {
-		return "unknown"
+		return fallback
 	}
 	if len(result) > 80 {
 		return result[:80]

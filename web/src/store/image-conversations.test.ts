@@ -216,4 +216,115 @@ describe("business image history adapter", () => {
       error: "现在使用人数较多，请稍后使用。",
     });
   });
+
+  it("restores edit mode and source images from business job payload", () => {
+    const conversation = businessImageConversationDetailToConversation({
+      conversation: {
+        id: "conv-edit",
+        user_id: "dev_user",
+        title: "edit cat",
+        created_at: "2026-05-18T10:00:00Z",
+        updated_at: "2026-05-18T10:01:00Z",
+      },
+      generations: [
+        {
+          id: "job-edit",
+          user_id: "dev_user",
+          conversation_id: "conv-edit",
+          turn_id: "turn-edit",
+          prompt: "make it blue",
+          model: "gpt-image-test",
+          size: "1248x1248",
+          quality: "high",
+          count: 1,
+          status: "succeeded",
+          response: {
+            platform: "gpt-image",
+            data: [
+              {
+                url: "/v1/files/image/business-dev_user-conv-edit-job-edit-image-0.png",
+              },
+            ],
+          },
+          created_at: "2026-05-18T10:01:00Z",
+          finished_at: "2026-05-18T10:02:00Z",
+        },
+      ],
+      jobs: [
+        {
+          id: "job-edit",
+          userId: "dev_user",
+          conversationId: "conv-edit",
+          generationId: "job-edit",
+          turnId: "turn-edit",
+          platform: "gpt-image",
+          model: "gpt-image-test",
+          requestedCount: 1,
+          actualCount: 1,
+          status: "succeeded",
+          stage: "finished",
+          upstreamSent: true,
+          upstreamStatus: "sent",
+          queueWaitMs: 0,
+          upstreamDurationMs: 100,
+          persistDurationMs: 10,
+          totalDurationMs: 110,
+          storageBytes: 12,
+          creditReserved: 1,
+          creditRefunded: 0,
+          createdAt: "2026-05-18T10:01:00Z",
+          queuedAt: "2026-05-18T10:01:00Z",
+          startedAt: "2026-05-18T10:01:00Z",
+          finishedAt: "2026-05-18T10:02:00Z",
+          updatedAt: "2026-05-18T10:02:00Z",
+          payload: {
+            mode: "edit",
+            sourceImages: [
+              {
+                id: "src",
+                role: "image",
+                name: "source.png",
+                url: "/v1/files/image/business-dev_user-conv-edit-job-edit-source-0.png",
+              },
+              {
+                id: "mask",
+                role: "mask",
+                name: "mask.png",
+                url: "/v1/files/image/business-dev_user-conv-edit-job-edit-mask-1.png",
+              },
+            ],
+            sourceReference: {
+              original_file_id: "file-1",
+              original_gen_id: "gen-1",
+              source_account_id: "account-1",
+            },
+          },
+        },
+      ],
+    });
+
+    expect(conversation.mode).toBe("edit");
+    expect(conversation.turns?.[0]).toMatchObject({
+      mode: "edit",
+      sourceImages: [
+        {
+          id: "src",
+          role: "image",
+          name: "source.png",
+          url: "/v1/files/image/business-dev_user-conv-edit-job-edit-source-0.png",
+        },
+        {
+          id: "mask",
+          role: "mask",
+          name: "mask.png",
+          url: "/v1/files/image/business-dev_user-conv-edit-job-edit-mask-1.png",
+        },
+      ],
+      sourceReference: {
+        original_file_id: "file-1",
+        original_gen_id: "gen-1",
+        source_account_id: "account-1",
+      },
+    });
+  });
 });

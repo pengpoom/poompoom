@@ -24,6 +24,10 @@ export function buildImageDataUrl(image: StoredImage) {
 }
 
 export function buildSourceImageUrl(source: StoredSourceImage) {
+  return normalizeImageURL(source.previewDataUrl || source.dataUrl || source.url);
+}
+
+export function buildSourceRequestImageUrl(source: StoredSourceImage) {
   return normalizeImageURL(source.dataUrl || source.url);
 }
 

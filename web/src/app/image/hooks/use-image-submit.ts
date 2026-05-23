@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   generateImageWithOptions,
   type APIAccessPlatform,
+  type ImageSourcePayload,
   type ImageModel,
   type ImageQuality,
   type ImageResolutionAccess,
@@ -25,7 +26,7 @@ import {
   createLoadingImages,
   mergeResultImages,
 } from "../submit-utils";
-import { buildSourceImageUrl } from "../view-utils";
+import { buildSourceRequestImageUrl } from "../view-utils";
 
 type UseImageSubmitOptions = {
   mode: ImageMode;
@@ -102,6 +103,18 @@ function buildSourceReference(payload: {
   };
 }
 
+function sourceImagePayloads(items: StoredSourceImage[]): ImageSourcePayload[] {
+  return items
+    .map((item) => ({
+      id: item.id,
+      role: item.role,
+      name: item.name,
+      dataUrl: item.dataUrl,
+      url: item.url,
+    }))
+    .filter((item) => Boolean(item.dataUrl || item.url));
+}
+
 function normalizeImageQuality(value: string | undefined, fallback: ImageQuality) {
   const trimmed = String(value || "").trim();
   if (trimmed === "low" || trimmed === "medium" || trimmed === "high") {
@@ -166,7 +179,7 @@ export function useImageSubmit({
     }: {
       prompt: string;
       mask: {
-        file: File;
+        dataUrl: string;
         previewDataUrl: string;
       };
       aspectRatio?: string;
@@ -189,6 +202,7 @@ export function useImageSubmit({
         ? normalizeImageQuality(overrideQuality, imageQuality)
         : imageQuality;
       const turnId = makeId();
+      const jobId = makeId();
       const now = new Date().toISOString();
       const requestModel = imageModelForPlatform(providerPlatform, imageModel);
       const draftTurn = createConversationTurn({
@@ -215,13 +229,15 @@ export function useImageSubmit({
             id: makeId(),
             role: "mask",
             name: "mask.png",
-            dataUrl: mask.previewDataUrl,
+            dataUrl: mask.dataUrl,
+            previewDataUrl: mask.previewDataUrl,
           },
         ],
         sourceReference,
         images: createLoadingImages(1, turnId),
         createdAt: now,
         status: "queued",
+        jobId,
       });
 
       setSubmitElapsedSeconds(0);
@@ -247,7 +263,49 @@ export function useImageSubmit({
           );
         }
 
-        throw new Error("当前业务链路暂未接入编辑生成，后续会在 job 系统中统一支持");
+        const response = await generateImageWithOptions(prompt, {
+          mode: "edit",
+          model: requestModel,
+          count: 1,
+          size: supportsEditableOutputOptions ? imageSize : undefined,
+          quality: nextQuality,
+          platform: providerPlatform,
+          jobId,
+          conversationId,
+          turnId,
+          title: draftTurn.title,
+          sourceImages: sourceImagePayloads(draftTurn.sourceImages || []),
+          sourceReference,
+        });
+        const resultImages = mergeResultImages(
+          turnId,
+          response.data || [],
+          1,
+        );
+        const jobOnlyResponse =
+          Boolean(response.jobId || response.job) &&
+          (response.data || []).length === 0;
+
+        if (!jobOnlyResponse) {
+          await updateConversation(conversationId, (current) => ({
+            ...(current ?? buildConversationBase(conversationId, draftTurn)),
+            turns: (current?.turns ?? [draftTurn]).map((turn) =>
+              turn.id === turnId
+                ? {
+                    ...turn,
+                    status: resultImages.some((image) => image.status === "error")
+                      ? "error"
+                      : "success",
+                    error: resultImages.some((image) => image.status === "error")
+                      ? "图片编辑失败"
+                      : undefined,
+                    images: resultImages,
+                  }
+                : turn,
+            ),
+          }));
+          toast.success("图片编辑完成");
+        }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "提交编辑失败";
@@ -310,7 +368,7 @@ export function useImageSubmit({
         ? turn.sourceImages
         : [];
       const turnImageSources = turnSourceImages.filter(
-        (item) => item.role === "image" && buildSourceImageUrl(item),
+        (item) => item.role === "image" && buildSourceRequestImageUrl(item),
       );
       const turnQuality = turn.quality || "high";
       const turnProviderPlatform = turn.providerPlatform ?? providerPlatform;
@@ -377,6 +435,7 @@ export function useImageSubmit({
         }));
 
         const response = await generateImageWithOptions(prompt, {
+          mode: turnMode,
           model: requestModel,
           count: requestCount,
           size: turn.size,
@@ -386,6 +445,8 @@ export function useImageSubmit({
           conversationId,
           turnId: turn.id,
           title: buildConversationTitle(turnMode, prompt),
+          sourceImages: turnMode === "edit" ? sourceImagePayloads(turnSourceImages) : undefined,
+          sourceReference: turn.sourceReference,
         });
         const resultImages = mergeResultImages(
           turn.id,
@@ -536,6 +597,7 @@ export function useImageSubmit({
       }
 
       const response = await generateImageWithOptions(prompt, {
+        mode,
         model: requestModel,
         count: expectedCount,
         size: imageSize,
@@ -545,6 +607,7 @@ export function useImageSubmit({
         conversationId,
         turnId,
         title: draftTurn.title,
+        sourceImages: mode === "edit" ? sourceImagePayloads(sourceImages) : undefined,
       });
       const resultImages = mergeResultImages(
         turnId,

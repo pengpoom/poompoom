@@ -24,6 +24,7 @@ export type StoredSourceImage = {
   name: string;
   dataUrl?: string;
   url?: string;
+  previewDataUrl?: string;
 };
 
 export type StoredImage = {
@@ -127,6 +128,14 @@ type BusinessImageConversationDetail = {
   conversation: BusinessImageConversation;
   generations: BusinessImageGeneration[];
   jobs?: BusinessImageJob[];
+};
+
+type BusinessJobPayloadSourceImage = {
+  id?: unknown;
+  role?: unknown;
+  name?: unknown;
+  dataUrl?: unknown;
+  url?: unknown;
 };
 
 const imageConversationStorage = localforage.createInstance({
@@ -515,6 +524,53 @@ function businessGenerationResponseItems(
     }));
 }
 
+function businessJobPayload(job?: BusinessImageJob): Record<string, unknown> {
+  return job?.payload && typeof job.payload === "object" ? job.payload : {};
+}
+
+function businessTurnModeFromJob(job?: BusinessImageJob): ImageMode {
+  const payload = businessJobPayload(job);
+  const mode = String(payload.mode || "").trim();
+  return mode === "edit" || Array.isArray(payload.sourceImages) ? "edit" : "generate";
+}
+
+function businessSourceImagesFromJob(job?: BusinessImageJob): StoredSourceImage[] {
+  const sourceImages = businessJobPayload(job).sourceImages;
+  if (!Array.isArray(sourceImages)) {
+    return [];
+  }
+  return sourceImages
+    .filter((item): item is BusinessJobPayloadSourceImage =>
+      Boolean(item && typeof item === "object"),
+    )
+    .map((item, index): StoredSourceImage | null => {
+      const dataUrl = String(item.dataUrl || "").trim();
+      const url = String(item.url || "").trim();
+      if (!dataUrl && !url) {
+        return null;
+      }
+      const role = item.role === "mask" ? "mask" : "image";
+      return {
+        id: String(item.id || `${job?.id || "source"}-${index}`),
+        role,
+        name: String(item.name || (role === "mask" ? "mask.png" : "source.png")),
+        dataUrl: dataUrl || undefined,
+        url: url || undefined,
+      };
+    })
+    .filter((item): item is StoredSourceImage => Boolean(item));
+}
+
+function businessSourceReferenceFromJob(
+  job?: BusinessImageJob,
+): InpaintSourceReference | undefined {
+  const sourceReference = businessJobPayload(job).sourceReference;
+  if (!sourceReference || typeof sourceReference !== "object") {
+    return undefined;
+  }
+  return normalizeSourceReference(sourceReference as ImageConversationTurn["sourceReference"]);
+}
+
 function businessGenerationImages(
   generation: BusinessImageGeneration,
   turnID: string,
@@ -567,10 +623,12 @@ export function businessImageConversationDetailToConversation(
       const job = jobsByGenerationID.get(String(generation.id || "").trim());
       const status = mergeBusinessGenerationStatus(generation, job);
       const error = job?.errorMessage || generation.error || undefined;
+      const mode = businessTurnModeFromJob(job);
+      const sourceImages = businessSourceImagesFromJob(job);
       return {
         id: turnID,
         title: buildBusinessImageTitle(generation.prompt),
-        mode: "generate",
+        mode,
         prompt: generation.prompt || "",
         model: normalizeImageModel(generation.model),
         count: Math.max(1, generation.count || 1),
@@ -579,7 +637,8 @@ export function businessImageConversationDetailToConversation(
         providerPlatform: normalizeAPIAccessPlatform(
           (generation.response as { platform?: unknown } | undefined)?.platform,
         ),
-        sourceImages: [],
+        sourceImages,
+        sourceReference: businessSourceReferenceFromJob(job),
         images: businessGenerationImages(generation, turnID, status, error),
         createdAt: generation.created_at || conversation.updated_at || conversation.created_at,
         status,
