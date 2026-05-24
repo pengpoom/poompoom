@@ -422,6 +422,99 @@ func TestEmailVerificationRegistrationCreatesUserAndSession(t *testing.T) {
 	}
 }
 
+func TestPasswordResetByEmailVerification(t *testing.T) {
+	cfg := newDatabaseServerTestConfig(t)
+	settingsStore, err := businesssettings.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open business settings store: %v", err)
+	}
+	settings := businesssettings.Defaults()
+	settings.Site.Name = "ImageStudio"
+	settings.Email.SMTPHost = "smtp.example.test"
+	settings.Email.SMTPPort = 587
+	settings.Email.Username = "mailer@example.test"
+	settings.Email.Password = "mailer-pass"
+	settings.Email.From = "noreply@example.test"
+	settings.Email.FromName = "ImageStudio"
+	if _, err := settingsStore.Save(context.Background(), settings); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+	if err := settingsStore.Close(); err != nil {
+		t.Fatalf("close settings store: %v", err)
+	}
+
+	authStore, err := businessauth.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open auth store: %v", err)
+	}
+	if _, err := authStore.CreateUserWithUsername(context.Background(), "reset@example.com", "reset-user", "old-pass", businessauth.RoleUser); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if err := authStore.Close(); err != nil {
+		t.Fatalf("close auth store: %v", err)
+	}
+
+	var sentEmail string
+	var sentCode string
+	var sentMessage string
+	previousSMTPSendMail := smtpSendMail
+	smtpSendMail = func(_ string, _ smtp.Auth, _ string, to []string, msg []byte) error {
+		if len(to) > 0 {
+			sentEmail = to[0]
+		}
+		body := string(msg)
+		sentMessage = body
+		index := strings.Index(body, "密码重置验证码是：")
+		if index >= 0 && len(body) >= index+len("密码重置验证码是：")+6 {
+			sentCode = body[index+len("密码重置验证码是：") : index+len("密码重置验证码是：")+6]
+		}
+		return nil
+	}
+	defer func() {
+		smtpSendMail = previousSMTPSendMail
+	}()
+	server := NewServer(cfg, nil, nil)
+
+	codeReq := httptest.NewRequest(http.MethodPost, "/auth/password-reset/code", strings.NewReader(`{"email":"reset@example.com"}`))
+	codeReq.Header.Set("Content-Type", "application/json")
+	codeRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(codeRec, codeReq)
+	if codeRec.Code != http.StatusOK {
+		t.Fatalf("password reset code status = %d, body = %s", codeRec.Code, codeRec.Body.String())
+	}
+	if sentEmail != "reset@example.com" || len(sentCode) != 6 {
+		t.Fatalf("sent reset email/code = %q/%q", sentEmail, sentCode)
+	}
+	if !strings.Contains(sentMessage, "你的 ImageStudio 密码重置验证码是：") {
+		t.Fatalf("sent reset message does not use reset template: %s", sentMessage)
+	}
+
+	resetBody := `{"email":"reset@example.com","password":"new-pass","code":"` + sentCode + `"}`
+	resetReq := httptest.NewRequest(http.MethodPost, "/auth/password-reset", strings.NewReader(resetBody))
+	resetReq.Header.Set("Content-Type", "application/json")
+	resetRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(resetRec, resetReq)
+	if resetRec.Code != http.StatusOK {
+		t.Fatalf("password reset status = %d, body = %s", resetRec.Code, resetRec.Body.String())
+	}
+
+	oldLoginReq := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"email":"reset@example.com","password":"old-pass"}`))
+	oldLoginReq.Header.Set("Content-Type", "application/json")
+	oldLoginRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(oldLoginRec, oldLoginReq)
+	if oldLoginRec.Code != http.StatusUnauthorized {
+		t.Fatalf("old password login status = %d, want %d, body = %s", oldLoginRec.Code, http.StatusUnauthorized, oldLoginRec.Body.String())
+	}
+
+	newLoginReq := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"email":"reset@example.com","password":"new-pass"}`))
+	newLoginReq.Header.Set("Content-Type", "application/json")
+	newLoginRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(newLoginRec, newLoginReq)
+	if newLoginRec.Code != http.StatusOK {
+		t.Fatalf("new password login status = %d, body = %s", newLoginRec.Code, newLoginRec.Body.String())
+	}
+}
+
 func TestAdminCanManageBusinessUsers(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "owner")
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")

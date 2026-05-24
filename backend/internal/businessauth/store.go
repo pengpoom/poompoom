@@ -34,7 +34,8 @@ const (
 
 	DeletedUserRetention = 7 * 24 * time.Hour
 
-	VerificationPurposeRegistration = "registration"
+	VerificationPurposeRegistration  = "registration"
+	VerificationPurposePasswordReset = "password_reset"
 )
 
 var ErrUserAlreadyExists = errors.New("user already exists")
@@ -1524,6 +1525,8 @@ func normalizeVerificationPurpose(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case VerificationPurposeRegistration:
 		return VerificationPurposeRegistration
+	case VerificationPurposePasswordReset:
+		return VerificationPurposePasswordReset
 	default:
 		return ""
 	}

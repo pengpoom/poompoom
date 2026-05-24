@@ -492,6 +492,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /auth/register/options", http.HandlerFunc(s.handleRegistrationOptions))
 	mux.Handle("POST /auth/register/code", http.HandlerFunc(s.handleSendRegistrationVerificationCode))
 	mux.Handle("POST /auth/register", http.HandlerFunc(s.handleRegisterBusinessUser))
+	mux.Handle("POST /auth/password-reset/code", http.HandlerFunc(s.handleSendPasswordResetVerificationCode))
+	mux.Handle("POST /auth/password-reset", http.HandlerFunc(s.handleResetPasswordByEmailVerification))
 	mux.Handle("GET /version", http.HandlerFunc(s.handleVersion))
 	mux.Handle("GET /health", http.HandlerFunc(handleHealth))
 	mux.Handle("GET /api/site", http.HandlerFunc(s.handleGetPublicSiteSettings))

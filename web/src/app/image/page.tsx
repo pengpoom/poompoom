@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import "react-medium-image-zoom/dist/styles.css";
 import {
   ChevronsDown,
@@ -971,6 +971,19 @@ export default function ImagePage() {
     [isStandaloneWorkspace],
   );
 
+  const resetWorkspaceScrollTop = useCallback(() => {
+    bottomScrollLockUntilRef.current = 0;
+    isNearBottomRef.current = true;
+    setShowScrollToBottom(false);
+
+    const scrollTarget = document.scrollingElement;
+    if (scrollTarget) {
+      scrollTarget.scrollTop = 0;
+    }
+    window.scrollTo({ top: 0, behavior: "auto" });
+    resultsViewportRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, []);
+
   const scheduleScrollToBottom = useCallback(
     (behavior: ScrollBehavior = "auto", lockMs = 0) => {
       if (lockMs > 0) {
@@ -1087,6 +1100,22 @@ export default function ImagePage() {
     selectedConversationTurns.length,
     selectedConversationLastTurnKey,
   ]);
+
+  useLayoutEffect(() => {
+    if (selectedConversation) {
+      return;
+    }
+
+    const frames: number[] = [];
+    resetWorkspaceScrollTop();
+    frames.push(window.requestAnimationFrame(resetWorkspaceScrollTop));
+    frames.push(window.requestAnimationFrame(() => {
+      frames.push(window.requestAnimationFrame(resetWorkspaceScrollTop));
+    }));
+    return () => {
+      frames.forEach((frame) => window.cancelAnimationFrame(frame));
+    };
+  }, [resetWorkspaceScrollTop, selectedConversation]);
 
   useEffect(() => {
     const conversationChanged =

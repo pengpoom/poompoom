@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ArrowRight, LoaderCircle, LockKeyhole, MailCheck, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
@@ -359,6 +359,17 @@ export function AuthCard({
           {mode === "register" ? "注册并登录" : "登录"}
           <ArrowRight className="size-4" />
         </Button>
+
+        {mode === "login" ? (
+          <div className="-mt-1 flex justify-end">
+            <Link
+              to="/forgot-password"
+              className="text-sm font-semibold text-[#77dfff] transition hover:text-[#a7ecff] hover:underline"
+            >
+              忘记密码？
+            </Link>
+          </div>
+        ) : null}
 
         <p className="text-center text-sm leading-6 text-[#8d98aa]">
           {mode === "register" ? (

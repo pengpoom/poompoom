@@ -1255,6 +1255,14 @@ export async function requestRegistrationCode(email: string) {
   });
 }
 
+export async function requestPasswordResetCode(email: string) {
+  return httpRequest<{ ok: boolean; expiresIn: number; cooldownSeconds: number }>("/auth/password-reset/code", {
+    method: "POST",
+    body: { email: String(email || "").trim() },
+    redirectOnUnauthorized: false,
+  });
+}
+
 export async function registerBusinessUser(payload: {
   email: string;
   username?: string;
@@ -1268,6 +1276,22 @@ export async function registerBusinessUser(payload: {
       username: payload.username?.trim() || undefined,
       password: payload.password,
       code: payload.code.trim(),
+    },
+    redirectOnUnauthorized: false,
+  });
+}
+
+export async function resetBusinessUserPasswordByEmail(payload: {
+  email: string;
+  code: string;
+  password: string;
+}) {
+  return httpRequest<{ ok: boolean }>("/auth/password-reset", {
+    method: "POST",
+    body: {
+      email: payload.email.trim(),
+      code: payload.code.trim(),
+      password: payload.password,
     },
     redirectOnUnauthorized: false,
   });

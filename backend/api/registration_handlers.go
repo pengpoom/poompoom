@@ -20,9 +20,12 @@ import (
 )
 
 const (
-	registrationVerificationTTL      = 10 * time.Minute
-	registrationVerificationCooldown = time.Minute
-	registrationVerificationAttempts = 5
+	registrationVerificationTTL       = 10 * time.Minute
+	registrationVerificationCooldown  = time.Minute
+	registrationVerificationAttempts  = 5
+	passwordResetVerificationTTL      = 10 * time.Minute
+	passwordResetVerificationCooldown = time.Minute
+	passwordResetVerificationAttempts = 5
 )
 
 var smtpSendMail = smtp.SendMail
@@ -195,6 +198,130 @@ func (s *Server) handleRegisterBusinessUser(w http.ResponseWriter, r *http.Reque
 	})
 }
 
+func (s *Server) handleSendPasswordResetVerificationCode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		return
+	}
+	email := strings.TrimSpace(body.Email)
+	if email == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "email is required"})
+		return
+	}
+	settings := s.businessSystemSettingsForContext(r.Context())
+	emailConfig := registrationEmailConfigFromSettings(settings)
+	if !emailConfig.configured() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "email is not configured"})
+		return
+	}
+	store, err := s.newBusinessAuthStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
+		return
+	}
+	defer store.Close()
+	user, ok, err := store.GetUserByEmail(r.Context(), email)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if !ok || user.Status != businessauth.StatusActive {
+		writeJSON(w, http.StatusOK, passwordResetCodeAcceptedResponse())
+		return
+	}
+
+	code, err := newEmailVerificationCode()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "create verification code failed"})
+		return
+	}
+	if err := store.CreateEmailVerificationCode(
+		r.Context(),
+		user.Email,
+		businessauth.VerificationPurposePasswordReset,
+		code,
+		time.Now().Add(passwordResetVerificationTTL),
+		passwordResetVerificationCooldown,
+	); errors.Is(err, businessauth.ErrVerificationTooFrequent) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "verification code requested too frequently"})
+		return
+	} else if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := sendPasswordResetVerificationEmail(r.Context(), emailConfig, user.Email, code); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "send verification email failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, passwordResetCodeAcceptedResponse())
+}
+
+func (s *Server) handleResetPasswordByEmailVerification(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Email    string `json:"email"`
+		Code     string `json:"code"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		return
+	}
+	if len(strings.TrimSpace(body.Password)) < 6 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "password must be at least 6 characters"})
+		return
+	}
+	store, err := s.newBusinessAuthStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
+		return
+	}
+	defer store.Close()
+	user, ok, err := store.GetUserByEmail(r.Context(), body.Email)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if !ok || user.Status != businessauth.StatusActive {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "verification code is invalid"})
+		return
+	}
+	if err := store.ConsumeEmailVerificationCode(
+		r.Context(),
+		user.Email,
+		businessauth.VerificationPurposePasswordReset,
+		body.Code,
+		passwordResetVerificationAttempts,
+	); errors.Is(err, businessauth.ErrVerificationExpired) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "verification code is expired"})
+		return
+	} else if errors.Is(err, businessauth.ErrVerificationInvalid) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "verification code is invalid"})
+		return
+	} else if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if _, ok, err := store.ResetUserPassword(r.Context(), user.ID, body.Password); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	} else if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "verification code is invalid"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func passwordResetCodeAcceptedResponse() map[string]any {
+	return map[string]any{
+		"ok":              true,
+		"expiresIn":       int(passwordResetVerificationTTL / time.Second),
+		"cooldownSeconds": int(passwordResetVerificationCooldown / time.Second),
+	}
+}
+
 func newEmailVerificationCode() (string, error) {
 	value, err := rand.Int(rand.Reader, big.NewInt(1000000))
 	if err != nil {
@@ -258,10 +385,28 @@ func registrationEmailConfigFromEnv() registrationEmailConfig {
 }
 
 func sendRegistrationVerificationEmail(ctx context.Context, cfg registrationEmailConfig, email, code string) error {
+	return sendVerificationEmail(ctx, cfg, email, "注册验证码", fmt.Sprintf(
+		"你的 %s 注册验证码是：%s\n\n验证码将在 %d 分钟后失效。如果不是你本人操作，请忽略这封邮件。\n",
+		registrationEmailDisplayName(cfg),
+		code,
+		int(registrationVerificationTTL/time.Minute),
+	))
+}
+
+func sendPasswordResetVerificationEmail(ctx context.Context, cfg registrationEmailConfig, email, code string) error {
+	return sendVerificationEmail(ctx, cfg, email, "密码重置验证码", fmt.Sprintf(
+		"你的 %s 密码重置验证码是：%s\n\n验证码将在 %d 分钟后失效。如果不是你本人操作，请忽略这封邮件。\n",
+		registrationEmailDisplayName(cfg),
+		code,
+		int(passwordResetVerificationTTL/time.Minute),
+	))
+}
+
+func sendVerificationEmail(ctx context.Context, cfg registrationEmailConfig, email, subjectSuffix, body string) error {
 	host := strings.TrimSpace(cfg.Host)
 	from := strings.TrimSpace(cfg.From)
 	if host == "" || from == "" {
-		return fmt.Errorf("registration smtp is not configured")
+		return fmt.Errorf("smtp is not configured")
 	}
 	port := cfg.Port
 	if port <= 0 {
@@ -275,8 +420,7 @@ func sendRegistrationVerificationEmail(ctx context.Context, cfg registrationEmai
 		auth = smtp.PlainAuth("", username, password, host)
 	}
 	addr := fmt.Sprintf("%s:%d", host, port)
-	subject := fmt.Sprintf("%s 注册验证码", displayName)
-	body := fmt.Sprintf("你的 %s 注册验证码是：%s\n\n验证码将在 %d 分钟后失效。如果不是你本人操作，请忽略这封邮件。\n", displayName, code, int(registrationVerificationTTL/time.Minute))
+	subject := fmt.Sprintf("%s %s", displayName, subjectSuffix)
 	message := strings.Join([]string{
 		"From: " + formatEmailAddressHeader(displayName, from),
 		"To: " + email,

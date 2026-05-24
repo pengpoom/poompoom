@@ -13,6 +13,7 @@ const AssetsPage = lazy(() => import("@/app/assets/page"));
 const CommunityPage = lazy(() => import("@/app/community/page"));
 const CreditsPage = lazy(() => import("@/app/credits/page"));
 const DashboardPage = lazy(() => import("@/app/dashboard/page"));
+const ForgotPasswordPage = lazy(() => import("@/app/forgot-password/page"));
 const ImagePage = lazy(() => import("@/app/image/page"));
 const LoginPage = lazy(() => import("@/app/login/page"));
 const OperationsPage = lazy(() => import("@/app/operations/page"));
@@ -215,6 +216,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<PublicOnlyRoute role={role}><HomePage /></PublicOnlyRoute>} />
             <Route path="/login" element={<PublicOnlyRoute role={role}><LoginPage /></PublicOnlyRoute>} />
+            <Route path="/forgot-password" element={<PublicOnlyRoute role={role}><ForgotPasswordPage /></PublicOnlyRoute>} />
             <Route path="/image" element={<ProtectedRoute role={role}><Navigate to="/image/history" replace /></ProtectedRoute>} />
             <Route path="/image/history" element={<ProtectedRoute role={role}><ImagePage /></ProtectedRoute>} />
             <Route path="/image/workspace" element={<ProtectedRoute role={role}><ImagePage /></ProtectedRoute>} />
