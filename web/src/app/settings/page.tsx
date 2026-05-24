@@ -126,7 +126,7 @@ function defaultSystemSettings(): BusinessSystemSettings {
 
 function defaultRuntime(): BusinessSystemRuntime {
   return {
-    sqlitePath: "",
+    databaseDriver: "",
     imageDir: "",
     imageFileAuthRequired: true,
     legacyConfigWritable: false,
@@ -861,9 +861,9 @@ export default function SettingsPage() {
               icon={Database}
             >
               <ReadonlyField
-                label="数据库路径"
-                value={formatPath(runtime.sqlitePath)}
-                hint="业务用户、历史记录、图片资产、系统设置都保存在这个 SQLite 文件里。"
+                label="数据库"
+                value={runtime.databaseDriver || "-"}
+                hint="业务用户、历史记录、图片资产、系统设置等结构化数据保存在当前数据库。"
                 fullWidth
               />
               <ReadonlyField

@@ -240,7 +240,6 @@ func NewStore(cfg *config.Config) (*Store, error) {
 		store.authDir,
 		store.stateFile,
 		store.syncStateDir,
-		cfg.ResolvePath(cfg.Storage.SQLitePath),
 		cfg.Storage.RedisAddr,
 		cfg.Storage.RedisPassword,
 		cfg.Storage.RedisPrefix,

@@ -18,7 +18,6 @@ import (
 	"imagestudio/internal/database"
 
 	"github.com/redis/go-redis/v9"
-	_ "modernc.org/sqlite"
 )
 
 const (
@@ -401,15 +400,17 @@ func validMemoryLimit(value uint64) bool {
 
 func (s *Server) collectRuntimeDatabaseStatus(ctx context.Context) runtimeDatabaseStatus {
 	driver := strings.ToLower(strings.TrimSpace(s.cfg.Database.Driver))
-	if driver == "" || database.IsPostgres(driver) {
+	if driver == "" {
+		driver = "postgres"
+	}
+	if database.IsPostgres(driver) {
 		return s.collectRuntimePostgresStatus(ctx)
 	}
 	return runtimeDatabaseStatus{
 		OK:     true,
 		Status: "configured",
 		Driver: driver,
-		Name:   databaseDisplayName(driver),
-		Path:   filepath.Clean(s.cfg.ResolvePath(s.cfg.Storage.SQLitePath)),
+		Name:   strings.TrimSpace(driver),
 	}
 }
 
@@ -456,17 +457,6 @@ func (s *Server) collectRuntimePostgresStatus(ctx context.Context) runtimeDataba
 	return status
 }
 
-func databaseDisplayName(driver string) string {
-	switch strings.ToLower(strings.TrimSpace(driver)) {
-	case "postgres", "postgresql", "pg":
-		return "PostgreSQL"
-	case "sqlite", "sqlite3":
-		return "SQLite"
-	default:
-		return strings.TrimSpace(driver)
-	}
-}
-
 func maskDatabaseDSN(dsn string) string {
 	dsn = strings.TrimSpace(dsn)
 	if dsn == "" {
@@ -483,8 +473,7 @@ func maskDatabaseDSN(dsn string) string {
 }
 
 func (s *Server) collectRuntimeDiskStatus() runtimeDiskStatus {
-	path := filepath.Dir(filepath.Clean(s.cfg.ResolvePath(s.cfg.Storage.SQLitePath)))
-	probePath := nearestExistingPath(path)
+	probePath := nearestExistingPath(s.cfg.ResolvePath(s.cfg.Storage.ImageDir))
 	status := runtimeDiskStatus{
 		Path: probePath,
 	}

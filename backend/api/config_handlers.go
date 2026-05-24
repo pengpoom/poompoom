@@ -51,7 +51,6 @@ type configPayload struct {
 		ImageStorage             string `json:"imageStorage"`
 		ImageConversationStorage string `json:"imageConversationStorage"`
 		ImageDataStorage         string `json:"imageDataStorage"`
-		SQLitePath               string `json:"sqlitePath"`
 		RedisAddr                string `json:"redisAddr"`
 		RedisPassword            string `json:"redisPassword"`
 		RedisDB                  int    `json:"redisDb"`
@@ -168,7 +167,6 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 			"image_storage":              payload.Storage.ImageStorage,
 			"image_conversation_storage": payload.Storage.ImageConversationStorage,
 			"image_data_storage":         payload.Storage.ImageDataStorage,
-			"sqlite_path":                payload.Storage.SQLitePath,
 			"redis_addr":                 payload.Storage.RedisAddr,
 			"redis_password":             payload.Storage.RedisPassword,
 			"redis_db":                   payload.Storage.RedisDB,
@@ -282,7 +280,6 @@ func (s *Server) buildConfigPayloadFromConfig(cfg *config.Config) configPayload 
 	payload.Storage.ImageStorage = cfg.Storage.ImageStorage
 	payload.Storage.ImageConversationStorage = cfg.Storage.ImageConversationStorage
 	payload.Storage.ImageDataStorage = cfg.Storage.ImageDataStorage
-	payload.Storage.SQLitePath = cfg.Storage.SQLitePath
 	payload.Storage.RedisAddr = cfg.Storage.RedisAddr
 	payload.Storage.RedisPassword = cfg.Storage.RedisPassword
 	payload.Storage.RedisDB = cfg.Storage.RedisDB

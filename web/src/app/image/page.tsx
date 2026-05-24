@@ -1383,6 +1383,50 @@ export default function ImagePage() {
       resetComposer,
     });
 
+  const composer = (
+    <PromptComposer
+      mode={mode}
+      modeOptions={modeOptions}
+      imageCount={imageCount}
+      imageAspectRatio={imageAspectRatio}
+      imageAspectRatioOptions={imageAspectRatioOptions}
+      imageResolutionTier={imageResolutionTier}
+      imageResolutionTierLabel={imageResolutionTierLabel}
+      imageResolutionTierOptions={imageResolutionTierOptions}
+      imageSizeHint={imageSizeHint}
+      providerPlatform={providerPlatform}
+      providerPlatformOptions={providerPlatformOptions}
+      imageQuality={imageQuality}
+      imageQualityOptions={imageQualityOptions}
+      imageQualityDisabled={!isImageQualityEnabled}
+      imageQualityDisabledReason={imageQualityDisabledReason}
+      sourceImages={sourceImages}
+      imagePrompt={imagePrompt}
+      textareaRef={textareaRef}
+      uploadInputRef={uploadInputRef}
+      maskInputRef={maskInputRef}
+      onModeChange={setMode}
+      onImageCountChange={setImageCount}
+      onImageAspectRatioChange={(value) =>
+        setImageAspectRatio(value as ImageAspectRatio)
+      }
+      onImageResolutionTierChange={(value) =>
+        setImageResolutionTier(value as ImageResolutionTier)
+      }
+      onProviderPlatformChange={setProviderPlatform}
+      onImageQualityChange={(value) => setImageQuality(value as ImageQuality)}
+      onPromptChange={setImagePrompt}
+      onPromptPaste={handlePromptPaste}
+      onRemoveSourceImage={removeSourceImage}
+      onOpenSourceSelectionEditor={openSourceSelectionEditor}
+      onAppendFiles={appendFiles}
+      onMobileCollapsedChange={setIsMobileComposerCollapsed}
+      composerResetKey={composerResetKey}
+      placement={selectedConversation ? "bottom" : "inline"}
+      onSubmit={handleSubmit}
+    />
+  );
+
   const historyPanel = (
     <HistorySidebar
       conversations={displayedConversations}
@@ -1458,6 +1502,7 @@ export default function ImagePage() {
             {!selectedConversation ? (
               <EmptyState
                 inspirationExamples={inspirationExamples}
+                composer={composer}
                 onApplyPromptExample={applyPromptExample}
               />
             ) : (
@@ -1501,46 +1546,7 @@ export default function ImagePage() {
         ) : null}
       </div>
 
-      <PromptComposer
-        mode={mode}
-        modeOptions={modeOptions}
-        imageCount={imageCount}
-        imageAspectRatio={imageAspectRatio}
-        imageAspectRatioOptions={imageAspectRatioOptions}
-        imageResolutionTier={imageResolutionTier}
-        imageResolutionTierLabel={imageResolutionTierLabel}
-        imageResolutionTierOptions={imageResolutionTierOptions}
-        imageSizeHint={imageSizeHint}
-        providerPlatform={providerPlatform}
-        providerPlatformOptions={providerPlatformOptions}
-        imageQuality={imageQuality}
-        imageQualityOptions={imageQualityOptions}
-        imageQualityDisabled={!isImageQualityEnabled}
-        imageQualityDisabledReason={imageQualityDisabledReason}
-        sourceImages={sourceImages}
-        imagePrompt={imagePrompt}
-        textareaRef={textareaRef}
-        uploadInputRef={uploadInputRef}
-        maskInputRef={maskInputRef}
-        onModeChange={setMode}
-        onImageCountChange={setImageCount}
-        onImageAspectRatioChange={(value) =>
-          setImageAspectRatio(value as ImageAspectRatio)
-        }
-        onImageResolutionTierChange={(value) =>
-          setImageResolutionTier(value as ImageResolutionTier)
-        }
-        onProviderPlatformChange={setProviderPlatform}
-        onImageQualityChange={(value) => setImageQuality(value as ImageQuality)}
-        onPromptChange={setImagePrompt}
-        onPromptPaste={handlePromptPaste}
-        onRemoveSourceImage={removeSourceImage}
-        onOpenSourceSelectionEditor={openSourceSelectionEditor}
-        onAppendFiles={appendFiles}
-        onMobileCollapsedChange={setIsMobileComposerCollapsed}
-        composerResetKey={composerResetKey}
-        onSubmit={handleSubmit}
-      />
+      {selectedConversation ? composer : null}
     </div>
   );
 

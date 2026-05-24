@@ -58,7 +58,6 @@ export function defaultConfigPayload(): ConfigPayload {
       imageStorage: "browser",
       imageConversationStorage: "browser",
       imageDataStorage: "browser",
-      sqlitePath: "",
       redisAddr: "127.0.0.1:6379",
       redisPassword: "",
       redisDb: 0,

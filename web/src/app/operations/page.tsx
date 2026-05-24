@@ -80,19 +80,13 @@ function databaseName(database: RuntimeStatusResponse["system"]["database"] | un
   if (driver === "postgres" || driver === "postgresql") {
     return "PostgreSQL";
   }
-  if (driver === "sqlite" || driver === "sqlite3") {
-    return "SQLite";
-  }
-  return database?.name || "数据库";
+  return database?.name || driver || "数据库";
 }
 
 function databaseSummary(database: RuntimeStatusResponse["system"]["database"] | undefined) {
   const driver = (database?.driver || "").toLowerCase();
   if (driver === "postgres" || driver === "postgresql") {
     return `连接 ${numberText(database?.openConns)} / 使用中 ${numberText(database?.inUseConns)}`;
-  }
-  if (driver === "sqlite" || driver === "sqlite3") {
-    return `SQLite ${formatBytes(database?.sizeBytes)}`;
   }
   return database?.status || "-";
 }

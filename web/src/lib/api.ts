@@ -41,6 +41,51 @@ export type BusinessAPIProviderInput = {
   enabled: boolean;
   isDefault: boolean;
 };
+export type BusinessNotificationLevel = "info" | "warning" | "success";
+export type BusinessNotificationStatus = "draft" | "published" | "archived";
+export type BusinessNotificationNotifyMode = "silent" | "popup";
+export type BusinessNotificationTargeting = {
+  mode: "all" | "balance";
+  balance?: {
+    operator: ">" | ">=" | "<" | "<=" | "=";
+    value: number;
+  };
+};
+export type BusinessNotification = {
+  id: string;
+  title: string;
+  body: string;
+  level: BusinessNotificationLevel;
+  audience: "all";
+  status: BusinessNotificationStatus;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  publishedAt?: string;
+  readAt?: string;
+  readCount?: number;
+  audienceCount?: number;
+  notifyMode: BusinessNotificationNotifyMode;
+  startsAt?: string;
+  endsAt?: string;
+  targeting?: BusinessNotificationTargeting;
+};
+export type BusinessNotificationListResponse = {
+  items: BusinessNotification[];
+  unreadCount?: number;
+};
+export type BusinessNotificationInput = {
+  title: string;
+  body: string;
+  level: BusinessNotificationLevel;
+  publish?: boolean;
+  status?: BusinessNotificationStatus;
+  audience?: "all";
+  notifyMode?: BusinessNotificationNotifyMode;
+  startsAt?: string;
+  endsAt?: string;
+  targeting?: BusinessNotificationTargeting;
+};
 export type BusinessSystemSettings = {
   site: {
     name: string;
@@ -87,7 +132,7 @@ export type BusinessSystemSettings = {
   };
 };
 export type BusinessSystemRuntime = {
-  sqlitePath: string;
+  databaseDriver: string;
   imageDir: string;
   imageFileAuthRequired: boolean;
   legacyConfigWritable: boolean;
@@ -321,7 +366,6 @@ export type ConfigPayload = {
     imageStorage: "browser" | "server" | string;
     imageConversationStorage: "browser" | "server" | string;
     imageDataStorage: "browser" | "server" | string;
-    sqlitePath: string;
     redisAddr: string;
     redisPassword: string;
     redisDb: number;
@@ -617,7 +661,6 @@ function buildDefaultConfig(): ConfigPayload {
       imageStorage: "browser",
       imageConversationStorage: "browser",
       imageDataStorage: "browser",
-      sqlitePath: "data/image-studio.db",
       redisAddr: "127.0.0.1:6379",
       redisPassword: "",
       redisDb: 0,
@@ -1269,6 +1312,55 @@ export async function fetchBusinessTrackerSummary(windowSeconds = 600) {
   return httpRequest<BusinessTrackerSummary>(
     `/api/business/tracker/summary${buildQuery({ windowSeconds })}`,
   );
+}
+
+export async function fetchAdminBusinessNotifications(query: {
+  status?: string;
+  search?: string;
+  limit?: number;
+} = {}) {
+  return httpRequest<BusinessNotificationListResponse>(
+    `/api/business/admin/notifications${buildQuery({
+      status: query.status && query.status !== "all" ? query.status : undefined,
+      search: query.search,
+      limit: query.limit,
+    })}`,
+  );
+}
+
+export async function createBusinessNotification(payload: BusinessNotificationInput) {
+  return httpRequest<{ item: BusinessNotification }>("/api/business/admin/notifications", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateBusinessNotification(id: string, payload: BusinessNotificationInput) {
+  return httpRequest<{ item: BusinessNotification }>(
+    `/api/business/admin/notifications/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      body: payload,
+    },
+  );
+}
+
+export async function deleteBusinessNotification(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/admin/notifications/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function fetchBusinessNotifications() {
+  return httpRequest<BusinessNotificationListResponse>("/api/business/notifications");
+}
+
+export async function markBusinessNotificationsRead(ids: string[]) {
+  return httpRequest<{ ok: boolean }>("/api/business/notifications/read", {
+    method: "POST",
+    body: { ids },
+  });
 }
 
 function buildQuery(params: Record<string, string | number | undefined>) {

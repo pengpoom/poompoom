@@ -191,6 +191,33 @@ func TestLoadDefaultsToPostgresDatabase(t *testing.T) {
 	}
 }
 
+func TestValidateDefaultsEmptyDatabaseDriverToPostgres(t *testing.T) {
+	cfg := &Config{
+		Database: DatabaseConfig{
+			Driver: "",
+			DSN:    "",
+		},
+		ChatGPT: ChatGPTConfig{
+			ImageMode:      "studio",
+			FreeImageRoute: "legacy",
+			PaidImageRoute: "responses",
+		},
+	}
+
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() returned error: %v", err)
+	}
+	if cfg.Database.Driver != "postgres" {
+		t.Fatalf("Database.Driver = %q, want postgres", cfg.Database.Driver)
+	}
+	if !strings.HasPrefix(cfg.Database.DSN, "postgres://") {
+		t.Fatalf("Database.DSN = %q, want postgres DSN", cfg.Database.DSN)
+	}
+	if cfg.Database.MaxOpenConns <= 1 || cfg.Database.MaxIdleConns <= 1 {
+		t.Fatalf("database pool = %d/%d, want PostgreSQL pool defaults", cfg.Database.MaxOpenConns, cfg.Database.MaxIdleConns)
+	}
+}
+
 func TestValidateAcceptsRedisJobQueue(t *testing.T) {
 	cfg := New(t.TempDir())
 	if err := cfg.Load(); err != nil {
@@ -333,7 +360,6 @@ func TestValidateDefaultsEmptyStoragePaths(t *testing.T) {
 			StateFile:    "",
 			SyncStateDir: "",
 			ImageDir:     "",
-			SQLitePath:   "",
 			RedisAddr:    "",
 			RedisPrefix:  "",
 		},
@@ -355,9 +381,6 @@ func TestValidateDefaultsEmptyStoragePaths(t *testing.T) {
 	if cfg.Storage.ImageDir != "data/business-images" {
 		t.Fatalf("ImageDir = %q, want data/business-images", cfg.Storage.ImageDir)
 	}
-	if cfg.Storage.SQLitePath != "data/image-studio.db" {
-		t.Fatalf("SQLitePath = %q, want data/image-studio.db", cfg.Storage.SQLitePath)
-	}
 	if cfg.Storage.RedisAddr != "127.0.0.1:6379" {
 		t.Fatalf("RedisAddr = %q, want 127.0.0.1:6379", cfg.Storage.RedisAddr)
 	}
@@ -369,7 +392,7 @@ func TestValidateDefaultsEmptyStoragePaths(t *testing.T) {
 func TestValidateMigratesLegacyImageStorageToNewFields(t *testing.T) {
 	cfg := &Config{
 		Storage: StorageConfig{
-			Backend:       "sqlite",
+			Backend:       "local",
 			ConfigBackend: "redis",
 			ImageStorage:  "server",
 		},
@@ -382,6 +405,9 @@ func TestValidateMigratesLegacyImageStorageToNewFields(t *testing.T) {
 
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate() returned error: %v", err)
+	}
+	if cfg.Storage.Backend != "current" {
+		t.Fatalf("Storage.Backend = %q, want current", cfg.Storage.Backend)
 	}
 	if cfg.Storage.ImageConversationStorage != "server" {
 		t.Fatalf("ImageConversationStorage = %q, want server", cfg.Storage.ImageConversationStorage)

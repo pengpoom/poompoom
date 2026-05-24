@@ -626,7 +626,7 @@ export function APIAccessSection() {
           <div className="grid gap-4 md:grid-cols-2">
             <Field
               label="名称"
-              hint="用于区分不同 API 接入，例如 xlabapi、本地 sub2api 或 Gemini 官方接口。"
+              hint="用于区分不同 API 接入。"
             >
               <Input
                 value={draft.name}
@@ -644,11 +644,11 @@ export function APIAccessSection() {
                   items={[
                     {
                       title: "gpt-image",
-                      body: <>OpenAI 兼容图片接口。Base URL 可填根地址或 /v1 地址。</>,
+                      body: <>OpenAI 兼容图片接口。</>,
                     },
                     {
                       title: "gemini-banana",
-                      body: <>Gemini 图片接口。Base URL 可填根地址或 /v1beta 地址。</>,
+                      body: <>Gemini 图片接口。</>,
                     },
                   ]}
                 />
@@ -673,7 +673,7 @@ export function APIAccessSection() {
 
             <Field
               label="Base URL 地址"
-              hint="gpt-image 可填根地址或 /v1；gemini-banana 可填 https://generativelanguage.googleapis.com 或 /v1beta。"
+              hint="填写上游服务地址。"
               fullWidth
             >
               <Input
@@ -693,7 +693,7 @@ export function APIAccessSection() {
               hint={
                 draft.platform === "gemini-banana"
                   ? "选择 Gemini 图片生成请求使用的模型。"
-                  : "工作台暂时仍固定发送当前模型；这里先作为 provider 兜底模型保存。"
+                  : "上游请求的默认模型。"
               }
             >
               {draft.platform === "gemini-banana" ? (
@@ -724,7 +724,7 @@ export function APIAccessSection() {
 
             <Field
               label="API Key"
-              hint="密钥保存到后端数据库，只由后端请求上游时使用。"
+              hint="后端请求上游时使用。"
             >
               <Input
                 type="password"

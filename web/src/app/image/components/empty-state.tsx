@@ -1,6 +1,7 @@
 "use client";
 
 import { Sparkles } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -15,20 +16,23 @@ type InspirationExample = {
 
 type EmptyStateProps = {
   inspirationExamples: InspirationExample[];
+  composer?: ReactNode;
   onApplyPromptExample: (example: InspirationExample) => void;
 };
 
-export function EmptyState({ inspirationExamples, onApplyPromptExample }: EmptyStateProps) {
+export function EmptyState({ inspirationExamples, composer, onApplyPromptExample }: EmptyStateProps) {
   return (
-    <div className="mx-auto flex max-w-[1120px] flex-col gap-8 px-4 pb-40 pt-8 sm:px-6 lg:px-10">
-      <div className="max-w-[760px]">
-        <div className="inline-flex size-14 items-center justify-center rounded-[20px] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)] shadow-sm">
+    <div className="mx-auto flex min-h-[min(720px,calc(100vh-170px))] max-w-[1120px] flex-col justify-center gap-7 px-4 py-8 sm:px-6 lg:px-10">
+      <div className="mx-auto max-w-[760px] text-center">
+        <div className="mx-auto inline-flex size-14 items-center justify-center rounded-[20px] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)] shadow-sm">
           <Sparkles className="size-5" />
         </div>
         <h1 className="mt-6 text-3xl font-semibold tracking-tight text-[var(--app-text-primary)] lg:text-5xl">
           从一个提示词，开始完整的图像工作流。
         </h1>
       </div>
+
+      {composer}
 
       <div className="hide-scrollbar flex gap-3 overflow-x-auto pb-1 md:grid md:grid-cols-2 md:overflow-visible xl:grid-cols-4">
         {inspirationExamples.map((example) => (

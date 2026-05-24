@@ -92,7 +92,6 @@ type StorageConfig struct {
 	ImageStorage             string `toml:"image_storage"`
 	ImageConversationStorage string `toml:"image_conversation_storage"`
 	ImageDataStorage         string `toml:"image_data_storage"`
-	SQLitePath               string `toml:"sqlite_path"`
 	RedisAddr                string `toml:"redis_addr"`
 	RedisPassword            string `toml:"redis_password"`
 	RedisDB                  int    `toml:"redis_db"`
@@ -606,9 +605,6 @@ func (c *Config) validate() error {
 	if strings.TrimSpace(c.Storage.ImageDir) == "" {
 		c.Storage.ImageDir = "data/business-images"
 	}
-	if strings.TrimSpace(c.Storage.SQLitePath) == "" {
-		c.Storage.SQLitePath = "data/image-studio.db"
-	}
 	if strings.TrimSpace(c.Storage.RedisAddr) == "" {
 		c.Storage.RedisAddr = "127.0.0.1:6379"
 	}
@@ -732,8 +728,6 @@ func normalizeStorageBackend(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "current", "local":
 		return "current"
-	case "sqlite":
-		return "sqlite"
 	case "redis":
 		return "redis"
 	default:
@@ -756,10 +750,8 @@ func normalizeDatabaseDriver(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "postgres", "postgresql", "pg":
 		return "postgres"
-	case "sqlite", "sqlite3":
-		return "sqlite"
 	default:
-		return "sqlite"
+		return "postgres"
 	}
 }
 

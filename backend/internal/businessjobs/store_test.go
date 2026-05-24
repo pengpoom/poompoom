@@ -2,7 +2,8 @@ package businessjobs
 
 import (
 	"context"
-	"path/filepath"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -383,15 +384,25 @@ func capacityErrorCodeIs(err error, code string) bool {
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
+	dsn := strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
 	cfg := config.New(t.TempDir())
 	if err := cfg.Load(); err != nil {
 		t.Fatalf("Load() returned error: %v", err)
 	}
-	cfg.Database.Driver = "sqlite"
-	cfg.Storage.SQLitePath = filepath.Join(t.TempDir(), "jobs.db")
+	cfg.Database.Driver = "postgres"
+	cfg.Database.DSN = dsn
+	cfg.Database.MaxOpenConns = 4
+	cfg.Database.MaxIdleConns = 2
+	cfg.Database.ConnMaxLifetimeSeconds = 60
 	store, err := NewStore(cfg)
 	if err != nil {
 		t.Fatalf("NewStore() returned error: %v", err)
+	}
+	if _, err := store.db.ExecContext(context.Background(), `TRUNCATE business_image_jobs RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("reset job test table: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = store.Close()

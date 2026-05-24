@@ -146,8 +146,12 @@ func main() {
 }
 
 func openPrimaryDatabase(cfg *config.Config) (*sql.DB, error) {
-	if !strings.EqualFold(strings.TrimSpace(cfg.Database.Driver), "postgres") {
-		return nil, nil
+	driver := strings.ToLower(strings.TrimSpace(cfg.Database.Driver))
+	if driver == "" {
+		driver = "postgres"
+	}
+	if !strings.EqualFold(driver, "postgres") {
+		return nil, fmt.Errorf("unsupported primary database driver %q", driver)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -228,7 +232,6 @@ func applyEnvConfigOverrides(cfg *config.Config) error {
 	putString("STORAGE_IMAGE_CONVERSATION_STORAGE", "storage", "image_conversation_storage")
 	putString("STORAGE_IMAGE_DATA_STORAGE", "storage", "image_data_storage")
 	putString("STORAGE_IMAGE_DIR", "storage", "image_dir")
-	putString("STORAGE_SQLITE_PATH", "storage", "sqlite_path")
 	putString("REDIS_ADDR", "storage", "redis_addr")
 	putString("REDIS_PASSWORD", "storage", "redis_password")
 	putInt("REDIS_DB", "storage", "redis_db")

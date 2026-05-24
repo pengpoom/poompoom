@@ -1100,7 +1100,7 @@ Provider 对象：
     }
   },
   "runtime": {
-    "sqlitePath": "data/image-studio.db",
+    "databaseDriver": "postgres",
     "imageDir": "data/business-images",
     "imageFileAuthRequired": true,
     "legacyConfigWritable": true,
@@ -1588,9 +1588,8 @@ Responses 兼容接口保留路由，但 `image_generation` 图片生成能力�
 {
   "items": [],
   "storage": {
-    "backend": "sqlite",
+    "backend": "current",
     "imageDir": "data/tmp/image",
-    "sqlitePath": "data/image-studio.db",
     "redisAddr": "",
     "redisPassword": "",
     "redisDb": 0,

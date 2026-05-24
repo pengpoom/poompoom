@@ -90,7 +90,7 @@ function SelectContent({
       <SelectPrimitive.Content
         data-slot="select-content"
         className={cn(
-          "relative z-50 max-h-96 min-w-[8rem] overflow-x-hidden overflow-y-auto rounded-[var(--app-radius-lg)] border border-[var(--app-border)] bg-[rgba(10,13,22,0.92)] text-[var(--app-text-primary)] shadow-[var(--app-shadow-floating)] backdrop-blur-2xl data-[state=open]:animate-in data-[state=closed]:animate-out",
+          "relative z-50 max-h-96 min-w-[8rem] overflow-x-hidden overflow-y-auto rounded-[var(--app-radius-lg)] border border-[var(--app-border)] bg-[var(--app-bg-popover-solid)] text-[var(--app-text-primary)] shadow-[var(--app-shadow-floating)] data-[state=open]:animate-in data-[state=closed]:animate-out",
           position === "popper" &&
             "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
           className,

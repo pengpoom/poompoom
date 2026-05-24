@@ -8,6 +8,8 @@ import {
   BarChart3,
   Bell,
   Boxes,
+  CheckCircle2,
+  ChevronLeft,
   Check,
   Database,
   FileText,
@@ -38,7 +40,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { fetchBusinessCredit, fetchVersionInfo, logout } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import {
+  fetchBusinessCredit,
+  fetchBusinessNotifications,
+  fetchVersionInfo,
+  logout,
+  markBusinessNotificationsRead,
+  type BusinessNotification,
+} from "@/lib/api";
 import { usePublicSiteSettings } from "@/lib/site-settings";
 import {
   AUTH_STATE_CHANGED_EVENT,
@@ -62,6 +72,7 @@ const adminItems: readonly ShellNavItem[] = [
   { href: "/admin/operations", matchPrefix: "/admin/operations", label: "运维", icon: Gauge },
   { href: "/admin/usage", matchPrefix: "/admin/usage", label: "记录", icon: History },
   { href: "/users", matchPrefix: "/users", label: "用户", icon: UsersRound },
+  { href: "/notifications", matchPrefix: "/notifications", label: "通知", icon: Bell },
   { href: "/accounts", matchPrefix: "/accounts", label: "接入", icon: Activity },
   { href: "/storage", matchPrefix: "/storage", label: "存储", icon: Database },
 ];
@@ -103,6 +114,17 @@ function formatVersionLabel(value: string) {
   }
 
   return normalized;
+}
+
+function formatNoticeTime(value?: string) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
 }
 
 function avatarText(username: string, role: AuthRole | null) {
@@ -169,7 +191,7 @@ const railUtilityActionClass =
   "grid h-[38px] w-[58px] place-items-center rounded-[14px] text-[var(--app-text-muted)] transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)]";
 const railActionIconClass = "size-5 stroke-[1.9]";
 const menuPanelClass =
-  "w-[184px] rounded-[18px] border border-[var(--app-border)] bg-[var(--app-bg-elevated)] p-1.5 text-[13px] font-semibold text-[var(--app-text-secondary)] shadow-[var(--app-shadow-floating)] backdrop-blur-2xl";
+  "w-[184px] rounded-[18px] border border-[var(--app-border)] bg-[var(--app-bg-popover-solid)] p-1.5 text-[13px] font-semibold text-[var(--app-text-secondary)] shadow-[var(--app-shadow-floating)]";
 const menuItemClass =
   "flex h-10 w-full items-center gap-2 rounded-[12px] px-3 text-left transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)]";
 const themeOptions: Array<{ mode: ThemeMode; label: string; icon: LucideIcon }> = [
@@ -195,7 +217,11 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
   const [mounted, setMounted] = useState(false);
   const [versionDialogOpen, setVersionDialogOpen] = useState(false);
   const [notificationDialogOpen, setNotificationDialogOpen] = useState(false);
-  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(true);
+  const [notifications, setNotifications] = useState<BusinessNotification[]>([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const [selectedNotification, setSelectedNotification] = useState<BusinessNotification | null>(null);
+  const [popupNotification, setPopupNotification] = useState<BusinessNotification | null>(null);
   const [infoDialog, setInfoDialog] = useState<"terms" | "changelog" | null>(null);
   const [versionLabel, setVersionLabel] = useState("读取中");
 
@@ -239,6 +265,95 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
       window.removeEventListener(AUTH_STATE_CHANGED_EVENT, handleAuthChange);
     };
   }, [role]);
+
+  const loadNotifications = async (showLoading = true) => {
+    if (showLoading) {
+      setNotificationsLoading(true);
+    }
+    try {
+      const payload = await fetchBusinessNotifications();
+      const items = payload.items || [];
+      setNotifications(items);
+      setUnreadNotificationCount(Number(payload.unreadCount || 0));
+      setPopupNotification((current) => {
+        const availablePopup = items.find((item) => item.notifyMode === "popup" && !item.readAt) || null;
+        if (!current) {
+          return availablePopup;
+        }
+        const stillAvailable = items.some((item) => item.id === current.id && item.notifyMode === "popup" && !item.readAt);
+        return stillAvailable ? current : availablePopup;
+      });
+    } catch {
+      setNotifications([]);
+      setUnreadNotificationCount(0);
+      setPopupNotification(null);
+    } finally {
+      if (showLoading) {
+        setNotificationsLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!role) {
+      setNotifications([]);
+      setUnreadNotificationCount(0);
+      setPopupNotification(null);
+      return;
+    }
+    void loadNotifications();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadNotifications(false);
+      }
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [role]);
+
+  const markNotificationRead = async (item: BusinessNotification) => {
+    if (item.readAt) {
+      return;
+    }
+    const readAt = new Date().toISOString();
+    try {
+      await markBusinessNotificationsRead([item.id]);
+      setNotifications((current) => current.map((notice) => (
+        notice.id === item.id ? { ...notice, readAt } : notice
+      )));
+      setSelectedNotification((current) => (
+        current?.id === item.id ? { ...current, readAt } : current
+      ));
+      setPopupNotification((current) => (
+        current?.id === item.id ? null : current
+      ));
+      setUnreadNotificationCount((current) => Math.max(0, current - 1));
+    } catch {
+      // 铃铛通知不阻断主流程，下一次拉取会恢复真实已读状态。
+    }
+  };
+
+  const markAllNotificationsRead = async () => {
+    const unreadIDs = notifications.filter((item) => !item.readAt).map((item) => item.id);
+    if (unreadIDs.length === 0) {
+      return;
+    }
+    const readAt = new Date().toISOString();
+    try {
+      await markBusinessNotificationsRead(unreadIDs);
+      setNotifications((current) => current.map((item) => (
+        unreadIDs.includes(item.id) ? { ...item, readAt: item.readAt || readAt } : item
+      )));
+      setSelectedNotification((current) => (
+        current && unreadIDs.includes(current.id) ? { ...current, readAt: current.readAt || readAt } : current
+      ));
+      setPopupNotification((current) => (
+        current && unreadIDs.includes(current.id) ? null : current
+      ));
+      setUnreadNotificationCount(0);
+    } catch {
+      // 保持本地状态不变，避免展示和服务端状态不一致。
+    }
+  };
 
   useEffect(() => {
     if (role !== "admin") {
@@ -418,13 +533,14 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
                 className={cn(railUtilityActionClass, "relative")}
                 aria-label="消息通知"
                 onClick={() => {
-                  setHasUnreadNotifications(false);
                   setNotificationDialogOpen(true);
+                  setSelectedNotification(null);
+                  void loadNotifications();
                 }}
                 data-notification-action
               >
                 <Bell className={railActionIconClass} />
-                {hasUnreadNotifications ? (
+                {unreadNotificationCount > 0 ? (
                   <span className="absolute right-[17px] top-[8px] size-1.5 rounded-full bg-[var(--app-accent-cyan)] shadow-[0_0_12px_rgba(91,214,255,0.9)]" />
                 ) : null}
               </button>
@@ -490,7 +606,7 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
             </button>
             <div
               data-theme-submenu
-              className="pointer-events-none absolute bottom-0 left-[calc(100%+8px)] w-[154px] translate-x-1 rounded-[16px] border border-[var(--app-border)] bg-[var(--app-bg-elevated)] p-1.5 opacity-0 shadow-[var(--app-shadow-floating)] backdrop-blur-2xl transition group-hover/theme:pointer-events-auto group-hover/theme:translate-x-0 group-hover/theme:opacity-100 group-focus-within/theme:pointer-events-auto group-focus-within/theme:translate-x-0 group-focus-within/theme:opacity-100"
+              className="pointer-events-none absolute bottom-0 left-[calc(100%+8px)] w-[154px] translate-x-1 rounded-[16px] border border-[var(--app-border)] bg-[var(--app-bg-popover-solid)] p-1.5 opacity-0 shadow-[var(--app-shadow-floating)] transition group-hover/theme:pointer-events-auto group-hover/theme:translate-x-0 group-hover/theme:opacity-100 group-focus-within/theme:pointer-events-auto group-focus-within/theme:translate-x-0 group-focus-within/theme:opacity-100"
             >
               {themeOptions.map((option) => {
                 const Icon = option.icon;
@@ -540,30 +656,97 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
           onVersionChange={(version) => setVersionLabel(formatVersionLabel(version))}
         />
       ) : null}
-      <Dialog open={notificationDialogOpen} onOpenChange={setNotificationDialogOpen}>
-        <DialogContent className="w-[min(92vw,520px)]">
+      <Dialog
+        open={notificationDialogOpen}
+        onOpenChange={(open) => {
+          setNotificationDialogOpen(open);
+          if (!open) {
+            setSelectedNotification(null);
+          }
+        }}
+      >
+        <DialogContent className="w-[min(92vw,560px)]">
           <DialogHeader>
-            <DialogTitle>消息通知</DialogTitle>
-            <DialogDescription>
-              后续会接入系统通知、任务结果、额度变动和活动消息。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-3">
-            <div className="rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] p-4">
-              <div className="flex items-start gap-3">
-                <span className="mt-1 size-2 rounded-full bg-[var(--app-accent-cyan)] shadow-[0_0_14px_rgba(91,214,255,0.68)]" />
-                <div>
-                  <p className="text-sm font-semibold text-[var(--app-text-primary)]">通知中心准备中</p>
-                  <p className="mt-1 text-sm leading-6 text-[var(--app-text-secondary)]">
-                    这里会用于展示生成任务、系统维护、版本更新和积分相关提醒。
-                  </p>
-                </div>
+            <div className="flex items-start justify-between gap-3 pr-8">
+              <div>
+                <DialogTitle className="break-words pr-2 [overflow-wrap:anywhere]">{selectedNotification ? selectedNotification.title : "消息通知"}</DialogTitle>
+                <DialogDescription>
+                  {selectedNotification ? formatNoticeTime(selectedNotification.publishedAt || selectedNotification.createdAt) : "系统公告和运营通知。"}
+                </DialogDescription>
               </div>
+              {!selectedNotification && unreadNotificationCount > 0 ? (
+                <Button type="button" size="sm" variant="outline" onClick={() => void markAllNotificationsRead()}>
+                  <CheckCircle2 className="size-4" />
+                  全部已读
+                </Button>
+              ) : null}
             </div>
-            <div className="rounded-[var(--app-radius-md)] border border-dashed border-[var(--app-border)] bg-[var(--app-bg-surface)] px-4 py-6 text-center text-sm text-[var(--app-text-muted)]">
+          </DialogHeader>
+          {selectedNotification ? (
+            <div className="grid max-h-[62vh] min-w-0 gap-4 overflow-y-auto overflow-x-hidden pr-1">
+              <button
+                type="button"
+                className="inline-flex w-fit items-center gap-1 text-sm font-medium text-[var(--app-text-secondary)] transition hover:text-[var(--app-text-primary)]"
+                onClick={() => setSelectedNotification(null)}
+              >
+                <ChevronLeft className="size-4" />
+                返回列表
+              </button>
+              <article className="min-w-0 rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] p-4">
+                <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[var(--app-text-muted)]">
+                  <span className={cn(
+                    "size-2 rounded-full shadow-[0_0_14px_rgba(91,214,255,0.68)]",
+                    selectedNotification.level === "warning" ? "bg-amber-300" : selectedNotification.level === "success" ? "bg-emerald-300" : "bg-[var(--app-accent-cyan)]",
+                  )} />
+                  <span>{selectedNotification.readAt ? "已读" : "未读"}</span>
+                </div>
+                <p className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--app-text-secondary)] [overflow-wrap:anywhere]">{selectedNotification.body}</p>
+              </article>
+            </div>
+          ) : (
+          <div className="grid max-h-[58vh] min-w-0 gap-3 overflow-y-auto overflow-x-hidden pr-1">
+            {notificationsLoading ? (
+              <div className="rounded-[var(--app-radius-md)] border border-dashed border-[var(--app-border)] bg-[var(--app-bg-surface)] px-4 py-6 text-center text-sm text-[var(--app-text-muted)]">
+                读取中
+              </div>
+            ) : notifications.length === 0 ? (
+              <div className="rounded-[var(--app-radius-md)] border border-dashed border-[var(--app-border)] bg-[var(--app-bg-surface)] px-4 py-6 text-center text-sm text-[var(--app-text-muted)]">
               暂无新的通知
-            </div>
+              </div>
+            ) : notifications.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={cn(
+                  "min-w-0 rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] p-4 text-left transition hover:bg-[var(--app-bg-surface-hover)]",
+                  !item.readAt && "border-[var(--app-border-strong)]",
+                )}
+                onClick={() => {
+                  setSelectedNotification(item);
+                  void markNotificationRead(item);
+                }}
+              >
+                <div className="flex items-start gap-3">
+                  <span className={cn(
+                    "mt-1.5 size-2 rounded-full shadow-[0_0_14px_rgba(91,214,255,0.68)]",
+                    item.level === "warning" ? "bg-amber-300" : item.level === "success" ? "bg-emerald-300" : "bg-[var(--app-accent-cyan)]",
+                  )} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="break-words text-sm font-semibold text-[var(--app-text-primary)] [overflow-wrap:anywhere]">{item.title}</p>
+                      {!item.readAt ? (
+                        <span className="rounded-[var(--app-radius-pill)] border border-[var(--app-border)] px-2 py-0.5 text-[11px] font-semibold text-[var(--app-accent-cyan)]">
+                          未读
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-2 text-xs text-[var(--app-text-muted)]">{formatNoticeTime(item.publishedAt || item.createdAt)}</p>
+                  </div>
+                </div>
+              </button>
+            ))}
           </div>
+          )}
         </DialogContent>
       </Dialog>
       <Dialog open={infoDialog !== null} onOpenChange={(open) => !open && setInfoDialog(null)}>
@@ -580,6 +763,34 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
             ) : (
               <p>最近更新包含首页/登录页迁移、统一后台壳、生图工作区修复、时间筛选浮层修复、侧栏菜单整合和主题模式补充。</p>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={popupNotification !== null}
+        onOpenChange={(open) => {
+          if (!open && popupNotification) {
+            void markNotificationRead(popupNotification);
+          }
+        }}
+      >
+        <DialogContent className="w-[min(92vw,620px)]">
+          <DialogHeader>
+            <DialogTitle className="break-words pr-2 [overflow-wrap:anywhere]">{popupNotification?.title || "系统公告"}</DialogTitle>
+            <DialogDescription>
+              {formatNoticeTime(popupNotification?.publishedAt || popupNotification?.createdAt)}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[58vh] min-w-0 overflow-y-auto overflow-x-hidden rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] p-4">
+            <p className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--app-text-secondary)] [overflow-wrap:anywhere]">
+              {popupNotification?.body}
+            </p>
+          </div>
+          <div className="flex justify-end">
+            <Button type="button" onClick={() => popupNotification && void markNotificationRead(popupNotification)}>
+              <CheckCircle2 className="size-4" />
+              我知道了
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

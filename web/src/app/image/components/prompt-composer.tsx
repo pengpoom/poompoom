@@ -64,6 +64,7 @@ type PromptComposerProps = {
   onAppendFiles: (files: FileList | null, role: "image" | "mask") => Promise<void>;
   onMobileCollapsedChange?: (collapsed: boolean) => void;
   composerResetKey?: number;
+  placement?: "bottom" | "inline";
   onSubmit: () => Promise<void>;
 };
 
@@ -318,6 +319,7 @@ export function PromptComposer({
   onAppendFiles,
   onMobileCollapsedChange,
   composerResetKey,
+  placement = "bottom",
   onSubmit,
 }: PromptComposerProps) {
   const imageQualityLabel = imageQualityOptions.find((item) => item.value === imageQuality)?.label ?? imageQuality;
@@ -392,16 +394,28 @@ export function PromptComposer({
     onImageCountChange(String(Math.min(8, Math.max(1, value))));
   }, [onImageCountChange]);
 
+  const inlinePlacement = placement === "inline";
+
   return (
-    <div className="fixed inset-x-0 bottom-0 z-30 px-3 pb-4 sm:px-6 lg:absolute lg:inset-x-8 lg:bottom-8 lg:p-0">
+    <div
+      className={cn(
+        inlinePlacement
+          ? "relative z-10 mx-auto w-full max-w-[920px] px-0"
+          : "fixed inset-x-0 bottom-0 z-30 px-3 pb-4 sm:px-6 lg:absolute lg:inset-x-8 lg:bottom-8 lg:p-0",
+      )}
+    >
       <div
         data-image-composer="panel"
         className={cn(
           "mx-auto w-full max-w-[920px] rounded-[18px] border border-[var(--app-border)] bg-[var(--app-bg-elevated)] px-3 py-3 shadow-[var(--app-shadow-floating)] backdrop-blur-2xl sm:px-4 sm:py-4",
-          isComposerCollapsed ? "min-h-[86px] lg:min-h-[118px]" : "min-h-[164px] lg:min-h-[118px]",
+          inlinePlacement
+            ? "min-h-[132px]"
+            : isComposerCollapsed
+              ? "min-h-[86px] lg:min-h-[118px]"
+              : "min-h-[164px] lg:min-h-[118px]",
         )}
         onPointerDown={(event) => {
-          if (!isComposerCollapsed) {
+          if (inlinePlacement || !isComposerCollapsed) {
             return;
           }
           event.preventDefault();
@@ -466,7 +480,7 @@ export function PromptComposer({
         ) : null}
 
         <div className="relative">
-          {isComposerCollapsed ? (
+          {isComposerCollapsed && !inlinePlacement ? (
             <button
               type="button"
               className="flex min-h-[42px] w-full items-start px-1 text-left text-[14px] font-medium leading-6 text-[var(--app-text-muted)]"
@@ -505,7 +519,7 @@ export function PromptComposer({
           )}
         </div>
 
-        <div className={cn("mt-3", showMobileExpandedSections ? "block" : "hidden lg:block")}>
+        <div className={cn("mt-3", inlinePlacement || showMobileExpandedSections ? "block" : "hidden lg:block")}>
           <div className="flex items-end justify-between gap-3">
             <div className="hide-scrollbar flex min-w-0 flex-1 items-center gap-2 overflow-x-auto pb-0.5">
               <button
@@ -639,7 +653,7 @@ export function PromptComposer({
           </div>
         </div>
 
-        {isMobileComposerExpanded ? (
+        {isMobileComposerExpanded && !inlinePlacement ? (
           <button
             type="button"
             className="absolute right-3 top-3 grid size-8 place-items-center rounded-full text-[var(--app-text-muted)] transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)] sm:hidden"

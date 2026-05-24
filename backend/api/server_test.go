@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -22,12 +21,16 @@ import (
 	"imagestudio/internal/businessjobs"
 	"imagestudio/internal/businesssettings"
 	"imagestudio/internal/config"
+	"imagestudio/internal/database"
 	"imagestudio/internal/imagehistory"
-	_ "modernc.org/sqlite"
 )
 
-func newSQLiteServerTestConfig(t *testing.T, rootDir ...string) *config.Config {
+func newDatabaseServerTestConfig(t *testing.T, rootDir ...string) *config.Config {
 	t.Helper()
+	dsn := strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
 	root := t.TempDir()
 	if len(rootDir) > 0 {
 		root = rootDir[0]
@@ -36,11 +39,46 @@ func newSQLiteServerTestConfig(t *testing.T, rootDir ...string) *config.Config {
 	if err := cfg.Load(); err != nil {
 		t.Fatalf("Load() returned error: %v", err)
 	}
-	cfg.Database.Driver = "sqlite"
-	cfg.Database.DSN = cfg.Storage.SQLitePath
-	cfg.Database.MaxOpenConns = 1
-	cfg.Database.MaxIdleConns = 1
+	cfg.Database.Driver = "postgres"
+	cfg.Database.DSN = dsn
+	cfg.Database.MaxOpenConns = 4
+	cfg.Database.MaxIdleConns = 2
+	cfg.Database.ConnMaxLifetimeSeconds = 60
+	resetDatabaseServerTestData(t, cfg)
 	return cfg
+}
+
+func resetDatabaseServerTestData(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, cfg)
+	if err != nil {
+		t.Fatalf("open postgres database: %v", err)
+	}
+	defer db.Close()
+	if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+		t.Fatalf("migrate postgres database: %v", err)
+	}
+	_, err = db.ExecContext(ctx, `TRUNCATE
+		business_image_assets,
+		business_image_generations,
+		business_image_conversations,
+		business_image_jobs,
+		business_image_tracker,
+		business_notification_reads,
+		business_notifications,
+		business_credit_ledger,
+		business_user_credits,
+		business_api_providers,
+		business_system_settings,
+		email_verification_codes,
+		user_sessions,
+		business_users
+		RESTART IDENTITY CASCADE`)
+	if err != nil {
+		t.Fatalf("reset server test tables: %v", err)
+	}
 }
 
 func TestShouldUseOfficialResponses(t *testing.T) {
@@ -97,7 +135,7 @@ func TestPasswordLoginIssuesRoleSession(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "owner")
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"username":"owner","password":"owner-pass"}`))
@@ -181,7 +219,7 @@ func TestPasswordLoginRejectsUserFromAdminRoutes(t *testing.T) {
 	t.Setenv("TEST_USERNAME", "tester")
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"username":"tester","password":"tester-pass"}`))
@@ -216,7 +254,7 @@ func TestPasswordLoginRateLimitsRepeatedFailures(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "owner")
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 
 	for attempt := 0; attempt < 5; attempt++ {
@@ -244,7 +282,7 @@ func TestPasswordLoginSuccessClearsFailureCount(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "owner")
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 
 	for attempt := 0; attempt < 4; attempt++ {
@@ -278,7 +316,7 @@ func TestPasswordLoginSuccessClearsFailureCount(t *testing.T) {
 }
 
 func TestRegistrationDisabledByDefault(t *testing.T) {
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/auth/register/code", strings.NewReader(`{"email":"new@example.com"}`))
@@ -291,7 +329,7 @@ func TestRegistrationDisabledByDefault(t *testing.T) {
 }
 
 func TestEmailVerificationRegistrationCreatesUserAndSession(t *testing.T) {
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	settingsStore, err := businesssettings.NewStore(cfg)
 	if err != nil {
 		t.Fatalf("open business settings store: %v", err)
@@ -388,7 +426,7 @@ func TestAdminCanManageBusinessUsers(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "owner")
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 
@@ -902,7 +940,7 @@ func TestBusinessSystemSettingsAffectDefaultUserCredits(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "owner")
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 
@@ -966,7 +1004,7 @@ func TestRuntimeStatusUsesPersistedBusinessSettingsOnFirstLoad(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
 	rootDir := t.TempDir()
-	cfg := newSQLiteServerTestConfig(t, rootDir)
+	cfg := newDatabaseServerTestConfig(t, rootDir)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 
@@ -992,7 +1030,7 @@ func TestRuntimeStatusUsesPersistedBusinessSettingsOnFirstLoad(t *testing.T) {
 		t.Fatalf("update settings status = %d, body = %s", settingsRec.Code, settingsRec.Body.String())
 	}
 
-	reloadedCfg := newSQLiteServerTestConfig(t, rootDir)
+	reloadedCfg := newDatabaseServerTestConfig(t, rootDir)
 	reloadedServer := NewServer(reloadedCfg, nil, nil)
 	reloadedToken := loginForTest(t, reloadedServer, "owner", "owner-pass")
 
@@ -1028,7 +1066,7 @@ func TestMaintenanceModeBlocksNewImageSubmissionsAndResetsOnRestart(t *testing.T
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
 	rootDir := t.TempDir()
-	cfg := newSQLiteServerTestConfig(t, rootDir)
+	cfg := newDatabaseServerTestConfig(t, rootDir)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 	userToken := loginForTest(t, server, "tester", "tester-pass")
@@ -1090,7 +1128,7 @@ func TestBusinessUserManagementRequiresAdmin(t *testing.T) {
 	t.Setenv("TEST_USERNAME", "tester")
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	userToken := loginForTest(t, server, "tester", "tester-pass")
 
@@ -1107,7 +1145,7 @@ func TestAdminCanDeleteBusinessUser(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "owner")
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 
@@ -1278,7 +1316,7 @@ func TestListBusinessUsersPurgesExpiredDeletedUser(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD", "owner-pass")
 
 	rootDir := t.TempDir()
-	cfg := newSQLiteServerTestConfig(t, rootDir)
+	cfg := newDatabaseServerTestConfig(t, rootDir)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 
@@ -1296,16 +1334,16 @@ func TestListBusinessUsersPurgesExpiredDeletedUser(t *testing.T) {
 	if err := authStore.Close(); err != nil {
 		t.Fatalf("close auth store: %v", err)
 	}
-	db, err := sql.Open("sqlite", cfg.ResolvePath(cfg.Storage.SQLitePath))
+	db, err := database.Open(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("open sqlite db: %v", err)
+		t.Fatalf("open postgres database: %v", err)
 	}
 	expiredAt := time.Now().UTC().Add(-businessauth.DeletedUserRetention - time.Hour).Format(time.RFC3339Nano)
-	if _, err := db.ExecContext(context.Background(), `UPDATE business_users SET deleted_at = ? WHERE id = ?`, expiredAt, user.ID); err != nil {
+	if _, err := db.ExecContext(context.Background(), `UPDATE business_users SET deleted_at = $1 WHERE id = $2`, expiredAt, user.ID); err != nil {
 		t.Fatalf("mark user expired: %v", err)
 	}
 	if err := db.Close(); err != nil {
-		t.Fatalf("close sqlite db: %v", err)
+		t.Fatalf("close postgres database: %v", err)
 	}
 
 	creditStore, err := businesscredits.NewStore(cfg)
@@ -1433,7 +1471,7 @@ func TestConfiguredImageRoute(t *testing.T) {
 
 func TestMigrateImageFilesSkipsNestedTargetDirectory(t *testing.T) {
 	rootDir := t.TempDir()
-	cfg := newSQLiteServerTestConfig(t, rootDir)
+	cfg := newDatabaseServerTestConfig(t, rootDir)
 	server := NewServer(cfg, nil, nil)
 
 	oldDir := filepath.Join(rootDir, "data", "tmp", "image")
@@ -1464,7 +1502,7 @@ func TestMigrateImageFilesSkipsNestedTargetDirectory(t *testing.T) {
 
 func TestResolveImageFilePathUsesConfiguredAndLegacyImageDirsOnly(t *testing.T) {
 	rootDir := t.TempDir()
-	cfg := newSQLiteServerTestConfig(t, rootDir)
+	cfg := newDatabaseServerTestConfig(t, rootDir)
 	cfg.Storage.ImageDir = "data/new-images"
 	server := NewServer(cfg, nil, nil)
 
@@ -1519,7 +1557,7 @@ func TestBusinessImageJobsAreScopedToCurrentUser(t *testing.T) {
 	t.Setenv("TEST_USERNAME", "tester")
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 	userToken := loginForTest(t, server, "tester", "tester-pass")
@@ -1600,7 +1638,7 @@ func TestAdminCanListBusinessImageJobsWithFilters(t *testing.T) {
 	t.Setenv("TEST_USERNAME", "tester")
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	adminToken := loginForTest(t, server, "owner", "owner-pass")
 
@@ -1687,7 +1725,7 @@ func TestCancelBusinessImageJobMarksQueuedJobCancelled(t *testing.T) {
 	t.Setenv("TEST_USERNAME", "tester")
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	userToken := loginForTest(t, server, "tester", "tester-pass")
 
@@ -1775,7 +1813,7 @@ func TestCancelBusinessImageJobRefundsBeforeUpstreamOnly(t *testing.T) {
 	t.Setenv("TEST_USERNAME", "tester")
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	userToken := loginForTest(t, server, "tester", "tester-pass")
 
@@ -1896,7 +1934,7 @@ func TestCancelBusinessImageJobActiveRunningJobFinalizesCancelled(t *testing.T) 
 	t.Setenv("TEST_USERNAME", "tester")
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	userToken := loginForTest(t, server, "tester", "tester-pass")
 
@@ -1958,7 +1996,7 @@ func TestStaleBusinessImageJobReconcileMarksRunningFailedAndRefundsCredits(t *te
 	t.Setenv("TEST_PASSWORD", "tester-pass")
 	t.Setenv("IMAGE_JOB_STALE_TIMEOUT_SECONDS", "1")
 
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 	userToken := loginForTest(t, server, "tester", "tester-pass")
 
@@ -2002,15 +2040,15 @@ func TestStaleBusinessImageJobReconcileMarksRunningFailedAndRefundsCredits(t *te
 	if err := jobStore.Close(); err != nil {
 		t.Fatalf("Close job store returned error: %v", err)
 	}
-	db, err := sql.Open("sqlite", cfg.ResolvePath(cfg.Storage.SQLitePath))
+	db, err := database.Open(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("open sqlite returned error: %v", err)
+		t.Fatalf("open postgres database returned error: %v", err)
 	}
-	if _, err := db.ExecContext(context.Background(), `UPDATE business_image_jobs SET updated_at = ? WHERE id = ?`, staleUpdatedAt, "job-stale"); err != nil {
+	if _, err := db.ExecContext(context.Background(), `UPDATE business_image_jobs SET updated_at = $1 WHERE id = $2`, staleUpdatedAt, "job-stale"); err != nil {
 		t.Fatalf("force stale updated_at returned error: %v", err)
 	}
 	if err := db.Close(); err != nil {
-		t.Fatalf("close sqlite returned error: %v", err)
+		t.Fatalf("close postgres database returned error: %v", err)
 	}
 
 	imageStore, err := businessimage.NewStore(cfg)
@@ -2096,7 +2134,7 @@ func TestStaleBusinessImageJobReconcileMarksRunningFailedAndRefundsCredits(t *te
 func TestStaleBusinessImageJobReconcileDoesNotRefundUpstreamCancel(t *testing.T) {
 	t.Setenv("IMAGE_JOB_STALE_TIMEOUT_SECONDS", "1")
 
-	cfg := newSQLiteServerTestConfig(t)
+	cfg := newDatabaseServerTestConfig(t)
 	server := NewServer(cfg, nil, nil)
 
 	creditStore, err := businesscredits.NewStore(cfg)
@@ -2141,15 +2179,15 @@ func TestStaleBusinessImageJobReconcileDoesNotRefundUpstreamCancel(t *testing.T)
 	if err := jobStore.Close(); err != nil {
 		t.Fatalf("Close job store returned error: %v", err)
 	}
-	db, err := sql.Open("sqlite", cfg.ResolvePath(cfg.Storage.SQLitePath))
+	db, err := database.Open(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("open sqlite returned error: %v", err)
+		t.Fatalf("open postgres database returned error: %v", err)
 	}
-	if _, err := db.ExecContext(context.Background(), `UPDATE business_image_jobs SET updated_at = ? WHERE id = ?`, staleUpdatedAt, "job-stale-upstream-cancel"); err != nil {
+	if _, err := db.ExecContext(context.Background(), `UPDATE business_image_jobs SET updated_at = $1 WHERE id = $2`, staleUpdatedAt, "job-stale-upstream-cancel"); err != nil {
 		t.Fatalf("force stale updated_at returned error: %v", err)
 	}
 	if err := db.Close(); err != nil {
-		t.Fatalf("close sqlite returned error: %v", err)
+		t.Fatalf("close postgres database returned error: %v", err)
 	}
 
 	result := server.reconcileStaleBusinessImageJobs(context.Background())
@@ -2214,9 +2252,9 @@ func loginForTest(t *testing.T, server *Server, username, password string) strin
 	return payload.Token
 }
 
-func TestImportImageConversationsIntoSQLiteTarget(t *testing.T) {
+func TestImportImageConversationsIntoServerTarget(t *testing.T) {
 	rootDir := t.TempDir()
-	cfg := newSQLiteServerTestConfig(t, rootDir)
+	cfg := newDatabaseServerTestConfig(t, rootDir)
 	cfg.App.AuthKey = "test-auth"
 	server := NewServer(cfg, nil, nil)
 
@@ -2253,9 +2291,8 @@ func TestImportImageConversationsIntoSQLiteTarget(t *testing.T) {
 			},
 		},
 		"storage": map[string]any{
-			"backend":                  "sqlite",
+			"backend":                  "current",
 			"imageDir":                 "data/import-images",
-			"sqlitePath":               "data/import-history.sqlite",
 			"imageConversationStorage": "server",
 			"imageDataStorage":         "server",
 		},
@@ -2276,12 +2313,11 @@ func TestImportImageConversationsIntoSQLiteTarget(t *testing.T) {
 	}
 
 	verifyCfg := config.New(rootDir)
-	verifyCfg.Storage.Backend = "sqlite"
+	verifyCfg.Storage.Backend = "current"
 	verifyCfg.Storage.ImageDir = "data/import-images"
-	verifyCfg.Storage.SQLitePath = "data/import-history.sqlite"
 	store, err := imagehistory.NewStore(verifyCfg)
 	if err != nil {
-		t.Fatalf("NewStore(verify sqlite) returned error: %v", err)
+		t.Fatalf("NewStore(verify current) returned error: %v", err)
 	}
 	defer store.Close()
 

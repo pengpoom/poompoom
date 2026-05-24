@@ -21,13 +21,59 @@ import (
 	"imagestudio/internal/businesssettings"
 	"imagestudio/internal/businesstracker"
 	"imagestudio/internal/config"
+	"imagestudio/internal/database"
 )
 
 func newBusinessImageTestConfig(t *testing.T) *config.Config {
 	t.Helper()
+	dsn := strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
 	cfg := config.New(t.TempDir())
-	cfg.Storage.SQLitePath = "data/business-image.sqlite"
+	if err := cfg.Load(); err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	cfg.Database.Driver = "postgres"
+	cfg.Database.DSN = dsn
+	cfg.Database.MaxOpenConns = 4
+	cfg.Database.MaxIdleConns = 2
+	cfg.Database.ConnMaxLifetimeSeconds = 60
+	resetBusinessImageProxyTestData(t, cfg)
 	return cfg
+}
+
+func resetBusinessImageProxyTestData(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, cfg)
+	if err != nil {
+		t.Fatalf("open postgres database: %v", err)
+	}
+	defer db.Close()
+	if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+		t.Fatalf("migrate postgres database: %v", err)
+	}
+	_, err = db.ExecContext(ctx, `TRUNCATE
+		business_image_assets,
+		business_image_generations,
+		business_image_conversations,
+		business_image_jobs,
+		business_image_tracker,
+		business_notification_reads,
+		business_notifications,
+		business_credit_ledger,
+		business_user_credits,
+		business_api_providers,
+		business_system_settings,
+		email_verification_codes,
+		user_sessions,
+		business_users
+		RESTART IDENTITY CASCADE`)
+	if err != nil {
+		t.Fatalf("reset business image proxy test tables: %v", err)
+	}
 }
 
 func TestExtractProviderImageGenerateMetadataPrefersJobID(t *testing.T) {

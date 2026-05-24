@@ -27,6 +27,7 @@ import (
 	"imagestudio/internal/businesscredits"
 	"imagestudio/internal/businessimage"
 	"imagestudio/internal/businessjobs"
+	"imagestudio/internal/businessnotifications"
 	"imagestudio/internal/businessproviders"
 	"imagestudio/internal/businesssettings"
 	"imagestudio/internal/businesstracker"
@@ -226,6 +227,13 @@ func (s *Server) newBusinessProviderStore() (*businessproviders.Store, error) {
 		return businessproviders.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
 	}
 	return businessproviders.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessNotificationStore() (*businessnotifications.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businessnotifications.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businessnotifications.NewStore(s.cfg)
 }
 
 func (s *Server) newBusinessTrackerStore() (*businesstracker.Store, error) {
@@ -465,7 +473,6 @@ func storageSettingsChanged(previous, next configPayload) bool {
 		previous.Storage.AuthDir != next.Storage.AuthDir ||
 		previous.Storage.StateFile != next.Storage.StateFile ||
 		previous.Storage.SyncStateDir != next.Storage.SyncStateDir ||
-		previous.Storage.SQLitePath != next.Storage.SQLitePath ||
 		previous.Storage.ImageDir != next.Storage.ImageDir ||
 		previous.Storage.ImageStorage != next.Storage.ImageStorage ||
 		previous.Storage.ImageConversationStorage != next.Storage.ImageConversationStorage ||
@@ -531,9 +538,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/business/api-providers/{id}/default", s.requireAdminAuth(http.HandlerFunc(s.handleSetDefaultBusinessAPIProvider)))
 	mux.Handle("POST /api/business/api-providers/{id}/test", s.requireAdminAuth(http.HandlerFunc(s.handleTestBusinessAPIProvider)))
 	mux.Handle("DELETE /api/business/api-providers/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleDeleteBusinessAPIProvider)))
+	mux.Handle("GET /api/business/admin/notifications", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListBusinessNotifications)))
+	mux.Handle("POST /api/business/admin/notifications", s.requireAdminAuth(http.HandlerFunc(s.handleAdminCreateBusinessNotification)))
+	mux.Handle("PUT /api/business/admin/notifications/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminUpdateBusinessNotification)))
+	mux.Handle("DELETE /api/business/admin/notifications/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminDeleteBusinessNotification)))
 	mux.Handle("GET /api/business/me", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessMe)))
 	mux.Handle("PATCH /api/business/me/password", s.requireUIAuth(http.HandlerFunc(s.handleChangeBusinessMePassword)))
 	mux.Handle("GET /api/business/credit", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessCredit)))
+	mux.Handle("GET /api/business/notifications", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessNotifications)))
+	mux.Handle("POST /api/business/notifications/read", s.requireUIAuth(http.HandlerFunc(s.handleMarkBusinessNotificationsRead)))
 	mux.Handle("GET /api/business/usage", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessUsage)))
 	mux.Handle("GET /api/business/assets", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessAssets)))
 	mux.Handle("GET /api/business/jobs", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessImageJobs)))

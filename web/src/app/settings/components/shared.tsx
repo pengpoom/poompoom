@@ -24,13 +24,12 @@ export function HintTooltip({ content }: { content: ReactNode }) {
   return (
     <span className="group relative inline-flex items-center align-middle">
       <span
-        tabIndex={0}
-        className="inline-flex size-4 cursor-help items-center justify-center rounded-full text-[var(--app-text-muted)] transition-colors hover:text-[var(--app-text-primary)] focus-visible:text-[var(--app-text-primary)] focus-visible:outline-none"
+        className="inline-flex size-4 cursor-help items-center justify-center rounded-full text-[var(--app-text-muted)] transition-colors hover:text-[var(--app-text-primary)]"
         aria-label="查看配置说明"
       >
         <CircleHelp className="size-4" />
       </span>
-      <span className="pointer-events-none fixed inset-x-4 top-24 z-30 rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-bg-elevated)] px-4 py-3 text-xs font-normal leading-6 text-[var(--app-text-secondary)] opacity-0 shadow-[var(--app-shadow-floating)] transition-all duration-200 group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:translate-y-0 group-focus-within:opacity-100 sm:absolute sm:inset-x-auto sm:top-full sm:left-0 sm:mt-2 sm:w-80 sm:max-w-[calc(100vw-2rem)]">
+      <span className="pointer-events-none fixed inset-x-4 top-24 z-30 rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-bg-popover-solid)] px-3 py-2 text-xs font-normal leading-5 text-[var(--app-text-secondary)] opacity-0 shadow-[var(--app-shadow-floating)] transition-all duration-150 group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100 sm:absolute sm:inset-x-auto sm:top-full sm:left-0 sm:mt-2 sm:w-64 sm:max-w-[calc(100vw-2rem)]">
         {content}
       </span>
     </span>
@@ -56,7 +55,7 @@ export function TooltipDetails({ items }: { items: TooltipDetail[] }) {
   return (
     <>
       {items.map((item, index) => (
-        <div key={`${item.title}-${index}`} className={index === 0 ? "" : "mt-2"}>
+        <div key={`${item.title}-${index}`} className={index === 0 ? "" : "mt-1.5"}>
           <span className="font-semibold text-[var(--app-text-primary)]">{item.title}：</span>
           {item.body}
         </div>

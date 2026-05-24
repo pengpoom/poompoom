@@ -2,21 +2,49 @@ package businessauth
 
 import (
 	"context"
-	"database/sql"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"imagestudio/internal/config"
+	"imagestudio/internal/database"
 )
 
 func newTestConfig(t *testing.T) *config.Config {
 	t.Helper()
+	dsn := strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
 	cfg := config.New(t.TempDir())
-	cfg.Storage.SQLitePath = "data/business-auth.sqlite"
+	if err := cfg.Load(); err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	cfg.Database.Driver = "postgres"
+	cfg.Database.DSN = dsn
+	cfg.Database.MaxOpenConns = 4
+	cfg.Database.MaxIdleConns = 2
+	cfg.Database.ConnMaxLifetimeSeconds = 60
+	resetTestStore(t, cfg)
 	return cfg
+}
+
+func resetTestStore(t *testing.T, cfg *config.Config) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, cfg)
+	if err != nil {
+		t.Fatalf("open postgres database: %v", err)
+	}
+	defer db.Close()
+	if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+		t.Fatalf("migrate postgres database: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `TRUNCATE email_verification_codes, user_sessions, business_users RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("reset auth test tables: %v", err)
+	}
 }
 
 func TestEnsureBootstrapUserStoresPasswordHash(t *testing.T) {
@@ -93,7 +121,7 @@ func TestEnsureBootstrapUserRefreshesExistingID(t *testing.T) {
 	}
 
 	var count int
-	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM business_users WHERE id = ?`, "dev_admin").Scan(&count); err != nil {
+	if err := store.db.QueryRowContext(ctx, store.rebind(`SELECT COUNT(*) FROM business_users WHERE id = ?`), "dev_admin").Scan(&count); err != nil {
 		t.Fatalf("count users by id: %v", err)
 	}
 	if count != 1 {
@@ -266,33 +294,20 @@ func TestCreateUserListsAndRejectsDuplicates(t *testing.T) {
 
 func TestMigrateBusinessUsersUIDAssignsCreatedOrder(t *testing.T) {
 	cfg := newTestConfig(t)
-	if err := os.MkdirAll(filepath.Dir(cfg.ResolvePath(cfg.Storage.SQLitePath)), 0o755); err != nil {
-		t.Fatalf("create sqlite dir: %v", err)
-	}
-	db, err := sql.Open("sqlite", cfg.ResolvePath(cfg.Storage.SQLitePath))
+	ctx := context.Background()
+	db, err := database.Open(ctx, cfg)
 	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+		t.Fatalf("open postgres database: %v", err)
 	}
-	if _, err := db.Exec(`CREATE TABLE business_users (
-		id TEXT PRIMARY KEY,
-		username TEXT NOT NULL UNIQUE,
-		email TEXT NOT NULL DEFAULT '',
-		password_hash TEXT NOT NULL,
-		role TEXT NOT NULL,
-		status TEXT NOT NULL,
-		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL
-	);`); err != nil {
-		t.Fatalf("create legacy users table: %v", err)
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `TRUNCATE email_verification_codes, user_sessions, business_users RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("reset users table: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO business_users(id, username, email, password_hash, role, status, created_at, updated_at)
+	if _, err := db.ExecContext(ctx, `INSERT INTO business_users(id, username, email, password_hash, role, status, created_at, updated_at)
 		VALUES
 		('u2', 'second', 'second@example.com', 'hash', 'user', 'active', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z'),
 		('u1', 'first', 'first@example.com', 'hash', 'user', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
-		t.Fatalf("insert legacy users: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close sqlite: %v", err)
+		t.Fatalf("insert users without uid: %v", err)
 	}
 
 	store, err := NewStore(cfg)

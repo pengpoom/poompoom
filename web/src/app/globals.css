@@ -83,6 +83,7 @@
   --app-bg-surface-hover: rgba(255, 255, 255, 0.085);
   --app-bg-elevated: rgba(255, 255, 255, 0.058);
   --app-bg-panel: rgba(5, 8, 16, 0.62);
+  --app-bg-popover-solid: #0c111d;
   --app-border: rgba(255, 255, 255, 0.105);
   --app-border-strong: rgba(178, 214, 255, 0.32);
   --app-text-primary: #f5f8ff;
@@ -134,6 +135,7 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --app-bg-popover-solid: #0c111d;
 }
 
 .theme-dark {
@@ -171,6 +173,7 @@
   --app-bg-surface-hover: rgba(255, 255, 255, 0.085);
   --app-bg-elevated: rgba(255, 255, 255, 0.058);
   --app-bg-panel: rgba(5, 8, 16, 0.62);
+  --app-bg-popover-solid: #0c111d;
   --app-border: rgba(255, 255, 255, 0.105);
   --app-border-strong: rgba(178, 214, 255, 0.32);
   --app-text-primary: #f5f8ff;
@@ -225,6 +228,7 @@
   --app-bg-surface-hover: rgba(255, 255, 255, 0.12);
   --app-bg-elevated: rgba(86, 86, 86, 0.88);
   --app-bg-panel: rgba(78, 78, 78, 0.72);
+  --app-bg-popover-solid: #565656;
   --app-border: rgba(255, 255, 255, 0.14);
   --app-border-strong: rgba(255, 255, 255, 0.26);
   --app-text-primary: #f5f5f5;
@@ -260,6 +264,7 @@ html[data-resolved-theme="light"] {
   --app-bg-surface-hover: rgba(37, 99, 235, 0.08);
   --app-bg-elevated: rgba(255, 255, 255, 0.9);
   --app-bg-panel: rgba(255, 255, 255, 0.86);
+  --app-bg-popover-solid: #ffffff;
   --app-border: rgba(30, 64, 120, 0.14);
   --app-border-strong: rgba(37, 99, 235, 0.24);
   --app-text-primary: #101827;

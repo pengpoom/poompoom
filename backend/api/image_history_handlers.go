@@ -126,7 +126,6 @@ func (s *Server) handleImportImageConversations(w http.ResponseWriter, r *http.R
 		Storage struct {
 			Backend                  string `json:"backend"`
 			ImageDir                 string `json:"imageDir"`
-			SQLitePath               string `json:"sqlitePath"`
 			RedisAddr                string `json:"redisAddr"`
 			RedisPassword            string `json:"redisPassword"`
 			RedisDB                  int    `json:"redisDb"`
@@ -143,7 +142,6 @@ func (s *Server) handleImportImageConversations(w http.ResponseWriter, r *http.R
 	tempCfg := config.New(s.cfg.RootDir())
 	tempCfg.Storage.Backend = body.Storage.Backend
 	tempCfg.Storage.ImageDir = firstNonEmpty(body.Storage.ImageDir, s.cfg.Storage.ImageDir)
-	tempCfg.Storage.SQLitePath = firstNonEmpty(body.Storage.SQLitePath, s.cfg.Storage.SQLitePath)
 	tempCfg.Storage.RedisAddr = firstNonEmpty(body.Storage.RedisAddr, s.cfg.Storage.RedisAddr)
 	tempCfg.Storage.RedisPassword = body.Storage.RedisPassword
 	tempCfg.Storage.RedisDB = body.Storage.RedisDB

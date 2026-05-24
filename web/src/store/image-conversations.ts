@@ -936,7 +936,6 @@ export async function importImageConversationsToServerTarget(
   storage: {
     backend: string;
     imageDir: string;
-    sqlitePath: string;
     redisAddr: string;
     redisPassword: string;
     redisDb: number;

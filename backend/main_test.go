@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"imagestudio/internal/config"
@@ -43,6 +44,26 @@ func TestApplyEnvConfigOverridesSetsStorageBootstrap(t *testing.T) {
 	}
 	if cfg.JobQueue.Backend != "local" {
 		t.Fatalf("JobQueue.Backend = %q, want local", cfg.JobQueue.Backend)
+	}
+}
+
+func TestOpenPrimaryDatabaseRejectsNonPostgresDriver(t *testing.T) {
+	cfg := config.New(t.TempDir())
+	if err := cfg.Load(); err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	cfg.Database.Driver = "mysql"
+	cfg.Database.DSN = "user:pass@tcp(127.0.0.1:3306)/test"
+
+	db, err := openPrimaryDatabase(cfg)
+	if err == nil {
+		if db != nil {
+			_ = db.Close()
+		}
+		t.Fatal("openPrimaryDatabase() returned nil error for unsupported driver")
+	}
+	if !strings.Contains(err.Error(), "unsupported primary database driver") {
+		t.Fatalf("openPrimaryDatabase() error = %v", err)
 	}
 }
 

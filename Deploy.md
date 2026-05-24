@@ -1,544 +1,241 @@
-# Image Studio 上线配置说明
+# Image Studio 部署说明
 
-更新时间: 2026-05-18
+更新时间: 2026-05-24
 
-本文档记录当前单机小范围上线所需的启动命令、存储路径和配置方式。当前建议先使用 SQLite + 本地图片目录，不强制引入 Redis 或 PostgreSQL。
+本文档记录当前部署、更新、备份和本地开发方式。生产部署推荐使用 Docker Compose，结构化业务数据保存在数据库服务中，图片文件和运行配置保存在部署目录的 `backend/data`。
 
-## 1. 目录结构
+## 1. 服务器要求
 
-当前主要代码目录:
+- Docker
+- Docker Compose
+- 可访问 GHCR 镜像仓库
+
+服务器不需要安装 Go、Node.js 或 npm。
+
+## 2. 快速部署
+
+推荐使用部署脚本初始化目录：
+
+```bash
+mkdir -p image-studio
+cd image-studio
+curl -fsSL https://raw.githubusercontent.com/pengpoom/poomimage/main/deploy/docker-deploy.sh | bash
+```
+
+脚本会生成：
+
+- `docker-compose.yml`
+- `.env`
+- `backend/data`
+- `backups`
+
+启动前先编辑 `.env`，至少确认：
+
+- `ADMIN_PASSWORD`
+- `TEST_PASSWORD`
+- `POSTGRES_PASSWORD`
+- `JOB_QUEUE_BACKEND`
+- `IMAGE_STUDIO_DEPLOY_DIR`
+- `DOCKER_CONFIG_DIR`
+- `IMAGE_STUDIO_GITHUB_TOKEN`，私有仓库检测 tag / release 时需要
+
+启动：
+
+```bash
+docker compose pull
+docker compose up -d
+docker compose logs -f studio
+```
+
+访问：
 
 ```text
-/home/peng/Project/image/image-studio
-├── web/backend        # Go 业务后端
-├── web/web            # Vite 前端
-├── Interface.md       # 接口文档
-├── update.md          # 开发进度记录
-└── Deploy.md          # 本文档
+http://服务器IP:7000/
 ```
 
-后端运行目录必须是:
+## 3. 数据目录
 
-```bash
-cd "/home/peng/Project/image/image-studio/web/backend"
+默认持久化目录：
+
+```text
+backend/data
+postgres-data volume
+redis-data volume
 ```
 
-前端运行目录必须是:
+`backend/data` 包含运行配置、图片文件和临时文件。数据库 volume 包含用户、会话、积分、job、provider、settings、tracker、图片会话和资产元数据。Redis volume 只保存短期队列信号，可通过数据库 queued job 扫描兜底恢复。
 
-```bash
-cd "/home/peng/Project/image/image-studio/web/web"
+不要提交这些文件到 GitHub：
+
+```text
+.env
+backend/data/config.toml
+backend/data/business-images
+backend/data/tmp/image
 ```
 
-## 2. 基础环境
+## 4. 更新服务
 
-当前代码要求:
-
-- Go: `1.25+`
-- Node.js: 建议 `20+`
-- npm: 使用项目现有 `package-lock.json`
-- SQLite: 默认使用后端内置 SQLite 驱动，不需要单独启动数据库服务
-- Redis: 当前不是必须
-
-检查命令:
+如果使用 `updater` 服务，管理员登录 Web 后可以点击左侧版本入口执行一键更新。更新过程会让 `updater` 在宿主机执行：
 
 ```bash
-go version
-node -v
-npm -v
+docker compose -p image-studio -f docker-compose.yml pull studio
+docker compose -p image-studio -f docker-compose.yml up -d --remove-orphans studio
 ```
 
-## 3. 本地开发启动
+`COMPOSE_PROJECT_NAME` 必须和当前部署使用的 Compose 项目名一致。默认按 `image-studio` 部署即可；如果服务器已有旧部署，先用 `docker compose ls` 查看项目名，再把 `.env` 里的 `COMPOSE_PROJECT_NAME` 改成对应值。
 
-本地开发建议前后端分开启动。
+`IMAGE_STUDIO_DEPLOY_DIR` 建议填写宿主机上的绝对部署目录，例如 `/root/image-studio`。这样 updater 在容器里执行 compose 时，相对挂载路径会按同一个宿主机目录解析。
 
-### 3.1 启动后端
+也可以在服务器手动更新：
 
 ```bash
-cd "/home/peng/Project/image/image-studio/web/backend"
+docker compose pull
+docker compose up -d
+docker compose logs -f studio
+```
 
+## 5. 备份
+
+仓库提供数据目录备份脚本：
+
+```bash
+./scripts/backup-data.sh
+```
+
+默认备份 `backend/data` 到：
+
+```text
+backups/image-studio-data-YYYYmmdd-HHMMSS.tar.gz
+```
+
+数据库需要单独备份。示例：
+
+```bash
+docker compose exec postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > backups/image-studio-postgres-$(date +%Y%m%d-%H%M%S).sql
+```
+
+如果脚本不在仓库根目录，或者数据目录不同，可以显式指定：
+
+```bash
+IMAGE_STUDIO_DATA_DIR=/root/image-studio/backend/data \
+IMAGE_STUDIO_BACKUP_DIR=/root/image-studio/backups \
+./backup-data.sh
+```
+
+## 6. 恢复
+
+恢复前先停止服务：
+
+```bash
+docker compose down
+```
+
+恢复 `backend/data`：
+
+```bash
+./scripts/restore-data.sh backups/image-studio-data-YYYYmmdd-HHMMSS.tar.gz
+```
+
+脚本会要求输入 `RESTORE`，并在覆盖前自动备份当前 `backend/data`。
+
+恢复数据库后启动：
+
+```bash
+docker compose up -d
+docker compose logs -f studio
+```
+
+## 7. 本地开发
+
+启动本地依赖：
+
+```bash
+docker compose -p image-studio-postgres -f docker-compose.postgres.yml up -d postgres redis
+```
+
+启动后端：
+
+```bash
+cd backend
 API_ONLY=true \
 SERVER_HOST=0.0.0.0 \
 SERVER_PORT=7070 \
-APP_SESSION_TTL_HOURS=24 \
+CORS_ALLOWED_ORIGINS=http://localhost:5270,http://127.0.0.1:5270 \
+DATABASE_DRIVER=postgres \
+DATABASE_DSN=postgres://image_studio:image_studio@127.0.0.1:5432/image_studio?sslmode=disable \
+JOB_QUEUE_BACKEND=local \
+REDIS_ADDR=127.0.0.1:6379 \
 go run .
 ```
 
-含义:
-
-- `API_ONLY=true`: 只启动 API，不要求后端存在前端静态文件
-- `SERVER_HOST=0.0.0.0`: 允许局域网访问后端
-- `SERVER_PORT=7070`: 后端监听 `7070`，匹配前端 Vite 代理
-- `APP_SESSION_TTL_HOURS=24`: 登录会话有效期 24 小时
-
-如果看到 `address already in use`，说明 `7070` 已被占用，需要关闭旧后端进程或换端口。
-
-### 3.2 启动前端
+启动前端：
 
 ```bash
-cd "/home/peng/Project/image/image-studio/web/web"
+cd web
 npm install
 npm run dev
 ```
 
-默认前端地址:
+前端默认地址：
 
 ```text
 http://localhost:5270/
 ```
 
-开发模式下，Vite 会把以下请求代理到后端 `http://127.0.0.1:7070`:
+## 8. 常见问题
 
-- `/auth`
-- `/api`
-- `/version`
-- `/health`
-- `/v1/files/image`
+### 8.1 `go: cannot find main module`
 
-所以开发模式必须保证后端运行在 `7070`，除非同步修改 `web/web/vite.config.ts`。
-
-## 4. 小范围上线启动
-
-小范围上线建议使用后端统一托管前端静态资源，这样只需要暴露一个后端端口。
-
-### 4.1 构建前端并同步到后端
+原因通常是在错误目录执行了 `go run .`。本地开发后端目录是：
 
 ```bash
-cd "/home/peng/Project/image/image-studio/web/web"
-npm install
-SYNC_BACKEND_STATIC=true npm run build
-```
-
-`SYNC_BACKEND_STATIC=true` 会把前端构建产物同步到:
-
-```text
-/home/peng/Project/image/image-studio/web/backend/static
-```
-
-### 4.2 启动后端
-
-```bash
-cd "/home/peng/Project/image/image-studio/web/backend"
-
-SERVER_HOST=0.0.0.0 \
-SERVER_PORT=7070 \
-APP_SESSION_TTL_HOURS=24 \
+cd backend
 go run .
 ```
 
-上线模式不要加 `API_ONLY=true`，这样后端会同时提供:
+### 8.2 `connect ECONNREFUSED 127.0.0.1:7070`
 
-- 前端页面
-- 登录接口
-- 业务 API
-- 图片文件访问
+前端 Vite 正在运行，但后端没有监听 `7070`。按“本地开发”里的后端命令启动即可。
 
-访问地址:
+### 8.3 `address already in use`
 
-```text
-http://服务器IP:7070/
-```
-
-### 4.3 构建后端二进制，可选
-
-如果不想每次 `go run .`，可以构建二进制:
-
-```bash
-cd "/home/peng/Project/image/image-studio/web/backend"
-go build -o image-studio-backend .
-```
-
-运行:
-
-```bash
-SERVER_HOST=0.0.0.0 \
-SERVER_PORT=7070 \
-APP_SESSION_TTL_HOURS=24 \
-./image-studio-backend
-```
-
-## 5. 配置文件
-
-后端首次启动会自动生成运行配置文件:
-
-```text
-/home/peng/Project/image/image-studio/web/backend/data/config.toml
-```
-
-默认配置模板来自:
-
-```text
-/home/peng/Project/image/image-studio/web/backend/internal/config/config.defaults.toml
-```
-
-常用配置项:
-
-```toml
-[server]
-host = "0.0.0.0"
-port = 7000
-max_image_concurrency = 8
-image_queue_limit = 32
-image_queue_timeout_seconds = 20
-
-[storage]
-backend = "current"
-config_backend = "file"
-image_dir = "data/business-images"
-sqlite_path = "data/image-studio.db"
-
-[chatgpt]
-request_timeout = 120
-```
-
-说明:
-
-- `server.max_image_concurrency`: 最大同时生图任务数
-- `server.image_queue_limit`: 最大排队数量
-- `server.image_queue_timeout_seconds`: 排队等待超时时间
-- `storage.sqlite_path`: SQLite 数据库路径
-- `storage.image_dir`: 图片文件存储路径
-- `chatgpt.request_timeout`: 单次上游请求超时时间
-
-环境变量会覆盖配置文件里的同名配置。当前常用环境变量:
-
-```text
-SERVER_HOST
-SERVER_PORT
-APP_SESSION_TTL_HOURS
-STORAGE_BACKEND
-STORAGE_CONFIG_BACKEND
-STORAGE_IMAGE_DIR
-STORAGE_SQLITE_PATH
-REDIS_ADDR
-REDIS_PASSWORD
-REDIS_DB
-REDIS_PREFIX
-CHATGPT_REQUEST_TIMEOUT
-API_ACCESS_PLATFORM
-API_ACCESS_BASE_URL
-API_ACCESS_API_KEY
-```
-
-## 6. 数据库路径
-
-当前默认 SQLite 数据库:
-
-```text
-/home/peng/Project/image/image-studio/web/backend/data/image-studio.db
-```
-
-里面保存:
-
-- 业务用户
-- 登录会话
-- 图片会话
-- 生图记录
-- 图片资产表
-- 点数流水
-- Job 记录
-- API 接入配置
-- 系统设置
-
-查看数据库示例:
-
-```bash
-sqlite3 "/home/peng/Project/image/image-studio/web/backend/data/image-studio.db" ".tables"
-```
-
-查看最近 Job:
-
-```bash
-sqlite3 "/home/peng/Project/image/image-studio/web/backend/data/image-studio.db" \
-"SELECT id, status, stage, provider_platform, created_at, updated_at FROM business_image_jobs ORDER BY created_at DESC LIMIT 5;"
-```
-
-## 7. 图片存储路径
-
-当前默认图片目录:
-
-```text
-/home/peng/Project/image/image-studio/web/backend/data/business-images
-```
-
-旧版本兼容目录:
-
-```text
-/home/peng/Project/image/image-studio/web/backend/data/tmp/image
-```
-
-新生成的业务图片会保存成本地文件，数据库里保存对应 URL，例如:
-
-```text
-/v1/files/image/business-user_xxx-conversation_xxx-generation_xxx-0-xxxx.png
-```
-
-访问图片时:
-
-- 用户必须登录
-- 普通用户只能访问自己的业务图片
-- 管理员可以访问业务图片
-- 删除会话时，会删除数据库记录和对应本地图片文件
-
-## 8. Redis 是否需要
-
-当前单机小范围上线不需要 Redis。
-
-默认配置:
-
-```toml
-[storage]
-backend = "current"
-config_backend = "file"
-```
-
-此时:
-
-- 配置从本地 `data/config.toml` 读取
-- 核心业务数据存 SQLite
-- 图片存在本地目录
-- Job 使用 SQLite 持久化
-
-只有在明确设置下面配置时才需要 Redis:
-
-```toml
-[storage]
-backend = "redis"
-config_backend = "redis"
-```
-
-或通过环境变量设置:
-
-```text
-STORAGE_BACKEND=redis
-STORAGE_CONFIG_BACKEND=redis
-```
-
-如果配置成 Redis 但本地没有 Redis 服务，就会出现:
-
-```text
-redis: connection refused
-```
-
-当前建议:
-
-- 小范围上线: 不启用 Redis
-- 多进程、多机器部署: 再评估 Redis、PostgreSQL 或专用队列
-
-## 9. API 接入配置
-
-当前业务生图走管理员后台的 `账号管理 -> API 接入`。
-
-工作台用户只选择平台:
-
-- `gpt-image`
-- `gemini-banana`
-
-管理员在 API 接入里配置具体上游:
-
-- 名称
-- 平台
-- Base URL
-- API Key
-- 默认模型
-- 是否启用
-- 是否默认
-
-后端选择上游的优先级:
-
-1. 数据库里的默认 API provider
-2. `data/config.toml` 里的 `[api_access]`
-3. 环境变量 `IMAGE_BASE_URL` / `IMAGE_API_KEY` / `IMAGE_MODEL`
-
-推荐使用后台页面维护 API 接入，不推荐长期依赖环境变量。
-
-### 9.1 gpt-image 示例
-
-平台选择:
-
-```text
-gpt-image
-```
-
-Base URL 示例:
-
-```text
-http://127.0.0.1:8080
-```
-
-模型示例:
-
-```text
-gpt-image-2
-```
-
-### 9.2 gemini-banana 示例
-
-平台选择:
-
-```text
-gemini-banana
-```
-
-模型可选:
-
-```text
-gemini-3.1-flash-image-preview
-gemini-3-pro-image-preview
-gemini-2.5-flash-image
-gemini-2.5-flash-image-preview
-```
-
-## 10. 管理员与用户初始化
-
-`ADMIN_USERNAME` / `ADMIN_PASSWORD` 和 `TEST_USERNAME` / `TEST_PASSWORD` 主要用于首次初始化数据库用户。
-
-如果数据库里已经有同名用户，后续再改这些环境变量不会覆盖数据库里的密码。
-
-首次启动时可用:
-
-```bash
-cd "/home/peng/Project/image/image-studio/web/backend"
-
-API_ONLY=true \
-SERVER_HOST=0.0.0.0 \
-SERVER_PORT=7070 \
-ADMIN_USERNAME=admin \
-ADMIN_PASSWORD=admin123 \
-TEST_USERNAME=test \
-TEST_PASSWORD=test123 \
-APP_SESSION_TTL_HOURS=24 \
-go run .
-```
-
-初始化完成后，后续启动通常不需要再带这些账号密码环境变量。
-
-## 11. 备份策略
-
-当前最重要的是备份两类数据:
-
-```text
-/home/peng/Project/image/image-studio/web/backend/data/image-studio.db
-/home/peng/Project/image/image-studio/web/backend/data/business-images
-```
-
-建议同时备份整个后端 `data` 目录:
-
-```text
-/home/peng/Project/image/image-studio/web/backend/data
-```
-
-因为里面还包含:
-
-- `config.toml`
-- `auths`
-- `sync_state`
-- `last-startup-error.txt`
-- 旧图片兼容目录 `tmp/image`
-
-备份前建议先暂停后端，避免 SQLite 正在写入。
-
-## 12. 常见问题
-
-### 12.1 `go: cannot find main module`
-
-原因通常是在错误目录执行了 `go run .`。
-
-正确目录:
-
-```bash
-cd "/home/peng/Project/image/image-studio/web/backend"
-go run .
-```
-
-不要在下面目录运行后端:
-
-```text
-/home/peng/Project/image/image-studio/web
-/home/peng/Project/image/image-studio/web/web
-```
-
-### 12.2 `connect ECONNREFUSED 127.0.0.1:7070`
-
-原因是前端 Vite 正在运行，但后端 `7070` 没启动。
-
-处理:
-
-```bash
-cd "/home/peng/Project/image/image-studio/web/backend"
-API_ONLY=true SERVER_HOST=0.0.0.0 SERVER_PORT=7070 APP_SESSION_TTL_HOURS=24 go run .
-```
-
-### 12.3 `address already in use`
-
-说明端口被占用。
-
-查看占用:
-
-```bash
-lsof -i :7070
-```
-
-处理方式:
+说明端口被占用。处理方式：
 
 - 关闭旧后端进程
 - 或修改 `SERVER_PORT`
 - 或修改 `data/config.toml` 里的 `server.port`
 
-### 12.4 `database is locked`
+### 8.4 Redis 连接失败
 
-SQLite 单文件数据库同时写入时可能出现锁竞争。
-
-当前已经做过 WAL、busy timeout 和短事务优化。小范围使用一般够用。
-
-如果高频出现:
-
-- 降低并发生成数
-- 检查是否多个后端进程同时使用同一个 SQLite 文件
-- 后续再迁移 PostgreSQL
-
-### 12.5 Redis 连接失败
-
-如果看到:
+如果 `JOB_QUEUE_BACKEND=redis`，需要确保 Redis 服务已启动，且 `REDIS_ADDR` 指向正确地址。本地开发可先使用：
 
 ```text
-redis: connection refused
+JOB_QUEUE_BACKEND=local
 ```
 
-先检查是否误配置:
+### 8.5 数据库连接失败
 
-```toml
-storage.backend = "redis"
-storage.config_backend = "redis"
+检查 `.env` 或本地环境变量里的 `DATABASE_DRIVER`、`DATABASE_DSN`、数据库账号密码和容器健康状态：
+
+```bash
+docker compose ps
+docker compose logs postgres
+docker compose logs studio
 ```
 
-当前建议改回:
+## 9. 当前上线边界
 
-```toml
-backend = "current"
-config_backend = "file"
-```
+当前版本适合：
 
-## 13. 当前上线边界
+- 单机 Docker Compose 部署
+- 小范围公开或内测
+- Redis 队列唤醒 + 数据库 job 兜底
+- 本地图片目录持久化
+- 管理员后台配置 API 接入
 
-当前版本适合:
+后续正式化方向：
 
-- 单机部署
-- 小范围内测
-- 少量用户并发
-- SQLite + 本地图片目录
-- 管理员手动配置 API 接入
-
-当前不建议直接用于:
-
-- 多机器后端部署
-- 大规模公开注册
-- 高并发生图
-- 需要严格任务恢复的生产场景
-
-后续正式化方向:
-
-- SQLite 迁移 PostgreSQL
 - 图片目录迁移对象存储
-- Job 队列迁移到持久化队列或 Postgres lease worker
-- 增加更完整的备份与恢复流程
+- 更完整的备份与恢复流程
 - 增加上游异步任务轮询能力

@@ -15,7 +15,6 @@ import (
 
 	"imagestudio/internal/config"
 	"imagestudio/internal/database"
-	"imagestudio/internal/sqlitedb"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -94,35 +93,21 @@ type Store struct {
 }
 
 func NewStore(cfg *config.Config) (*Store, error) {
-	if strings.EqualFold(strings.TrimSpace(cfg.Database.Driver), "postgres") {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		db, err := database.Open(ctx, cfg)
-		if err != nil {
-			return nil, err
-		}
-		if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
-			_ = db.Close()
-			return nil, err
-		}
-		store := NewStoreWithDB(db, cfg.Database.Driver)
-		store.ownDB = true
-		if err := store.init(); err != nil {
-			_ = store.Close()
-			return nil, err
-		}
-		return store, nil
+	if !database.IsPostgres(cfg.Database.Driver) {
+		return nil, fmt.Errorf("unsupported database driver %q", strings.TrimSpace(cfg.Database.Driver))
 	}
-	rawPath := strings.TrimSpace(firstNonEmpty(cfg.Storage.SQLitePath, cfg.Database.DSN))
-	if rawPath == "" {
-		return nil, fmt.Errorf("sqlite path is required")
-	}
-	path := cfg.ResolvePath(rawPath)
-	db, err := sqlitedb.Open(path)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db, driver: "sqlite", ownDB: true}
+	if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	store := NewStoreWithDB(db, cfg.Database.Driver)
+	store.ownDB = true
 	if err := store.init(); err != nil {
 		_ = store.Close()
 		return nil, err

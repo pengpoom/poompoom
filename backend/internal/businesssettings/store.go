@@ -11,7 +11,6 @@ import (
 	"imagestudio/internal/businessproviders"
 	"imagestudio/internal/config"
 	"imagestudio/internal/database"
-	"imagestudio/internal/sqlitedb"
 )
 
 const settingsKey = "system"
@@ -77,7 +76,7 @@ type SecuritySettings struct {
 }
 
 type RuntimeInfo struct {
-	SQLitePath                string `json:"sqlitePath"`
+	DatabaseDriver            string `json:"databaseDriver"`
 	ImageDir                  string `json:"imageDir"`
 	ImageFileAuthRequired     bool   `json:"imageFileAuthRequired"`
 	LegacyConfigWritable      bool   `json:"legacyConfigWritable"`
@@ -96,34 +95,21 @@ type Store struct {
 }
 
 func NewStore(cfg *config.Config) (*Store, error) {
-	if database.IsPostgres(cfg.Database.Driver) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		db, err := database.Open(ctx, cfg)
-		if err != nil {
-			return nil, err
-		}
-		if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
-			_ = db.Close()
-			return nil, err
-		}
-		store := NewStoreWithDB(db, cfg.Database.Driver)
-		store.ownDB = true
-		return store, nil
+	if !database.IsPostgres(cfg.Database.Driver) {
+		return nil, fmt.Errorf("unsupported database driver %q", strings.TrimSpace(cfg.Database.Driver))
 	}
-	rawPath := strings.TrimSpace(cfg.Storage.SQLitePath)
-	if rawPath == "" {
-		return nil, fmt.Errorf("sqlite path is required")
-	}
-	db, err := sqlitedb.Open(cfg.ResolvePath(rawPath))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db, driver: "sqlite", ownDB: true}
-	if err := store.init(); err != nil {
-		_ = store.Close()
+	if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
+	store := NewStoreWithDB(db, cfg.Database.Driver)
+	store.ownDB = true
 	return store, nil
 }
 
@@ -344,7 +330,7 @@ func Normalize(settings Settings) Settings {
 
 func Runtime(cfg *config.Config) RuntimeInfo {
 	return RuntimeInfo{
-		SQLitePath:                cfg.ResolvePath(cfg.Storage.SQLitePath),
+		DatabaseDriver:            cfg.Database.Driver,
 		ImageDir:                  cfg.ResolvePath(cfg.Storage.ImageDir),
 		ImageFileAuthRequired:     true,
 		LegacyConfigWritable:      false,

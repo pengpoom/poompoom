@@ -19,8 +19,8 @@ type StorageSectionProps = {
 };
 
 export function StorageSection({ config, setSection }: StorageSectionProps) {
-  const usesSQLiteStorage = config.storage.backend === "sqlite";
-  const usesRedisAccountStorage = config.storage.backend === "redis";
+  const accountStorageBackend = config.storage.backend === "redis" ? "redis" : "current";
+  const usesRedisAccountStorage = accountStorageBackend === "redis";
   const usesRedisConfigStorage = config.storage.configBackend === "redis";
   const shouldShowRedisFields = usesRedisAccountStorage || usesRedisConfigStorage;
   const imageConversationStorage =
@@ -28,17 +28,11 @@ export function StorageSection({ config, setSection }: StorageSectionProps) {
   const imageDataStorage =
     config.storage.imageDataStorage === "server" ? "server" : "browser";
   const serverConversationStorageLabel =
-    config.storage.backend === "sqlite"
-      ? "SQLite 数据库"
-      : config.storage.backend === "redis"
-        ? "Redis"
-        : "程序目录";
+    accountStorageBackend === "redis" ? "Redis" : "服务器存储";
   const serverConversationStorageHint =
-    config.storage.backend === "sqlite"
-      ? "服务器侧会话记录会写入当前 SQLite 数据库文件。"
-      : config.storage.backend === "redis"
-        ? "服务器侧会话记录会写入当前 Redis。"
-        : "服务器侧会话记录会写入当前程序目录下的数据目录。";
+    accountStorageBackend === "redis"
+      ? "服务器侧会话记录会写入当前 Redis。"
+      : "服务器侧会话记录会写入当前服务器数据目录。";
 
   return (
     <ConfigSection
@@ -47,17 +41,13 @@ export function StorageSection({ config, setSection }: StorageSectionProps) {
     >
       <Field
         label="账号池存储后端"
-        hint="控制账号池本体、认证文件、额度状态和同步状态写到本地文件、SQLite 数据库还是 Redis。"
+        hint="控制账号池本体、认证文件、额度状态和同步状态写到本地文件还是 Redis。"
         tooltip={
           <TooltipDetails
             items={[
               {
                 title: "本地文件",
                 body: <>沿用当前版本的 `auths/*.json`、`accounts_state.json`、`sync_state/*.json` 目录结构。</>,
-              },
-              {
-                title: "SQLite 数据库",
-                body: <>账号池相关数据统一写入 SQLite，适合单机但希望更集中管理的场景。</>,
               },
               {
                 title: "Redis",
@@ -68,7 +58,7 @@ export function StorageSection({ config, setSection }: StorageSectionProps) {
         }
       >
         <Select
-          value={config.storage.backend}
+          value={accountStorageBackend}
           onValueChange={(value) => setSection("storage", { ...config.storage, backend: value })}
         >
           <SelectTrigger className={settingsSelectClass}>
@@ -76,7 +66,6 @@ export function StorageSection({ config, setSection }: StorageSectionProps) {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="current">本地文件</SelectItem>
-            <SelectItem value="sqlite">SQLite 数据库</SelectItem>
             <SelectItem value="redis">Redis</SelectItem>
           </SelectContent>
         </Select>
@@ -147,15 +136,6 @@ export function StorageSection({ config, setSection }: StorageSectionProps) {
           </SelectContent>
         </Select>
       </Field>
-      {usesSQLiteStorage ? (
-        <Field label="SQLite 路径" hint="仅在账号池存储选择 SQLite 数据库时使用。">
-          <Input
-            value={config.storage.sqlitePath}
-            onChange={(event) => setSection("storage", { ...config.storage, sqlitePath: event.target.value })}
-            className={settingsInputClass}
-          />
-        </Field>
-      ) : null}
       {shouldShowRedisFields ? (
         <>
           <Field

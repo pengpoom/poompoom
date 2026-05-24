@@ -225,6 +225,7 @@ func (s *Server) handleProviderImageGenerateSubmit(w http.ResponseWriter, r *htt
 
 	job, err := s.createQueuedProviderImageJob(r.Context(), userID, payload, startedAt)
 	if err != nil {
+		s.recordFailedProviderImageSubmit(r.Context(), userID, payload, err, startedAt)
 		var submitErr *providerImageGenerateSubmitError
 		if errors.As(err, &submitErr) {
 			submitErr.result.write(w)
@@ -404,6 +405,35 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 	}
 	s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, businessjobs.StatusQueued, "", startedAt)
 	return saved, nil
+}
+
+func (s *Server) recordFailedProviderImageSubmit(ctx context.Context, userID string, payload map[string]any, err error, startedAt time.Time) {
+	if payload == nil {
+		return
+	}
+	metadata := extractProviderImageGenerateMetadata(payload)
+	if strings.TrimSpace(metadata.ConversationID) == "" || strings.TrimSpace(metadata.TurnID) == "" {
+		return
+	}
+	prompt := strings.TrimSpace(stringValue(payload["prompt"]))
+	if prompt == "" {
+		return
+	}
+	providerCfg, providerErr := s.imageProviderProxyConfig(metadata.Platform)
+	if providerErr != nil {
+		providerCfg = imageProviderProxyConfig{
+			Platform: strings.TrimSpace(metadata.Platform),
+			Model:    strings.TrimSpace(stringValue(payload["model"])),
+		}
+	}
+	message := "提交任务失败"
+	var submitErr *providerImageGenerateSubmitError
+	if errors.As(err, &submitErr) {
+		message = firstNonEmpty(strings.TrimSpace(submitErr.result.ErrorMessage), message)
+	} else if err != nil {
+		message = firstNonEmpty(strings.TrimSpace(err.Error()), message)
+	}
+	s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", message, startedAt)
 }
 
 func (s *Server) runProviderImageGenerateJob(userID string, payload map[string]any, startedAt time.Time) {

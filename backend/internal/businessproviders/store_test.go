@@ -2,6 +2,8 @@ package businessproviders
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 
 	"imagestudio/internal/config"
@@ -9,13 +11,33 @@ import (
 
 func newTestStore(t *testing.T) (*Store, *config.Config) {
 	t.Helper()
+	dsn := strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
 	cfg := config.New(t.TempDir())
-	cfg.Storage.SQLitePath = "data/test.sqlite"
+	if err := cfg.Load(); err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+	cfg.Database.Driver = "postgres"
+	cfg.Database.DSN = dsn
+	cfg.Database.MaxOpenConns = 4
+	cfg.Database.MaxIdleConns = 2
+	cfg.Database.ConnMaxLifetimeSeconds = 60
 	store, err := NewStore(cfg)
 	if err != nil {
 		t.Fatalf("open provider store: %v", err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := clearTestProviders(context.Background(), store); err != nil {
+		t.Fatalf("clear provider store: %v", err)
+	}
 	return store, cfg
+}
+
+func clearTestProviders(ctx context.Context, store *Store) error {
+	_, err := store.db.ExecContext(ctx, `TRUNCATE business_api_providers RESTART IDENTITY CASCADE`)
+	return err
 }
 
 func TestStoreCreatesAndSelectsDefaultProvider(t *testing.T) {

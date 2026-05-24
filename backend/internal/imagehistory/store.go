@@ -3,7 +3,6 @@ package imagehistory
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -16,7 +15,6 @@ import (
 	"time"
 
 	"imagestudio/internal/config"
-	"imagestudio/internal/sqlitedb"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -102,8 +100,6 @@ func NewStore(cfg *config.Config) (*Store, error) {
 	imageDir := cfg.ResolvePath(cfg.Storage.ImageDir)
 	var storage backend
 	switch strings.ToLower(strings.TrimSpace(cfg.Storage.Backend)) {
-	case "sqlite":
-		storage = &sqliteBackend{path: cfg.ResolvePath(cfg.Storage.SQLitePath)}
 	case "redis":
 		storage = &redisBackend{
 			client: redis.NewClient(&redis.Options{
@@ -543,89 +539,6 @@ func (b *fileBackend) read(path string) (Conversation, error) {
 
 func (b *fileBackend) path(id string) string {
 	return filepath.Join(b.dir, cleanID(id)+".json")
-}
-
-type sqliteBackend struct {
-	path string
-	db   *sql.DB
-}
-
-func (b *sqliteBackend) Init() error {
-	db, err := sqlitedb.Open(b.path)
-	if err != nil {
-		return err
-	}
-	b.db = db
-	_, err = b.db.Exec(`CREATE TABLE IF NOT EXISTS image_conversations (id TEXT PRIMARY KEY, raw_json BLOB NOT NULL, updated_at TEXT NOT NULL);`)
-	return err
-}
-
-func (b *sqliteBackend) Close() error {
-	if b.db == nil {
-		return nil
-	}
-	return b.db.Close()
-}
-
-func (b *sqliteBackend) List(_ context.Context) ([]Conversation, error) {
-	rows, err := b.db.Query(`SELECT raw_json FROM image_conversations ORDER BY updated_at DESC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := []Conversation{}
-	for rows.Next() {
-		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
-			return nil, err
-		}
-		var conversation Conversation
-		if err := json.Unmarshal(raw, &conversation); err != nil {
-			continue
-		}
-		result = append(result, conversation)
-	}
-	return result, rows.Err()
-}
-
-func (b *sqliteBackend) Get(_ context.Context, id string) (*Conversation, error) {
-	var raw []byte
-	err := b.db.QueryRow(`SELECT raw_json FROM image_conversations WHERE id = ?`, id).Scan(&raw)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var conversation Conversation
-	if err := json.Unmarshal(raw, &conversation); err != nil {
-		return nil, err
-	}
-	return &conversation, nil
-}
-
-func (b *sqliteBackend) Save(_ context.Context, conversation Conversation) error {
-	raw, err := json.Marshal(conversation)
-	if err != nil {
-		return err
-	}
-	_, err = b.db.Exec(
-		`INSERT INTO image_conversations(id, raw_json, updated_at) VALUES(?, ?, ?) ON CONFLICT(id) DO UPDATE SET raw_json = excluded.raw_json, updated_at = excluded.updated_at`,
-		conversation.ID,
-		raw,
-		conversation.CreatedAt,
-	)
-	return err
-}
-
-func (b *sqliteBackend) Delete(_ context.Context, id string) error {
-	_, err := b.db.Exec(`DELETE FROM image_conversations WHERE id = ?`, id)
-	return err
-}
-
-func (b *sqliteBackend) Clear(_ context.Context) error {
-	_, err := b.db.Exec(`DELETE FROM image_conversations`)
-	return err
 }
 
 type redisBackend struct {
