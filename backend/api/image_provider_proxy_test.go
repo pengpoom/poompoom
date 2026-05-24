@@ -679,6 +679,42 @@ func TestRunQueuedBusinessImageJobClaimsByJobIDOnly(t *testing.T) {
 	}
 }
 
+func TestRenewBusinessImageJobLeaseUpdatesRunningJob(t *testing.T) {
+	cfg := newBusinessImageTestConfig(t)
+	server := NewServer(cfg, nil, nil)
+	store, err := businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open job store: %v", err)
+	}
+	defer store.Close()
+
+	pastLease := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)
+	_, err = store.Save(context.Background(), businessjobs.Job{
+		ID:             "job-heartbeat",
+		UserID:         businessimage.DevUserID,
+		ConversationID: "conv-heartbeat",
+		GenerationID:   "gen-heartbeat",
+		Status:         businessjobs.StatusRunning,
+		Stage:          "running",
+		RequestedCount: 1,
+		LeaseUntil:     pastLease,
+	})
+	if err != nil {
+		t.Fatalf("save running job: %v", err)
+	}
+
+	if !server.renewBusinessImageJobLease(context.Background(), "job-heartbeat", businessimage.DevUserID) {
+		t.Fatal("renewBusinessImageJobLease() = false, want true")
+	}
+	job, ok, err := store.Get(context.Background(), "job-heartbeat", businessimage.DevUserID)
+	if err != nil || !ok {
+		t.Fatalf("get renewed job ok=%v err=%v", ok, err)
+	}
+	if job.LeaseUntil == "" || job.LeaseUntil == pastLease {
+		t.Fatalf("LeaseUntil = %q, want renewed value", job.LeaseUntil)
+	}
+}
+
 func TestCreateQueuedProviderImageJobEnforcesUserActiveCapacity(t *testing.T) {
 	t.Setenv("IMAGE_PROVIDER", "openai_compatible")
 	t.Setenv("IMAGE_BASE_URL", "http://127.0.0.1:1")
@@ -1943,6 +1979,80 @@ func TestBusinessImageConversationHandlersUseLoggedInUser(t *testing.T) {
 	server.Handler().ServeHTTP(crossRec, crossReq)
 	if crossRec.Code != http.StatusNotFound {
 		t.Fatalf("cross get status = %d, want %d, body = %s", crossRec.Code, http.StatusNotFound, crossRec.Body.String())
+	}
+}
+
+func TestBusinessImageConversationRenameIsScopedToLoggedInUser(t *testing.T) {
+	t.Setenv("ADMIN_USERNAME", "owner")
+	t.Setenv("ADMIN_PASSWORD", "owner-pass")
+	t.Setenv("TEST_USERNAME", "tester")
+	t.Setenv("TEST_PASSWORD", "tester-pass")
+
+	cfg := newBusinessImageTestConfig(t)
+	store, err := businessimage.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	_, err = store.UpsertConversation(context.Background(), businessimage.Conversation{
+		ID:     "admin-conv",
+		UserID: "dev_admin",
+		Title:  "Admin session",
+	})
+	if err != nil {
+		t.Fatalf("save admin conversation: %v", err)
+	}
+	_, err = store.UpsertConversation(context.Background(), businessimage.Conversation{
+		ID:     "user-conv",
+		UserID: "dev_user",
+		Title:  "User session",
+	})
+	if err != nil {
+		t.Fatalf("save user conversation: %v", err)
+	}
+	_ = store.Close()
+
+	server := NewServer(cfg, nil, nil)
+	userToken := loginTestToken(t, server, "tester", "tester-pass")
+
+	renameReq := httptest.NewRequest(http.MethodPatch, "/api/business/image/conversations/user-conv", strings.NewReader(`{"title":"  旅行灵感  "}`))
+	renameReq.SetPathValue("id", "user-conv")
+	renameReq.Header.Set("Authorization", "Bearer "+userToken)
+	renameRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(renameRec, renameReq)
+	if renameRec.Code != http.StatusOK {
+		t.Fatalf("rename status = %d, body = %s", renameRec.Code, renameRec.Body.String())
+	}
+	if !strings.Contains(renameRec.Body.String(), `"title":"旅行灵感"`) {
+		t.Fatalf("rename body missing trimmed title: %s", renameRec.Body.String())
+	}
+
+	crossReq := httptest.NewRequest(http.MethodPatch, "/api/business/image/conversations/admin-conv", strings.NewReader(`{"title":"Wrong user"}`))
+	crossReq.SetPathValue("id", "admin-conv")
+	crossReq.Header.Set("Authorization", "Bearer "+userToken)
+	crossRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(crossRec, crossReq)
+	if crossRec.Code != http.StatusNotFound {
+		t.Fatalf("cross rename status = %d, want %d, body = %s", crossRec.Code, http.StatusNotFound, crossRec.Body.String())
+	}
+
+	verifyStore, err := businessimage.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open verify store: %v", err)
+	}
+	defer verifyStore.Close()
+	userConversation, ok, err := verifyStore.GetConversation(context.Background(), "user-conv", "dev_user")
+	if err != nil || !ok {
+		t.Fatalf("user conversation missing after rename, ok=%v err=%v", ok, err)
+	}
+	if userConversation.Title != "旅行灵感" {
+		t.Fatalf("user title = %q, want %q", userConversation.Title, "旅行灵感")
+	}
+	adminConversation, ok, err := verifyStore.GetConversation(context.Background(), "admin-conv", "dev_admin")
+	if err != nil || !ok {
+		t.Fatalf("admin conversation missing after cross rename, ok=%v err=%v", ok, err)
+	}
+	if adminConversation.Title != "Admin session" {
+		t.Fatalf("admin title changed to %q", adminConversation.Title)
 	}
 }
 

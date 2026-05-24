@@ -535,6 +535,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PATCH /api/business/me/password", s.requireUIAuth(http.HandlerFunc(s.handleChangeBusinessMePassword)))
 	mux.Handle("GET /api/business/credit", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessCredit)))
 	mux.Handle("GET /api/business/usage", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessUsage)))
+	mux.Handle("GET /api/business/assets", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessAssets)))
 	mux.Handle("GET /api/business/jobs", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessImageJobs)))
 	mux.Handle("GET /api/business/jobs/{id}", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessImageJob)))
 	mux.Handle("POST /api/business/jobs/{id}/cancel", s.requireUIAuth(http.HandlerFunc(s.handleCancelBusinessImageJob)))
@@ -547,6 +548,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/business/image/conversations", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessImageConversations)))
 	mux.Handle("DELETE /api/business/image/conversations", s.requireUIAuth(http.HandlerFunc(s.handleClearBusinessImageConversations)))
 	mux.Handle("GET /api/business/image/conversations/{id}", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessImageConversation)))
+	mux.Handle("PATCH /api/business/image/conversations/{id}", s.requireUIAuth(http.HandlerFunc(s.handleRenameBusinessImageConversation)))
 	mux.Handle("DELETE /api/business/image/conversations/{id}", s.requireUIAuth(http.HandlerFunc(s.handleDeleteBusinessImageConversation)))
 	mux.Handle("POST /api/image/generate", s.requireUIAuth(http.HandlerFunc(s.handleProviderImageGenerateSubmit)))
 

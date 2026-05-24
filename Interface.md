@@ -304,6 +304,38 @@ http://localhost:5270
 }
 ```
 
+### PATCH `/api/business/image/conversations/{id}`
+
+重命名当前用户的单个业务图片会话。
+
+请求：
+
+```json
+{
+  "title": "新的会话名"
+}
+```
+
+说明：
+
+- `title` 会自动去除首尾空格。
+- `title` 不能为空，最长 80 个字符。
+- 不允许重命名其他用户的会话。
+
+响应：
+
+```json
+{
+  "item": {
+    "id": "conv_xxx",
+    "user_id": "user_xxx",
+    "title": "新的会话名",
+    "created_at": "2026-05-17T08:00:00Z",
+    "updated_at": "2026-05-17T08:02:00Z"
+  }
+}
+```
+
 ### DELETE `/api/business/image/conversations/{id}`
 
 删除当前用户的单个会话。
@@ -1634,6 +1666,7 @@ Responses 兼容接口保留路由，但 `image_generation` 图片生成能力�
 | GET | `/api/business/image/conversations` | UI 登录态 | 业务图片会话列表 |
 | DELETE | `/api/business/image/conversations` | UI 登录态 | 清空当前用户业务会话 |
 | GET | `/api/business/image/conversations/{id}` | UI 登录态 | 业务图片会话详情 |
+| PATCH | `/api/business/image/conversations/{id}` | UI 登录态 | 重命名当前用户业务会话 |
 | DELETE | `/api/business/image/conversations/{id}` | UI 登录态 | 删除当前用户业务会话 |
 | POST | `/api/image/generate` | UI 登录态 | 业务生图 |
 | POST | `/v1/chat/completions` | 兼容 API Key | Chat Completions 兼容接口 |

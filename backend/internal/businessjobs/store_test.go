@@ -150,7 +150,7 @@ func TestStoreReconcileRunningUsesLeaseUntil(t *testing.T) {
 
 	stale, err := store.ListStale(ctx, ReconcileOptions{
 		Now:           now,
-		RunningBefore: now,
+		RunningBefore: now.Add(-time.Hour),
 	}, 10)
 	if err != nil {
 		t.Fatalf("ListStale() returned error: %v", err)
@@ -161,7 +161,7 @@ func TestStoreReconcileRunningUsesLeaseUntil(t *testing.T) {
 
 	result, err := store.ReconcileStale(ctx, ReconcileOptions{
 		Now:           now,
-		RunningBefore: now,
+		RunningBefore: now.Add(-time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("ReconcileStale() returned error: %v", err)
@@ -175,6 +175,49 @@ func TestStoreReconcileRunningUsesLeaseUntil(t *testing.T) {
 	}
 	if updated.Status != StatusFailed || updated.LastError == "" || updated.LeaseUntil != "" {
 		t.Fatalf("updated stale job = %#v", updated)
+	}
+}
+
+func TestStoreRenewRunningLeaseKeepsJobActive(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	job, err := store.Save(ctx, Job{
+		ID:             "job_running_renew",
+		UserID:         "user_running_renew",
+		ConversationID: "conv_running_renew",
+		GenerationID:   "gen_running_renew",
+		Status:         StatusRunning,
+		Stage:          "running",
+		RequestedCount: 1,
+		LeaseUntil:     now.Add(-time.Minute).Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		t.Fatalf("Save() returned error: %v", err)
+	}
+
+	futureLease := now.Add(time.Minute).Format(time.RFC3339Nano)
+	renewed, err := store.RenewRunningLease(ctx, job.ID, job.UserID, futureLease)
+	if err != nil || !renewed {
+		t.Fatalf("RenewRunningLease() returned renewed=%v err=%v", renewed, err)
+	}
+	stale, err := store.ListStale(ctx, ReconcileOptions{
+		Now:           now,
+		RunningBefore: now.Add(-time.Hour),
+	}, 10)
+	if err != nil {
+		t.Fatalf("ListStale() returned error: %v", err)
+	}
+	if len(stale) != 0 {
+		t.Fatalf("ListStale() returned %#v, want no stale jobs after renew", stale)
+	}
+	updated, ok, err := store.Get(ctx, job.ID, job.UserID)
+	if err != nil || !ok {
+		t.Fatalf("Get() after renew returned ok=%v err=%v", ok, err)
+	}
+	if updated.LeaseUntil != futureLease {
+		t.Fatalf("LeaseUntil = %q, want %q", updated.LeaseUntil, futureLease)
 	}
 }
 

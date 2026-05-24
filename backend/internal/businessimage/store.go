@@ -56,6 +56,15 @@ type Asset struct {
 	CreatedAt      string `json:"created_at"`
 }
 
+type AssetDetail struct {
+	Asset
+	ConversationTitle string `json:"conversation_title,omitempty"`
+	Prompt            string `json:"prompt,omitempty"`
+	Model             string `json:"model,omitempty"`
+	Size              string `json:"size,omitempty"`
+	Quality           string `json:"quality,omitempty"`
+}
+
 type UserUsage struct {
 	UserID          string `json:"user_id"`
 	GenerationCount int64  `json:"generation_count"`
@@ -279,6 +288,8 @@ func (s *Store) init() error {
 			ON business_image_assets(file_name);`,
 		`CREATE INDEX IF NOT EXISTS idx_business_image_assets_user_conversation
 			ON business_image_assets(user_id, conversation_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_business_image_assets_user_created
+			ON business_image_assets(user_id, created_at DESC, file_name DESC);`,
 		`CREATE INDEX IF NOT EXISTS idx_business_image_assets_generation
 			ON business_image_assets(generation_id);`,
 	}
@@ -1255,6 +1266,87 @@ func (s *Store) AssetsByUserPage(ctx context.Context, userID string, limit int, 
 	return items, total, nil
 }
 
+func (s *Store) AssetDetailsByUserPage(ctx context.Context, userID string, limit int, offset int) ([]AssetDetail, int64, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil, 0, fmt.Errorf("user id is required")
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	var total int64
+	if err := s.db.QueryRowContext(
+		ctx,
+		s.rebind(`SELECT COUNT(*)
+		 FROM business_image_assets
+		 WHERE user_id = ?`),
+		userID,
+	).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.db.QueryContext(
+		ctx,
+		s.rebind(`SELECT asset.id, asset.user_id, asset.conversation_id, asset.generation_id,
+		        asset.file_name, asset.file_path, asset.url, asset.mime_type, asset.size_bytes,
+		        asset.sha256, asset.created_at,
+		        COALESCE(conversation.title, '') AS conversation_title,
+		        COALESCE(generation.prompt, '') AS prompt,
+		        COALESCE(generation.model, '') AS model,
+		        COALESCE(generation.size, '') AS size,
+		        COALESCE(generation.quality, '') AS quality
+		 FROM business_image_assets AS asset
+		 LEFT JOIN business_image_conversations AS conversation
+		   ON conversation.id = asset.conversation_id
+		  AND conversation.user_id = asset.user_id
+		 LEFT JOIN business_image_generations AS generation
+		   ON generation.id = asset.generation_id
+		  AND generation.user_id = asset.user_id
+		 WHERE asset.user_id = ?
+		 ORDER BY asset.created_at DESC, asset.file_name DESC
+		 LIMIT ? OFFSET ?`),
+		userID,
+		limit,
+		offset,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	items := []AssetDetail{}
+	for rows.Next() {
+		var item AssetDetail
+		if err := rows.Scan(
+			&item.ID,
+			&item.UserID,
+			&item.ConversationID,
+			&item.GenerationID,
+			&item.FileName,
+			&item.FilePath,
+			&item.URL,
+			&item.MimeType,
+			&item.SizeBytes,
+			&item.SHA256,
+			&item.CreatedAt,
+			&item.ConversationTitle,
+			&item.Prompt,
+			&item.Model,
+			&item.Size,
+			&item.Quality,
+		); err != nil {
+			return nil, 0, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
 func (s *Store) ConversationCount(ctx context.Context, userID string) (int64, error) {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
@@ -1544,6 +1636,37 @@ func (s *Store) DeleteConversation(ctx context.Context, id string, userID string
 		Conversations: conversations,
 		Generations:   generations,
 	}, nil
+}
+
+func (s *Store) RenameConversation(ctx context.Context, id string, userID string, title string) (Conversation, bool, error) {
+	id = cleanID(id)
+	userID = firstNonEmpty(userID, DevUserID)
+	title = strings.TrimSpace(title)
+	if id == "" {
+		return Conversation{}, false, fmt.Errorf("conversation id is required")
+	}
+	if title == "" {
+		return Conversation{}, false, fmt.Errorf("conversation title is required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	result, err := s.db.ExecContext(
+		ctx,
+		s.rebind(`UPDATE business_image_conversations
+		 SET title = ?, updated_at = ?
+		 WHERE id = ? AND user_id = ?`),
+		title,
+		now,
+		id,
+		userID,
+	)
+	if err != nil {
+		return Conversation{}, false, err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return Conversation{}, false, nil
+	}
+	return s.GetConversation(ctx, id, userID)
 }
 
 func (s *Store) ClearConversations(ctx context.Context, userID string) (DeleteResult, error) {

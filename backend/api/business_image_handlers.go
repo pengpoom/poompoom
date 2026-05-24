@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -46,6 +47,48 @@ func (s *Server) handleGetBusinessImageConversation(w http.ResponseWriter, r *ht
 	)
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "business_image_get_failed", err.Error())
+		return
+	}
+	if !ok {
+		writeAPIError(w, http.StatusNotFound, "business_image_not_found", "conversation not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"item": item})
+}
+
+func (s *Server) handleRenameBusinessImageConversation(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+	title := strings.TrimSpace(request.Title)
+	if title == "" {
+		writeAPIError(w, http.StatusBadRequest, "business_image_title_required", "conversation title is required")
+		return
+	}
+	if len([]rune(title)) > 80 {
+		writeAPIError(w, http.StatusBadRequest, "business_image_title_too_long", "conversation title is too long")
+		return
+	}
+
+	store, err := s.newBusinessImageStore()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "business_image_store_failed", err.Error())
+		return
+	}
+	defer store.Close()
+
+	item, ok, err := store.RenameConversation(
+		r.Context(),
+		r.PathValue("id"),
+		businessUserIDForRequest(r),
+		title,
+	)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "business_image_rename_failed", err.Error())
 		return
 	}
 	if !ok {

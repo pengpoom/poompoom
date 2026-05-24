@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
   normalizeConversation,
+  renameImageConversation,
   saveImageConversation,
   updateImageConversation,
   type ImageConversation,
@@ -1229,6 +1230,37 @@ export default function ImagePage() {
     [setConversations],
   );
 
+  const handleRenameConversation = useCallback(
+    async (conversationId: string, title: string) => {
+      const trimmedTitle = title.trim();
+      if (!trimmedTitle) {
+        toast.error("请输入对话名");
+        return;
+      }
+      try {
+        const renamedConversation = await renameImageConversation(
+          conversationId,
+          trimmedTitle,
+        );
+        if (!mountedRef.current) {
+          return;
+        }
+        setConversations((prev) =>
+          [
+            renamedConversation,
+            ...prev.filter((item) => item.id !== conversationId),
+          ].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+        );
+        toast.success("对话名已更新");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "重命名失败";
+        toast.error(message);
+        throw error;
+      }
+    },
+    [setConversations],
+  );
+
   const resetComposer = useCallback(
     (nextMode: ImageMode = mode) => {
       setMode(nextMode);
@@ -1364,6 +1396,7 @@ export default function ImagePage() {
       onCreateDraft={handleCreateDraftAndOpenWorkspace}
       onClearHistory={handleClearHistory}
       onFocusConversation={handleFocusConversationAndOpenWorkspace}
+      onRenameConversation={handleRenameConversation}
       onDeleteConversation={handleDeleteConversation}
       onCollapse={
         !isStandaloneHistory && !isStandaloneWorkspace

@@ -674,6 +674,42 @@ func TestAdminCanManageBusinessUsers(t *testing.T) {
 		t.Fatalf("filtered self usage payload = %#v", selfUsageFilteredPayload)
 	}
 
+	selfAssetsReq := httptest.NewRequest(http.MethodGet, "/api/business/assets?page=1&pageSize=1", nil)
+	selfAssetsReq.Header.Set("Authorization", "Bearer "+guestToken)
+	selfAssetsRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(selfAssetsRec, selfAssetsReq)
+	if selfAssetsRec.Code != http.StatusOK {
+		t.Fatalf("self assets status = %d, body = %s", selfAssetsRec.Code, selfAssetsRec.Body.String())
+	}
+	var selfAssetsPayload businessAssetsResponse
+	if err := json.Unmarshal(selfAssetsRec.Body.Bytes(), &selfAssetsPayload); err != nil {
+		t.Fatalf("decode self assets payload: %v", err)
+	}
+	if len(selfAssetsPayload.Items) != 1 ||
+		selfAssetsPayload.Page.Total != 2 ||
+		selfAssetsPayload.Page.PageSize != 1 ||
+		selfAssetsPayload.Items[0].UserID != createPayload.Item.ID ||
+		selfAssetsPayload.Items[0].ConversationTitle != "Guest session" ||
+		selfAssetsPayload.Items[0].Prompt != "umbrella" ||
+		selfAssetsPayload.Items[0].Model != "gpt-image-test" {
+		t.Fatalf("self assets payload = %#v", selfAssetsPayload)
+	}
+
+	adminAssetsReq := httptest.NewRequest(http.MethodGet, "/api/business/assets", nil)
+	adminAssetsReq.Header.Set("Authorization", "Bearer "+adminToken)
+	adminAssetsRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(adminAssetsRec, adminAssetsReq)
+	if adminAssetsRec.Code != http.StatusOK {
+		t.Fatalf("admin self assets status = %d, body = %s", adminAssetsRec.Code, adminAssetsRec.Body.String())
+	}
+	var adminAssetsPayload businessAssetsResponse
+	if err := json.Unmarshal(adminAssetsRec.Body.Bytes(), &adminAssetsPayload); err != nil {
+		t.Fatalf("decode admin self assets payload: %v", err)
+	}
+	if len(adminAssetsPayload.Items) != 0 || adminAssetsPayload.Page.Total != 0 {
+		t.Fatalf("admin self assets payload = %#v", adminAssetsPayload)
+	}
+
 	adminUsageReq := httptest.NewRequest(http.MethodGet, "/api/business/admin/usage", nil)
 	adminUsageReq.Header.Set("Authorization", "Bearer "+adminToken)
 	adminUsageRec := httptest.NewRecorder()

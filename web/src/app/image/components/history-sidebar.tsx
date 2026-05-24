@@ -1,7 +1,14 @@
 "use client";
 
 import { memo, useCallback, useMemo, useState } from "react";
-import { LoaderCircle, MessageSquarePlus, PanelLeftClose, Search, Trash2 } from "lucide-react";
+import {
+  LoaderCircle,
+  MessageSquarePlus,
+  PanelLeftClose,
+  Pencil,
+  Search,
+  Trash2,
+} from "lucide-react";
 
 import {
   Dialog,
@@ -27,6 +34,7 @@ type HistorySidebarProps = {
   onCreateDraft: () => void;
   onClearHistory: () => Promise<void>;
   onFocusConversation: (id: string) => void;
+  onRenameConversation: (id: string, title: string) => Promise<void>;
   onDeleteConversation: (id: string) => Promise<void>;
   onCollapse?: () => void;
   standalone?: boolean;
@@ -35,6 +43,11 @@ type HistorySidebarProps = {
 type DeleteDialogState =
   | { type: "conversation"; id: string; title: string }
   | { type: "all" };
+
+type RenameDialogState = {
+  id: string;
+  title: string;
+};
 
 function hasSameConversationIdSet(left: Set<string>, right: Set<string>) {
   if (left === right) {
@@ -92,12 +105,16 @@ export const HistorySidebar = memo(
     onCreateDraft,
     onClearHistory,
     onFocusConversation,
+    onRenameConversation,
     onDeleteConversation,
     onCollapse,
     standalone = false,
   }: HistorySidebarProps) {
     const draftActive = selectedConversationId === null;
     const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState | null>(null);
+    const [renameDialog, setRenameDialog] = useState<RenameDialogState | null>(null);
+    const [renameValue, setRenameValue] = useState("");
+    const [isRenaming, setIsRenaming] = useState(false);
     const [searchOpen, setSearchOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
     const normalizedSearchQuery = searchOpen ? searchQuery.trim().toLowerCase() : "";
@@ -116,6 +133,7 @@ export const HistorySidebar = memo(
       : "删除后会从数据库移除这条会话和生成记录，并清理不再被引用的本地图片文件。";
     const deleteDialogTarget =
       deleteDialog?.type === "conversation" ? deleteDialog.title || "未命名会话" : "";
+    const normalizedRenameValue = renameValue.trim();
 
     const handleConfirmDelete = useCallback(() => {
       if (!deleteDialog) {
@@ -130,6 +148,27 @@ export const HistorySidebar = memo(
       }
       void onDeleteConversation(target.id);
     }, [deleteDialog, onClearHistory, onDeleteConversation]);
+
+    const openRenameDialog = useCallback((id: string, title: string) => {
+      setRenameDialog({ id, title });
+      setRenameValue(title);
+    }, []);
+
+    const handleConfirmRename = useCallback(async () => {
+      if (!renameDialog || !normalizedRenameValue || isRenaming) {
+        return;
+      }
+      setIsRenaming(true);
+      try {
+        await onRenameConversation(renameDialog.id, normalizedRenameValue);
+        setRenameDialog(null);
+        setRenameValue("");
+      } catch {
+        return;
+      } finally {
+        setIsRenaming(false);
+      }
+    }, [isRenaming, normalizedRenameValue, onRenameConversation, renameDialog]);
 
     return (
       <>
@@ -270,6 +309,15 @@ export const HistorySidebar = memo(
                           </button>
                           <button
                             type="button"
+                            onClick={() => openRenameDialog(conversation.id, title)}
+                            className="grid size-8 shrink-0 place-items-center rounded-lg text-[var(--app-text-muted)] opacity-0 transition hover:bg-[var(--app-bg-surface)] hover:text-[var(--app-text-primary)] group-hover:opacity-100"
+                            title="重命名会话"
+                            aria-label="重命名会话"
+                          >
+                            <Pencil className="size-4" />
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => setDeleteDialog({
                               type: "conversation",
                               id: conversation.id,
@@ -338,6 +386,82 @@ export const HistorySidebar = memo(
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <Dialog
+          open={renameDialog !== null}
+          onOpenChange={(open) => {
+            if (!open && !isRenaming) {
+              setRenameDialog(null);
+              setRenameValue("");
+            }
+          }}
+        >
+          <DialogContent className="w-[min(92vw,420px)] rounded-[20px] p-0" showCloseButton={false}>
+            <DialogHeader className="border-b border-[var(--app-border)] px-5 py-4">
+              <div className="flex items-start gap-3">
+                <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-[rgba(91,214,255,0.25)] bg-[rgba(91,214,255,0.1)] text-[var(--app-accent-cyan)]">
+                  <Pencil className="size-5" />
+                </span>
+                <div className="min-w-0">
+                  <DialogTitle className="text-base">重命名会话</DialogTitle>
+                  <DialogDescription className="mt-2 leading-6">
+                    修改后会同步到当前账号的历史记录。
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
+
+            <div className="px-5 py-4">
+              <label className="grid gap-2">
+                <span className="text-sm font-semibold text-[var(--app-text-secondary)]">
+                  对话名
+                </span>
+                <input
+                  type="text"
+                  value={renameValue}
+                  onChange={(event) => setRenameValue(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void handleConfirmRename();
+                    }
+                    if (event.key === "Escape" && !isRenaming) {
+                      setRenameDialog(null);
+                      setRenameValue("");
+                    }
+                  }}
+                  maxLength={80}
+                  autoFocus
+                  className="h-11 rounded-xl border border-[var(--app-border)] bg-[#1B1C22] px-3 text-sm font-semibold text-[var(--app-text-primary)] outline-none transition placeholder:text-[var(--app-text-muted)] focus:border-[rgba(91,214,255,0.5)] focus:ring-[3px] focus:ring-[rgba(91,214,255,0.16)]"
+                  placeholder="输入对话名"
+                />
+              </label>
+            </div>
+
+            <DialogFooter className="border-t border-[var(--app-border)] px-5 py-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setRenameDialog(null);
+                  setRenameValue("");
+                }}
+                disabled={isRenaming}
+                className="h-10 rounded-full border border-[var(--app-border)] bg-[#1B1C22] px-5 text-sm font-semibold text-[var(--app-text-secondary)] transition hover:bg-[#22242B] hover:text-[var(--app-text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmRename()}
+                disabled={!normalizedRenameValue || isRenaming}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-[rgba(91,214,255,0.28)] bg-[var(--app-accent-cyan)] px-5 text-sm font-semibold text-[#03121C] shadow-[0_12px_28px_rgba(91,214,255,0.16)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isRenaming ? <LoaderCircle className="size-4 animate-spin" /> : null}
+                保存
+              </button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </>
     );
   },
@@ -357,6 +481,7 @@ export const HistorySidebar = memo(
       prev.onCreateDraft === next.onCreateDraft &&
       prev.onClearHistory === next.onClearHistory &&
       prev.onFocusConversation === next.onFocusConversation &&
+      prev.onRenameConversation === next.onRenameConversation &&
       prev.onDeleteConversation === next.onDeleteConversation &&
       prev.onCollapse === next.onCollapse &&
       prev.standalone === next.standalone

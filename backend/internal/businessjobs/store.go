@@ -968,6 +968,38 @@ func (s *Store) ClaimQueuedBy(ctx context.Context, id string, userID string, wor
 	return s.Get(ctx, id, userID)
 }
 
+func (s *Store) RenewRunningLease(ctx context.Context, id string, userID string, leaseUntil string) (bool, error) {
+	id = clean(id)
+	userID = strings.TrimSpace(userID)
+	leaseUntil = strings.TrimSpace(leaseUntil)
+	if id == "" || userID == "" || leaseUntil == "" {
+		return false, nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := s.db.ExecContext(
+		ctx,
+		s.rebind(`UPDATE business_image_jobs
+		    SET lease_until = ?,
+		        updated_at = ?
+		  WHERE id = ?
+		    AND user_id = ?
+		    AND status = ?`),
+		leaseUntil,
+		now,
+		id,
+		userID,
+		StatusRunning,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
 func (s *Store) claimQueuedPostgresByJobID(ctx context.Context, id string, workerID string) (Job, bool, error) {
 	nowTime := time.Now().UTC()
 	now := nowTime.Format(time.RFC3339Nano)
@@ -1220,6 +1252,7 @@ func (s *Store) ListStale(ctx context.Context, options ReconcileOptions, limit i
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	nowText := now.UTC().Format(time.RFC3339Nano)
 	items := make([]Job, 0)
 	appendItems := func(status string, before time.Time, remaining int) error {
 		if before.IsZero() || remaining <= 0 {
@@ -1236,7 +1269,7 @@ func (s *Store) ListStale(ctx context.Context, options ReconcileOptions, limit i
 			      (lease_until != '' AND lease_until < ?)
 			      OR (lease_until = '' AND updated_at != '' AND updated_at < ?)
 			    )`
-			args = []any{normalizeStatus(status), beforeText, beforeText}
+			args = []any{normalizeStatus(status), nowText, beforeText}
 		}
 		args = append(args, remaining)
 		rows, err := s.db.QueryContext(
@@ -1305,7 +1338,7 @@ func (s *Store) updateStaleJobs(
 		      (lease_until != '' AND lease_until < ?)
 		      OR (lease_until = '' AND updated_at != '' AND updated_at < ?)
 		    )`
-		whereArgs = []any{currentStatus, beforeText, beforeText}
+		whereArgs = []any{currentStatus, nowText, beforeText}
 	}
 	args := []any{
 		finalStatus,
@@ -1357,6 +1390,7 @@ func (s *Store) updateStaleJobsPostgres(
 	if finalStatus == StatusFailed {
 		stage = "stale"
 	}
+	whereArgs := []any{currentStatus, beforeText}
 	whereSQL := `status = $9
 		    AND updated_at != ''
 		    AND updated_at < $10`
@@ -1364,9 +1398,21 @@ func (s *Store) updateStaleJobsPostgres(
 		whereSQL = `status = $9
 		    AND (
 		      (lease_until != '' AND lease_until < $10)
-		      OR (lease_until = '' AND updated_at != '' AND updated_at < $10)
+		      OR (lease_until = '' AND updated_at != '' AND updated_at < $11)
 		    )`
+		whereArgs = []any{currentStatus, nowText, beforeText}
 	}
+	args := []any{
+		finalStatus,
+		stage,
+		strings.TrimSpace(errorCode),
+		strings.TrimSpace(errorMessage),
+		strings.TrimSpace(firstNonEmpty(errorMessage, errorCode)),
+		nowText,
+		nowText,
+		nowText,
+	}
+	args = append(args, whereArgs...)
 	res, err := s.db.ExecContext(
 		ctx,
 		`UPDATE business_image_jobs
@@ -1384,16 +1430,7 @@ func (s *Store) updateStaleJobsPostgres(
 		        END,
 		        updated_at = $8
 		  WHERE `+whereSQL,
-		finalStatus,
-		stage,
-		strings.TrimSpace(errorCode),
-		strings.TrimSpace(errorMessage),
-		strings.TrimSpace(firstNonEmpty(errorMessage, errorCode)),
-		nowText,
-		nowText,
-		nowText,
-		currentStatus,
-		beforeText,
+		args...,
 	)
 	if err != nil {
 		return 0, err

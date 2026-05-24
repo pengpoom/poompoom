@@ -75,6 +75,35 @@ function runtimeCapacity(runtime: RuntimeStatusResponse | null) {
   };
 }
 
+function databaseName(database: RuntimeStatusResponse["system"]["database"] | undefined) {
+  const driver = (database?.driver || "").toLowerCase();
+  if (driver === "postgres" || driver === "postgresql") {
+    return "PostgreSQL";
+  }
+  if (driver === "sqlite" || driver === "sqlite3") {
+    return "SQLite";
+  }
+  return database?.name || "数据库";
+}
+
+function databaseSummary(database: RuntimeStatusResponse["system"]["database"] | undefined) {
+  const driver = (database?.driver || "").toLowerCase();
+  if (driver === "postgres" || driver === "postgresql") {
+    return `连接 ${numberText(database?.openConns)} / 使用中 ${numberText(database?.inUseConns)}`;
+  }
+  if (driver === "sqlite" || driver === "sqlite3") {
+    return `SQLite ${formatBytes(database?.sizeBytes)}`;
+  }
+  return database?.status || "-";
+}
+
+function databaseDetail(database: RuntimeStatusResponse["system"]["database"] | undefined) {
+  if (!database) {
+    return undefined;
+  }
+  return database.error || database.path || database.dsn || undefined;
+}
+
 function formatDateTime(value: string | undefined) {
   const date = new Date(value || "");
   if (Number.isNaN(date.getTime())) {
@@ -540,8 +569,8 @@ export default function OperationsPage() {
             <SystemStatusCard
               label="数据库"
               value={loading ? "-" : system?.database.ok ? "正常" : "异常"}
-              sub={loading ? "读取中" : `SQLite ${formatBytes(system?.database.sizeBytes)}`}
-              detail={system?.database.error || system?.database.path || undefined}
+              sub={loading ? "读取中" : `${databaseName(system?.database)} ${databaseSummary(system?.database)}`}
+              detail={databaseDetail(system?.database)}
               badge={loading ? "读取中" : system?.database.ok ? "正常" : "异常"}
               badgeVariant={loading ? "warning" : system?.database.ok ? "success" : "danger"}
               icon={Database}

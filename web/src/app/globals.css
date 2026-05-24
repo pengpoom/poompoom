@@ -481,7 +481,12 @@ html[data-resolved-theme="light"] {
     min-width: 0;
   }
 
-  .app-content [class*="overflow-x-auto"],
+  .app-content [class*="overflow-x-auto"] {
+    min-width: 0;
+    overscroll-behavior-x: contain;
+    overscroll-behavior-y: auto;
+  }
+
   .app-content [class*="overflow-auto"] {
     min-width: 0;
     overscroll-behavior: contain;

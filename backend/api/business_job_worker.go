@@ -12,6 +12,8 @@ import (
 
 const businessImageJobWorkerBatchSize = 100
 const businessImageJobMaintenanceInterval = 15 * time.Second
+const businessImageJobRunningLeaseDuration = 30 * time.Second
+const businessImageJobHeartbeatInterval = 10 * time.Second
 
 func (s *Server) startBusinessImageJobMaintenanceAsync() {
 	s.startBusinessImageJobWorker()
@@ -204,4 +206,39 @@ func parseJobCreatedAt(value string) time.Time {
 		return parsed
 	}
 	return time.Now().UTC()
+}
+
+func (s *Server) startBusinessImageJobHeartbeat(ctx context.Context, jobID string, userID string) context.CancelFunc {
+	jobID = cleanJobNotificationID(jobID)
+	userID = strings.TrimSpace(userID)
+	if jobID == "" || userID == "" {
+		return func() {}
+	}
+	heartbeatCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(businessImageJobHeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+				renewCtx, renewCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				s.renewBusinessImageJobLease(renewCtx, jobID, userID)
+				renewCancel()
+			}
+		}
+	}()
+	return cancel
+}
+
+func (s *Server) renewBusinessImageJobLease(ctx context.Context, jobID string, userID string) bool {
+	store, err := s.newBusinessJobStore()
+	if err != nil {
+		return false
+	}
+	defer store.Close()
+	leaseUntil := time.Now().UTC().Add(businessImageJobRunningLeaseDuration).Format(time.RFC3339Nano)
+	renewed, err := store.RenewRunningLease(ctx, jobID, userID, leaseUntil)
+	return err == nil && renewed
 }

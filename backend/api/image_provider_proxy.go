@@ -624,7 +624,7 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	job.Status = businessjobs.StatusRunning
 	job.Stage = "running"
 	job.StartedAt = tracker.AdmittedAt
-	job.LeaseUntil = time.Now().UTC().Add(s.imageProviderRequestTimeout() + defaultStaleRunningGrace).Format(time.RFC3339Nano)
+	job.LeaseUntil = time.Now().UTC().Add(businessImageJobRunningLeaseDuration).Format(time.RFC3339Nano)
 	if err := saveRunningJob(job, systemSettings); err != nil {
 		if capacityCode := businessJobCapacityErrorCode(err); capacityCode != "" {
 			message := businessJobCapacityMessage(capacityCode)
@@ -638,6 +638,8 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		finishTracker(businesstracker.StatusFailed, "provider_capacity", "provider_capacity_check_failed", err.Error())
 		return providerImageGenerateError(http.StatusInternalServerError, "provider_capacity_check_failed", err.Error())
 	}
+	stopHeartbeat := s.startBusinessImageJobHeartbeat(jobCtx, job.ID, userID)
+	defer stopHeartbeat()
 	if execution.AfterRunningMarked != nil {
 		execution.AfterRunningMarked()
 	}

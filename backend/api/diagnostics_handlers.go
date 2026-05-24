@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"math"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"imagestudio/internal/buildinfo"
+	"imagestudio/internal/database"
 
 	"github.com/redis/go-redis/v9"
 	_ "modernc.org/sqlite"
@@ -63,11 +63,20 @@ type runtimeMemoryStatus struct {
 }
 
 type runtimeDatabaseStatus struct {
-	OK        bool   `json:"ok"`
-	Status    string `json:"status"`
-	Path      string `json:"path"`
-	SizeBytes int64  `json:"sizeBytes,omitempty"`
-	Error     string `json:"error,omitempty"`
+	OK            bool   `json:"ok"`
+	Status        string `json:"status"`
+	Driver        string `json:"driver"`
+	Name          string `json:"name,omitempty"`
+	DSN           string `json:"dsn,omitempty"`
+	Path          string `json:"path,omitempty"`
+	SizeBytes     int64  `json:"sizeBytes,omitempty"`
+	OpenConns     int    `json:"openConns,omitempty"`
+	InUseConns    int    `json:"inUseConns,omitempty"`
+	IdleConns     int    `json:"idleConns,omitempty"`
+	MaxOpenConns  int    `json:"maxOpenConns,omitempty"`
+	MaxIdleConns  int    `json:"maxIdleConns,omitempty"`
+	ConnLifetimeS int    `json:"connLifetimeSeconds,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 type runtimeRedisStatus struct {
@@ -391,36 +400,46 @@ func validMemoryLimit(value uint64) bool {
 }
 
 func (s *Server) collectRuntimeDatabaseStatus(ctx context.Context) runtimeDatabaseStatus {
-	path := filepath.Clean(s.cfg.ResolvePath(s.cfg.Storage.SQLitePath))
+	driver := strings.ToLower(strings.TrimSpace(s.cfg.Database.Driver))
+	if driver == "" || database.IsPostgres(driver) {
+		return s.collectRuntimePostgresStatus(ctx)
+	}
+	return runtimeDatabaseStatus{
+		OK:     true,
+		Status: "configured",
+		Driver: driver,
+		Name:   databaseDisplayName(driver),
+		Path:   filepath.Clean(s.cfg.ResolvePath(s.cfg.Storage.SQLitePath)),
+	}
+}
+
+func (s *Server) collectRuntimePostgresStatus(ctx context.Context) runtimeDatabaseStatus {
 	status := runtimeDatabaseStatus{
-		Status: "checking",
-		Path:   path,
+		Status:        "checking",
+		Driver:        "postgres",
+		Name:          "PostgreSQL",
+		DSN:           maskDatabaseDSN(s.cfg.Database.DSN),
+		MaxOpenConns:  s.cfg.Database.MaxOpenConns,
+		MaxIdleConns:  s.cfg.Database.MaxIdleConns,
+		ConnLifetimeS: s.cfg.Database.ConnMaxLifetimeSeconds,
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		status.Status = "error"
-		status.Error = err.Error()
-		return status
+	db := s.db
+	var closeDB func()
+	if db == nil {
+		openCtx, cancel := context.WithTimeout(ctx, 900*time.Millisecond)
+		opened, err := database.Open(openCtx, s.cfg)
+		cancel()
+		if err != nil {
+			status.Status = "error"
+			status.Error = err.Error()
+			return status
+		}
+		db = opened
+		closeDB = func() { _ = opened.Close() }
 	}
-	if info.IsDir() {
-		status.Status = "error"
-		status.Error = "sqlite path is a directory"
-		return status
+	if closeDB != nil {
+		defer closeDB()
 	}
-	status.SizeBytes = info.Size()
-
-	sqliteURL := url.URL{Scheme: "file", Path: path}
-	values := sqliteURL.Query()
-	values.Set("mode", "ro")
-	sqliteURL.RawQuery = values.Encode()
-	db, err := sql.Open("sqlite", sqliteURL.String())
-	if err != nil {
-		status.Status = "error"
-		status.Error = err.Error()
-		return status
-	}
-	defer db.Close()
-
 	pingCtx, cancel := context.WithTimeout(ctx, 900*time.Millisecond)
 	defer cancel()
 	if err := db.PingContext(pingCtx); err != nil {
@@ -428,9 +447,39 @@ func (s *Server) collectRuntimeDatabaseStatus(ctx context.Context) runtimeDataba
 		status.Error = err.Error()
 		return status
 	}
+	stats := db.Stats()
+	status.OpenConns = stats.OpenConnections
+	status.InUseConns = stats.InUse
+	status.IdleConns = stats.Idle
 	status.OK = true
 	status.Status = "ok"
 	return status
+}
+
+func databaseDisplayName(driver string) string {
+	switch strings.ToLower(strings.TrimSpace(driver)) {
+	case "postgres", "postgresql", "pg":
+		return "PostgreSQL"
+	case "sqlite", "sqlite3":
+		return "SQLite"
+	default:
+		return strings.TrimSpace(driver)
+	}
+}
+
+func maskDatabaseDSN(dsn string) string {
+	dsn = strings.TrimSpace(dsn)
+	if dsn == "" {
+		return ""
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil || parsed.User == nil {
+		return dsn
+	}
+	if _, ok := parsed.User.Password(); ok {
+		parsed.User = url.UserPassword(parsed.User.Username(), "******")
+	}
+	return parsed.String()
 }
 
 func (s *Server) collectRuntimeDiskStatus() runtimeDiskStatus {

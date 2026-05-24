@@ -517,8 +517,17 @@ export type RuntimeStatusResponse = {
     database: {
       ok: boolean;
       status: string;
-      path: string;
+      driver?: string;
+      name?: string;
+      dsn?: string;
+      path?: string;
       sizeBytes?: number;
+      openConns?: number;
+      inUseConns?: number;
+      idleConns?: number;
+      maxOpenConns?: number;
+      maxIdleConns?: number;
+      connLifetimeSeconds?: number;
       error?: string;
     };
     redis: {
@@ -970,6 +979,11 @@ export type BusinessImageAsset = {
   size_bytes: number;
   sha256: string;
   created_at: string;
+  conversation_title?: string;
+  prompt?: string;
+  model?: string;
+  size?: string;
+  quality?: string;
 };
 
 export type BusinessUserDetail = {
@@ -1159,6 +1173,11 @@ type BusinessUsageListResponse = {
   page: PaginationMeta;
 };
 
+export type BusinessAssetListResponse = {
+  items: BusinessImageAsset[];
+  page: PaginationMeta;
+};
+
 type BusinessUserMutationResponse = {
   item: BusinessUser;
 };
@@ -1303,6 +1322,15 @@ export async function fetchBusinessCredit() {
 
 export async function fetchBusinessUsage(query: BusinessUsageQuery = {}) {
   return httpRequest<BusinessUsageListResponse>(`/api/business/usage${buildQuery(query)}`);
+}
+
+export async function fetchBusinessAssets(query: {
+  page?: number;
+  pageSize?: number;
+} = {}) {
+  return httpRequest<BusinessAssetListResponse>(
+    `/api/business/assets${buildQuery(query)}`,
+  );
 }
 
 export async function fetchBusinessImageJobs(query: {

@@ -739,9 +739,10 @@ export function normalizeConversation(
         ];
 
   const latestTurn = turns[turns.length - 1];
+  const title = String(conversation.title || "").trim() || latestTurn.title;
   return {
     ...conversation,
-    title: latestTurn.title,
+    title,
     mode: latestTurn.mode,
     prompt: latestTurn.prompt,
     model: latestTurn.model,
@@ -1077,6 +1078,55 @@ export async function updateImageConversation(
   ]);
   await persistConversationCache();
   return nextConversation;
+}
+
+export async function renameImageConversation(
+  id: string,
+  title: string,
+): Promise<ImageConversation> {
+  const trimmedTitle = title.trim();
+  if (!trimmedTitle) {
+    throw new Error("请输入对话名");
+  }
+
+  if (isBusinessProxyMode()) {
+    const data = await httpRequest<{ item: BusinessImageConversation }>(
+      `/api/business/image/conversations/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        body: { title: trimmedTitle },
+      },
+    );
+    const current =
+      cachedConversations?.find((item) => item.id === id) ??
+      (await getBusinessImageConversation(id));
+    if (!current) {
+      throw new Error("会话不存在");
+    }
+    const renamedConversation = normalizeConversation({
+      ...current,
+      title: data.item?.title || trimmedTitle,
+      createdAt: data.item?.updated_at || current.createdAt,
+    });
+    setCachedConversationsSnapshot(
+      [
+        renamedConversation,
+        ...(cachedConversations || []).filter((item) => item.id !== id),
+      ],
+      "server",
+    );
+    return renamedConversation;
+  }
+
+  return updateImageConversation(id, (current) => {
+    if (!current) {
+      throw new Error("会话不存在");
+    }
+    return {
+      ...current,
+      title: trimmedTitle,
+    };
+  });
 }
 
 export async function deleteImageConversation(id: string): Promise<void> {
