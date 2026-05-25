@@ -1,37 +1,61 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { LoaderCircle, RefreshCw, Save, Share2, UsersRound } from "lucide-react";
+import { CalendarDays, CheckCircle2, LoaderCircle, RefreshCw, Save, Share2, UsersRound } from "lucide-react";
 import { toast } from "sonner";
 
 import { AdminHeader, AdminPage, AdminPanel } from "@/components/admin-layout";
-import { adminInputClass, adminSubPanelClass } from "@/components/admin-styles";
+import { adminInputClass, adminSubPanelClass, adminTableBodyClass, adminTableClass, adminTableHeadClass, adminTableRowClass } from "@/components/admin-styles";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
+  fetchAdminBusinessAffiliateReferrals,
   fetchBusinessSystemSettings,
   updateBusinessAffiliateSettings,
+  type BusinessAffiliateReferral,
   type BusinessSystemSettings,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+function formatDateTime(value?: string) {
+  const date = new Date(value || "");
+  if (Number.isNaN(date.getTime())) {
+    return value || "-";
+  }
+  return date.toLocaleString();
+}
+
+function numberText(value?: number | null) {
+  return Number(value || 0).toLocaleString();
+}
+
+function userText(username: string, email: string, uid: number) {
+  const name = username || email || "-";
+  return uid > 0 ? `${name} · UID ${uid}` : name;
+}
 
 export default function AffiliatePage() {
   const [settings, setSettings] = useState<BusinessSystemSettings | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [registrationRewardEnabled, setRegistrationRewardEnabled] = useState(false);
   const [registrationRewardCredits, setRegistrationRewardCredits] = useState(0);
+  const [referrals, setReferrals] = useState<BusinessAffiliateReferral[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const loadSettings = async () => {
     setLoading(true);
     try {
-      const payload = await fetchBusinessSystemSettings();
+      const [payload, referralsPayload] = await Promise.all([
+        fetchBusinessSystemSettings(),
+        fetchAdminBusinessAffiliateReferrals(100),
+      ]);
       setSettings(payload.settings);
       setEnabled(Boolean(payload.settings.affiliate?.enabled));
       setRegistrationRewardEnabled(Boolean(payload.settings.affiliate?.registrationRewardEnabled));
       setRegistrationRewardCredits(Number(payload.settings.affiliate?.registrationRewardCredits || 0));
+      setReferrals(referralsPayload.items || []);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "读取邀请返利设置失败");
     } finally {
@@ -171,6 +195,70 @@ export default function AffiliatePage() {
           </div>
         </AdminPanel>
       </div>
+
+      <AdminPanel className="overflow-hidden">
+        <div className="flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-5 py-4">
+          <div className="flex items-center gap-2">
+            <CalendarDays className="size-4 text-[var(--app-accent-cyan)]" />
+            <h2 className="text-sm font-semibold text-[var(--app-text-primary)]">邀请记录</h2>
+          </div>
+          <span className="rounded-full bg-[var(--app-bg-surface)] px-3 py-1 text-xs text-[var(--app-text-muted)]">
+            {numberText(referrals.length)}
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className={cn(adminTableClass, "min-w-[980px]")}>
+            <thead className={adminTableHeadClass}>
+              <tr>
+                <th className="px-4 py-3">邀请人</th>
+                <th className="px-4 py-3">被邀请人</th>
+                <th className="px-4 py-3">注册时间</th>
+                <th className="px-4 py-3">奖励状态</th>
+                <th className="px-4 py-3">奖励点数</th>
+              </tr>
+            </thead>
+            <tbody className={adminTableBodyClass}>
+              {loading ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-10 text-center text-[var(--app-text-muted)]">
+                    <LoaderCircle className="mx-auto mb-2 size-5 animate-spin" />
+                    读取中
+                  </td>
+                </tr>
+              ) : referrals.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="px-4 py-10 text-center text-[var(--app-text-muted)]">暂无邀请记录</td>
+                </tr>
+              ) : (
+                referrals.map((item) => (
+                  <tr key={item.id} className={adminTableRowClass}>
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-[var(--app-text-primary)]">{userText(item.referrerUsername, item.referrerEmail, item.referrerUid)}</div>
+                      <div className="mt-1 text-xs text-[var(--app-text-muted)]">{item.referrerEmail || "-"}</div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-[var(--app-text-primary)]">{userText(item.referredUsername, item.referredEmail, item.referredUid)}</div>
+                      <div className="mt-1 text-xs text-[var(--app-text-muted)]">{item.referredEmail || "-"}</div>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-[var(--app-text-secondary)]">{formatDateTime(item.createdAt)}</td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      {item.rewardCredits > 0 ? (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-xs font-medium text-emerald-500 dark:text-emerald-300">
+                          <CheckCircle2 className="size-3.5" />
+                          已发放
+                        </span>
+                      ) : (
+                        <span className="inline-flex rounded-full bg-[var(--app-bg-surface)] px-2 py-1 text-xs font-medium text-[var(--app-text-muted)]">未发放</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 font-semibold text-[var(--app-text-primary)]">{numberText(item.rewardCredits)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </AdminPanel>
     </AdminPage>
   );
 }

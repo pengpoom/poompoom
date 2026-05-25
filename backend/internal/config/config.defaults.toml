@@ -37,7 +37,7 @@ max_idle_conns = 10
 conn_max_lifetime_seconds = 300
 
 [job_queue]
-backend = "local"
+backend = "redis"
 
 [storage]
 backend = "current"

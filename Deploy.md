@@ -164,7 +164,7 @@ SERVER_PORT=7070 \
 CORS_ALLOWED_ORIGINS=http://localhost:5270,http://127.0.0.1:5270 \
 DATABASE_DRIVER=postgres \
 DATABASE_DSN=postgres://image_studio:image_studio@127.0.0.1:5432/image_studio?sslmode=disable \
-JOB_QUEUE_BACKEND=local \
+JOB_QUEUE_BACKEND=redis \
 REDIS_ADDR=127.0.0.1:6379 \
 go run .
 ```
@@ -208,7 +208,7 @@ go run .
 
 ### 8.4 Redis 连接失败
 
-如果 `JOB_QUEUE_BACKEND=redis`，需要确保 Redis 服务已启动，且 `REDIS_ADDR` 指向正确地址。本地开发可先使用：
+如果 `JOB_QUEUE_BACKEND=redis`，需要确保 Redis 服务已启动，且 `REDIS_ADDR` 指向正确地址。本地排查时可临时使用：
 
 ```text
 JOB_QUEUE_BACKEND=local

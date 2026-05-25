@@ -206,12 +206,12 @@ SERVER_PORT=7070 \
 CORS_ALLOWED_ORIGINS=http://localhost:5270,http://127.0.0.1:5270 \
 DATABASE_DRIVER=postgres \
 DATABASE_DSN=postgres://image_studio:image_studio@127.0.0.1:5432/image_studio?sslmode=disable \
-JOB_QUEUE_BACKEND=local \
+JOB_QUEUE_BACKEND=redis \
 REDIS_ADDR=127.0.0.1:6379 \
 go run .
 ```
 
-本地验证 Redis 队列时，把 `JOB_QUEUE_BACKEND=local` 改为 `JOB_QUEUE_BACKEND=redis` 即可；PostgreSQL 仍是唯一事实源。
+本地临时不启动 Redis 时，可把 `JOB_QUEUE_BACKEND=redis` 改为 `JOB_QUEUE_BACKEND=local`；PostgreSQL 仍是唯一事实源。
 
 前端：
 

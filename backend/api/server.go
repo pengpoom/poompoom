@@ -558,6 +558,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/business/admin/codes/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminUpdateBusinessCode)))
 	mux.Handle("GET /api/business/admin/codes/{id}/usages", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListBusinessCodeUsages)))
 	mux.Handle("DELETE /api/business/admin/codes/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminDeleteBusinessCode)))
+	mux.Handle("GET /api/business/admin/affiliate/referrals", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListBusinessAffiliateReferrals)))
 	mux.Handle("GET /api/business/me", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessMe)))
 	mux.Handle("PATCH /api/business/me/password", s.requireUIAuth(http.HandlerFunc(s.handleChangeBusinessMePassword)))
 	mux.Handle("GET /api/business/credit", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessCredit)))

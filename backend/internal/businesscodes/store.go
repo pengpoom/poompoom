@@ -123,11 +123,31 @@ type AffiliateProfile struct {
 }
 
 type AffiliateSummary struct {
-	Enabled                   bool             `json:"enabled"`
-	Profile                   AffiliateProfile `json:"profile,omitempty"`
-	ReferralCount             int64            `json:"referralCount"`
-	RegistrationRewardEnabled bool             `json:"registrationRewardEnabled"`
-	RegistrationRewardCredits int64            `json:"registrationRewardCredits"`
+	Enabled                   bool                `json:"enabled"`
+	Profile                   AffiliateProfile    `json:"profile,omitempty"`
+	ReferralCount             int64               `json:"referralCount"`
+	RecentReferrals           []AffiliateReferral `json:"recentReferrals,omitempty"`
+	RegistrationRewardEnabled bool                `json:"registrationRewardEnabled"`
+	RegistrationRewardCredits int64               `json:"registrationRewardCredits"`
+}
+
+type AffiliateReferral struct {
+	ID                   string `json:"id"`
+	ReferrerUserID       string `json:"referrerUserId"`
+	ReferrerUID          int64  `json:"referrerUid"`
+	ReferrerUsername     string `json:"referrerUsername"`
+	ReferrerEmail        string `json:"referrerEmail"`
+	ReferrerStatus       string `json:"referrerStatus"`
+	ReferredUserID       string `json:"referredUserId"`
+	ReferredUID          int64  `json:"referredUid"`
+	ReferredUsername     string `json:"referredUsername"`
+	ReferredEmail        string `json:"referredEmail"`
+	ReferredStatus       string `json:"referredStatus"`
+	AffiliateCodePreview string `json:"affiliateCodePreview"`
+	Status               string `json:"status"`
+	RewardLedgerID       string `json:"rewardLedgerId,omitempty"`
+	RewardCredits        int64  `json:"rewardCredits"`
+	CreatedAt            string `json:"createdAt"`
 }
 
 type Store struct {
@@ -560,10 +580,15 @@ func (s *Store) AffiliateSummary(ctx context.Context, userID string, enabled boo
 	if err := s.db.QueryRowContext(ctx, s.rebind(`SELECT COUNT(*) FROM business_affiliate_referrals WHERE referrer_user_id = ?`), userID).Scan(&referralCount); err != nil {
 		return AffiliateSummary{}, err
 	}
+	recentReferrals, err := s.ListAffiliateReferrals(ctx, AffiliateReferralFilters{ReferrerUserID: userID}, 5)
+	if err != nil {
+		return AffiliateSummary{}, err
+	}
 	return AffiliateSummary{
 		Enabled:                   true,
 		Profile:                   profile,
 		ReferralCount:             referralCount,
+		RecentReferrals:           recentReferrals,
 		RegistrationRewardEnabled: registrationRewardEnabled,
 		RegistrationRewardCredits: registrationRewardCredits,
 	}, nil
@@ -572,6 +597,7 @@ func (s *Store) AffiliateSummary(ctx context.Context, userID string, enabled boo
 type AffiliateBindResult struct {
 	Bound          bool
 	ReferrerUserID string
+	ReferralID     string
 }
 
 func (s *Store) BindAffiliateReferralWithTx(ctx context.Context, tx *sql.Tx, affiliateCode string, referredUserID string) (AffiliateBindResult, error) {
@@ -597,11 +623,12 @@ func (s *Store) BindAffiliateReferralWithTx(ctx context.Context, tx *sql.Tx, aff
 	if strings.TrimSpace(referrerUserID) == "" || referrerUserID == referredUserID {
 		return AffiliateBindResult{}, nil
 	}
+	referralID := newID("aff_ref")
 	result, err := tx.ExecContext(ctx, s.rebind(`INSERT INTO business_affiliate_referrals(
 			id, referrer_user_id, referred_user_id, affiliate_code_preview, status, created_at
 		) VALUES(?, ?, ?, ?, ?, ?)
 		ON CONFLICT(referred_user_id) DO NOTHING`),
-		newID("aff_ref"),
+		referralID,
 		referrerUserID,
 		referredUserID,
 		codePreview,
@@ -618,7 +645,98 @@ func (s *Store) BindAffiliateReferralWithTx(ctx context.Context, tx *sql.Tx, aff
 	if rowsAffected == 0 {
 		return AffiliateBindResult{}, nil
 	}
-	return AffiliateBindResult{Bound: true, ReferrerUserID: referrerUserID}, nil
+	return AffiliateBindResult{Bound: true, ReferrerUserID: referrerUserID, ReferralID: referralID}, nil
+}
+
+type AffiliateReferralFilters struct {
+	ReferrerUserID string
+}
+
+func (s *Store) ListAffiliateReferrals(ctx context.Context, filters AffiliateReferralFilters, limit int) ([]AffiliateReferral, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	where := ""
+	args := []any{}
+	if referrerUserID := strings.TrimSpace(filters.ReferrerUserID); referrerUserID != "" {
+		where = "WHERE r.referrer_user_id = ?"
+		args = append(args, referrerUserID)
+	}
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, s.rebind(`SELECT
+			r.id,
+			r.referrer_user_id,
+			COALESCE(referrer.uid, 0),
+			COALESCE(referrer.username, ''),
+			COALESCE(referrer.email, ''),
+			COALESCE(referrer.status, ''),
+			r.referred_user_id,
+			COALESCE(referred.uid, 0),
+			COALESCE(referred.username, ''),
+			COALESCE(referred.email, ''),
+			COALESCE(referred.status, ''),
+			r.affiliate_code_preview,
+			r.status,
+			COALESCE(r.reward_ledger_id, ''),
+			COALESCE(r.reward_credits, 0),
+			r.created_at
+		FROM business_affiliate_referrals AS r
+		LEFT JOIN business_users AS referrer ON referrer.id = r.referrer_user_id
+		LEFT JOIN business_users AS referred ON referred.id = r.referred_user_id
+		`+where+`
+		ORDER BY r.created_at DESC, r.id DESC
+		LIMIT ?`), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []AffiliateReferral{}
+	for rows.Next() {
+		var item AffiliateReferral
+		var createdAt sql.NullTime
+		if err := rows.Scan(
+			&item.ID,
+			&item.ReferrerUserID,
+			&item.ReferrerUID,
+			&item.ReferrerUsername,
+			&item.ReferrerEmail,
+			&item.ReferrerStatus,
+			&item.ReferredUserID,
+			&item.ReferredUID,
+			&item.ReferredUsername,
+			&item.ReferredEmail,
+			&item.ReferredStatus,
+			&item.AffiliateCodePreview,
+			&item.Status,
+			&item.RewardLedgerID,
+			&item.RewardCredits,
+			&createdAt,
+		); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = formatNullTime(createdAt)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (s *Store) MarkAffiliateReferralRewardWithTx(ctx context.Context, tx *sql.Tx, referralID string, ledgerID string, rewardCredits int64) error {
+	referralID = strings.TrimSpace(referralID)
+	ledgerID = strings.TrimSpace(ledgerID)
+	if referralID == "" || ledgerID == "" || rewardCredits <= 0 {
+		return nil
+	}
+	if tx == nil {
+		return fmt.Errorf("transaction is required")
+	}
+	_, err := tx.ExecContext(ctx, s.rebind(`UPDATE business_affiliate_referrals
+		SET reward_ledger_id = ?, reward_credits = ?
+		WHERE id = ?`), ledgerID, rewardCredits, referralID)
+	return err
 }
 
 func (s *Store) consume(ctx context.Context, rawCode string, userID string, allowedTypes []string, usageContext string, shouldGrantCredits func(Code) bool, writeCredit func(context.Context, *sql.Tx, string, int64, string) (string, error)) (ConsumeResult, error) {

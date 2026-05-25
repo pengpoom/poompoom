@@ -216,7 +216,11 @@ func (s *Server) handleRegisterBusinessUser(w http.ResponseWriter, r *http.Reque
 				return err
 			}
 			if bindResult.Bound && settings.Affiliate.RegistrationRewardEnabled && settings.Affiliate.RegistrationRewardCredits > 0 {
-				if _, err := creditStore.AddWithTx(ctx, tx, bindResult.ReferrerUserID, settings.Affiliate.RegistrationRewardCredits, businesscredits.ReasonAffiliateRegistration, false); err != nil {
+				entry, err := creditStore.AddWithTx(ctx, tx, bindResult.ReferrerUserID, settings.Affiliate.RegistrationRewardCredits, businesscredits.ReasonAffiliateRegistration, false)
+				if err != nil {
+					return err
+				}
+				if err := affiliateStore.MarkAffiliateReferralRewardWithTx(ctx, tx, bindResult.ReferralID, entry.ID, settings.Affiliate.RegistrationRewardCredits); err != nil {
 					return err
 				}
 			}

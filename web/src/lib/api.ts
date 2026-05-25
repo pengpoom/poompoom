@@ -957,8 +957,27 @@ export type BusinessAffiliateSummary = {
     updatedAt: string;
   };
   referralCount: number;
+  recentReferrals?: BusinessAffiliateReferral[];
   registrationRewardEnabled: boolean;
   registrationRewardCredits: number;
+};
+export type BusinessAffiliateReferral = {
+  id: string;
+  referrerUserId: string;
+  referrerUid: number;
+  referrerUsername: string;
+  referrerEmail: string;
+  referrerStatus: string;
+  referredUserId: string;
+  referredUid: number;
+  referredUsername: string;
+  referredEmail: string;
+  referredStatus: string;
+  affiliateCodePreview: string;
+  status: string;
+  rewardLedgerId?: string;
+  rewardCredits: number;
+  createdAt: string;
 };
 
 export type BusinessStorageReport = {
@@ -1532,6 +1551,12 @@ export async function redeemBusinessCode(code: string) {
 
 export async function fetchBusinessAffiliateSummary() {
   return httpRequest<BusinessAffiliateSummary>("/api/business/affiliate");
+}
+
+export async function fetchAdminBusinessAffiliateReferrals(limit = 100) {
+  return httpRequest<{ items: BusinessAffiliateReferral[] }>(
+    `/api/business/admin/affiliate/referrals${buildQuery({ limit })}`,
+  );
 }
 
 export async function fetchBusinessUsage(query: BusinessUsageQuery = {}) {

@@ -168,6 +168,21 @@ func (s *Server) handleAdminListBusinessCodeUsages(w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
+func (s *Server) handleAdminListBusinessAffiliateReferrals(w http.ResponseWriter, r *http.Request) {
+	store, err := s.newBusinessCodeStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "code store failed"})
+		return
+	}
+	defer store.Close()
+	items, err := store.ListAffiliateReferrals(r.Context(), businesscodes.AffiliateReferralFilters{}, intQuery(r, "limit", 100))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
 func (s *Server) handleRedeemBusinessCode(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Code string `json:"code"`

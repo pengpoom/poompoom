@@ -186,8 +186,8 @@ func TestLoadDefaultsToPostgresDatabase(t *testing.T) {
 	if cfg.Database.MaxOpenConns <= 1 || cfg.Database.MaxIdleConns <= 1 {
 		t.Fatalf("database pool = %d/%d, want PostgreSQL pool defaults", cfg.Database.MaxOpenConns, cfg.Database.MaxIdleConns)
 	}
-	if cfg.JobQueue.Backend != "local" {
-		t.Fatalf("JobQueue.Backend = %q, want local", cfg.JobQueue.Backend)
+	if cfg.JobQueue.Backend != "redis" {
+		t.Fatalf("JobQueue.Backend = %q, want redis", cfg.JobQueue.Backend)
 	}
 }
 

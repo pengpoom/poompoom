@@ -45,6 +45,22 @@ function ledgerReasonText(reason: string) {
   return reason || "-";
 }
 
+function maskedUserText(username?: string, email?: string, uid?: number) {
+  const name = String(username || "").trim();
+  if (name) {
+    return name;
+  }
+  const rawEmail = String(email || "").trim();
+  const at = rawEmail.indexOf("@");
+  if (at > 1) {
+    return `${rawEmail.slice(0, 2)}***${rawEmail.slice(at)}`;
+  }
+  if (Number(uid || 0) > 0) {
+    return `用户 ${uid}`;
+  }
+  return "-";
+}
+
 function defaultLedgerPage(): PaginationMeta {
   return { page: 1, pageSize: 10, total: 0 };
 }
@@ -205,6 +221,28 @@ export default function CreditsPage() {
                   <Copy className="size-4" />
                   复制链接
                 </Button>
+              </div>
+              <div className="mt-4 border-t border-[var(--app-border)] pt-4">
+                <div className="mb-3 text-xs font-medium text-[var(--app-text-muted)]">最近邀请</div>
+                <div className="grid gap-2">
+                  {(affiliate.recentReferrals || []).length === 0 ? (
+                    <div className={cn(adminSubPanelClass, "px-4 py-3 text-sm text-[var(--app-text-muted)]")}>暂无邀请记录</div>
+                  ) : (
+                    (affiliate.recentReferrals || []).map((item) => (
+                      <div key={item.id} className={cn(adminSubPanelClass, "flex items-center justify-between gap-3 px-4 py-3")}>
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium text-[var(--app-text-primary)]">
+                            {maskedUserText(item.referredUsername, item.referredEmail, item.referredUid)}
+                          </div>
+                          <div className="mt-1 text-xs text-[var(--app-text-muted)]">{formatDateTime(item.createdAt)}</div>
+                        </div>
+                        <div className={cn("shrink-0 text-sm font-semibold", item.rewardCredits > 0 ? "text-emerald-600 dark:text-emerald-300" : "text-[var(--app-text-muted)]")}>
+                          {item.rewardCredits > 0 ? `+${numberText(item.rewardCredits)}` : "未奖励"}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </AdminPanel>
           ) : null}
