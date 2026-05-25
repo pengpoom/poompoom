@@ -343,7 +343,11 @@ export default function NotificationsPage() {
             </Button>
           </>
         }
-      />
+      >
+        <div className="mb-3 inline-flex size-12 items-center justify-center rounded-[var(--app-radius-lg)] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)]">
+          <Bell className="size-5" />
+        </div>
+      </AdminHeader>
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <AdminStatCard label="公告总数" value={items.length.toLocaleString()} icon={Bell} color="text-[var(--app-text-primary)]" />

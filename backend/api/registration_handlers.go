@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	"time"
 
 	"imagestudio/internal/businessauth"
+	"imagestudio/internal/businesscodes"
+	"imagestudio/internal/businesscredits"
 	"imagestudio/internal/businesssettings"
 )
 
@@ -36,6 +39,7 @@ func (s *Server) handleRegistrationOptions(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled":                     settings.User.Registration && emailConfigured,
 		"registration":                settings.User.Registration,
+		"registrationCodeRequired":    settings.User.RegistrationCodeRequired,
 		"emailVerificationConfigured": emailConfigured,
 		"codeTTLSeconds":              int(registrationVerificationTTL / time.Second),
 		"codeCooldownSeconds":         int(registrationVerificationCooldown / time.Second),
@@ -111,10 +115,13 @@ func (s *Server) handleSendRegistrationVerificationCode(w http.ResponseWriter, r
 
 func (s *Server) handleRegisterBusinessUser(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Email    string `json:"email"`
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Code     string `json:"code"`
+		Email         string `json:"email"`
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		Code          string `json:"code"`
+		InviteCode    string `json:"inviteCode"`
+		RegisterCode  string `json:"registerCode"`
+		AffiliateCode string `json:"affiliateCode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
@@ -128,6 +135,25 @@ func (s *Server) handleRegisterBusinessUser(w http.ResponseWriter, r *http.Reque
 	if len(strings.TrimSpace(body.Password)) < 6 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "password must be at least 6 characters"})
 		return
+	}
+	registrationCode := firstNonEmpty(body.RegisterCode, body.InviteCode)
+	var codeStore *businesscodes.Store
+	var err error
+	if settings.User.RegistrationCodeRequired {
+		if strings.TrimSpace(registrationCode) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "registration code is required"})
+			return
+		}
+		codeStore, err = s.newBusinessCodeStore()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "code store failed"})
+			return
+		}
+		defer codeStore.Close()
+		if _, err := codeStore.ValidateRegistrationCode(r.Context(), registrationCode); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": businessCodeErrorMessage(err)})
+			return
+		}
 	}
 	store, err := s.newBusinessAuthStore()
 	if err != nil {
@@ -151,7 +177,52 @@ func (s *Server) handleRegisterBusinessUser(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	user, err := store.CreateUserWithUsername(r.Context(), body.Email, body.Username, body.Password, businessauth.RoleUser)
+	creditStore, err := s.newBusinessCreditStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
+		return
+	}
+	defer creditStore.Close()
+	user, err := store.CreateUserWithUsernameTx(r.Context(), body.Email, body.Username, body.Password, businessauth.RoleUser, func(ctx context.Context, tx *sql.Tx, user businessauth.User) error {
+		if settings.User.DefaultCredits > 0 {
+			if _, err := creditStore.AddWithTx(ctx, tx, user.ID, settings.User.DefaultCredits, "registration_default", false); err != nil {
+				return err
+			}
+		}
+		if settings.User.RegistrationCodeRequired && codeStore != nil {
+			_, err := codeStore.ConsumeRegistrationCodeWithTx(ctx, tx, registrationCode, user.ID, func(ctx context.Context, tx *sql.Tx, userID string, amount int64, reason string) (string, error) {
+				entry, err := creditStore.AddWithTx(ctx, tx, userID, amount, reason, false)
+				if err != nil {
+					return "", err
+				}
+				return entry.ID, nil
+			})
+			if err != nil {
+				return err
+			}
+		}
+		if settings.Affiliate.Enabled && strings.TrimSpace(body.AffiliateCode) != "" {
+			affiliateStore := codeStore
+			if affiliateStore == nil {
+				var err error
+				affiliateStore, err = s.newBusinessCodeStore()
+				if err != nil {
+					return err
+				}
+				defer affiliateStore.Close()
+			}
+			bindResult, err := affiliateStore.BindAffiliateReferralWithTx(ctx, tx, body.AffiliateCode, user.ID)
+			if err != nil {
+				return err
+			}
+			if bindResult.Bound && settings.Affiliate.RegistrationRewardEnabled && settings.Affiliate.RegistrationRewardCredits > 0 {
+				if _, err := creditStore.AddWithTx(ctx, tx, bindResult.ReferrerUserID, settings.Affiliate.RegistrationRewardCredits, businesscredits.ReasonAffiliateRegistration, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
 	if errors.Is(err, businessauth.ErrUserAlreadyExists) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "email or username already exists"})
 		return
@@ -161,20 +232,8 @@ func (s *Server) handleRegisterBusinessUser(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": businessCodeErrorMessage(err)})
 		return
-	}
-	if settings.User.DefaultCredits > 0 {
-		creditStore, err := s.newBusinessCreditStore()
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
-			return
-		}
-		defer creditStore.Close()
-		if _, _, err := creditStore.SetBalance(r.Context(), user.ID, settings.User.DefaultCredits, "registration_default"); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
-		}
 	}
 	token, session, err := s.createAuthSession(r.Context(), loginAccount{
 		Username: user.Username,

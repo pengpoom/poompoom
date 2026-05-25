@@ -8,9 +8,11 @@ import { usePublicSiteSettings } from "@/lib/site-settings";
 import { AUTH_STATE_CHANGED_EVENT, clearStoredAuthKey, getStoredAuthRole, type AuthRole } from "@/store/auth";
 
 const AccountsPage = lazy(() => import("@/app/accounts/page"));
+const AffiliatePage = lazy(() => import("@/app/affiliate/page"));
 const AdminUsagePage = lazy(() => import("@/app/admin-usage/page"));
 const AssetsPage = lazy(() => import("@/app/assets/page"));
 const CommunityPage = lazy(() => import("@/app/community/page"));
+const CodesPage = lazy(() => import("@/app/codes/page"));
 const CreditsPage = lazy(() => import("@/app/credits/page"));
 const DashboardPage = lazy(() => import("@/app/dashboard/page"));
 const ForgotPasswordPage = lazy(() => import("@/app/forgot-password/page"));
@@ -230,6 +232,8 @@ export default function App() {
             <Route path="/admin/usage" element={<ProtectedRoute role={role} adminOnly><AdminUsagePage /></ProtectedRoute>} />
             <Route path="/admin/operations" element={<ProtectedRoute role={role} adminOnly><OperationsPage /></ProtectedRoute>} />
             <Route path="/notifications" element={<ProtectedRoute role={role} adminOnly><NotificationsPage /></ProtectedRoute>} />
+            <Route path="/codes" element={<ProtectedRoute role={role} adminOnly><CodesPage /></ProtectedRoute>} />
+            <Route path="/affiliate" element={<ProtectedRoute role={role} adminOnly><AffiliatePage /></ProtectedRoute>} />
             <Route path="/users" element={<ProtectedRoute role={role} adminOnly><UsersPage /></ProtectedRoute>} />
             <Route path="/users/:id" element={<ProtectedRoute role={role} adminOnly><UserDetailPage /></ProtectedRoute>} />
             <Route path="/storage" element={<ProtectedRoute role={role} adminOnly><StoragePage /></ProtectedRoute>} />

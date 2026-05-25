@@ -11,6 +11,7 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
+  Share2,
   UserRound,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -88,6 +89,7 @@ function defaultSystemSettings(): BusinessSystemSettings {
       defaultRole: "user",
       defaultCredits: 20,
       registration: false,
+      registrationCodeRequired: false,
     },
     email: {
       smtpHost: "",
@@ -120,6 +122,11 @@ function defaultSystemSettings(): BusinessSystemSettings {
     },
     security: {
       imageFileAuthRequired: true,
+    },
+    affiliate: {
+      enabled: false,
+      registrationRewardEnabled: false,
+      registrationRewardCredits: 0,
     },
   };
 }
@@ -156,6 +163,7 @@ function normalizeSettings(settings: BusinessSystemSettings): BusinessSystemSett
     billing: { ...defaults.billing, ...settings.billing },
     runtime: { ...defaults.runtime, ...settings.runtime },
     security: { ...defaults.security, ...settings.security },
+    affiliate: { ...defaults.affiliate, ...settings.affiliate },
   };
   const maxCount = normalizePositiveInt(next.generation.maxCount, 8, 8);
   return {
@@ -171,6 +179,7 @@ function normalizeSettings(settings: BusinessSystemSettings): BusinessSystemSett
       ...next.user,
       defaultRole: next.user.defaultRole === "admin" ? "admin" : "user",
       defaultCredits: normalizeNonNegativeInt(next.user.defaultCredits),
+      registrationCodeRequired: Boolean(next.user.registration) && Boolean(next.user.registrationCodeRequired),
     },
     email: {
       ...next.email,
@@ -202,6 +211,12 @@ function normalizeSettings(settings: BusinessSystemSettings): BusinessSystemSett
       maxUserActiveJobs: Math.min(10000, normalizeNonNegativeInt(next.runtime.maxUserActiveJobs)),
       maxProviderRunningJobs: Math.min(10000, normalizeNonNegativeInt(next.runtime.maxProviderRunningJobs)),
       maxQueuedJobs: Math.min(1000000, normalizeNonNegativeInt(next.runtime.maxQueuedJobs)),
+    },
+    affiliate: {
+      ...next.affiliate,
+      enabled: Boolean(next.affiliate.enabled),
+      registrationRewardEnabled: Boolean(next.affiliate.registrationRewardEnabled),
+      registrationRewardCredits: Math.min(1000000000, normalizeNonNegativeInt(next.affiliate.registrationRewardCredits)),
     },
   };
 }
@@ -550,10 +565,85 @@ export default function SettingsPage() {
                 onCheckedChange={(checked) =>
                   setSettings((current) => ({
                     ...current,
-                    user: { ...current.user, registration: checked },
+                    user: {
+                      ...current.user,
+                      registration: checked,
+                      registrationCodeRequired: checked ? current.user.registrationCodeRequired : false,
+                    },
                   }))
                 }
               />
+              <ToggleRow
+                label="注册需要注册码"
+                hint="需要先开启开放注册。开启后，注册页必须填写有效邀请码或优惠码。"
+                checked={settings.user.registration && settings.user.registrationCodeRequired}
+                disabled={!settings.user.registration}
+                onCheckedChange={(checked) =>
+                  setSettings((current) => ({
+                    ...current,
+                    user: {
+                      ...current.user,
+                      registrationCodeRequired: current.user.registration ? checked : false,
+                    },
+                  }))
+                }
+              />
+            </SettingSection>
+
+            <SettingSection
+              title="邀请返利"
+              description="控制用户邀请码入口，以及邀请注册成功后的固定奖励。"
+              icon={Share2}
+            >
+              <ToggleRow
+                label="开启邀请入口"
+                hint="开启后，用户积分中心会展示邀请码、邀请链接和邀请人数。"
+                checked={settings.affiliate.enabled}
+                onCheckedChange={(checked) =>
+                  setSettings((current) => ({
+                    ...current,
+                    affiliate: {
+                      ...current.affiliate,
+                      enabled: checked,
+                      registrationRewardEnabled: checked ? current.affiliate.registrationRewardEnabled : false,
+                    },
+                  }))
+                }
+              />
+              <ToggleRow
+                label="邀请注册奖励"
+                hint="开启后，被邀请用户注册成功并绑定关系时，系统会给邀请人增加固定点数。"
+                checked={settings.affiliate.enabled && settings.affiliate.registrationRewardEnabled}
+                disabled={!settings.affiliate.enabled}
+                onCheckedChange={(checked) =>
+                  setSettings((current) => ({
+                    ...current,
+                    affiliate: {
+                      ...current.affiliate,
+                      registrationRewardEnabled: current.affiliate.enabled ? checked : false,
+                    },
+                  }))
+                }
+              />
+              <Field label="邀请注册奖励点数" hint="每成功邀请一个新用户注册，给邀请人增加的点数。填 0 表示不奖励。">
+                <Input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={settings.affiliate.registrationRewardCredits}
+                  disabled={!settings.affiliate.enabled || !settings.affiliate.registrationRewardEnabled}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      affiliate: {
+                        ...current.affiliate,
+                        registrationRewardCredits: Number(event.target.value),
+                      },
+                    }))
+                  }
+                  className={settingsInputClass}
+                />
+              </Field>
             </SettingSection>
 
             <SettingSection

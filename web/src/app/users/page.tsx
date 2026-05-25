@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Coins, Eye, KeyRound, LoaderCircle, Plus, RefreshCw, RotateCcw, Search, Trash2, UserRound } from "lucide-react";
+import { CheckCircle2, Coins, Eye, KeyRound, LoaderCircle, Plus, RefreshCw, RotateCcw, Search, Trash2, UserRound, UsersRound } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
@@ -397,7 +397,11 @@ export default function UsersPage() {
             </Button>
             </>
           }
-        />
+        >
+          <div className="mb-3 inline-flex size-12 items-center justify-center rounded-[var(--app-radius-lg)] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)]">
+            <UsersRound className="size-5" />
+          </div>
+        </AdminHeader>
 
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {[

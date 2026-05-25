@@ -24,6 +24,7 @@ import (
 	"imagestudio/internal/accounts"
 	"imagestudio/internal/buildinfo"
 	"imagestudio/internal/businessauth"
+	"imagestudio/internal/businesscodes"
 	"imagestudio/internal/businesscredits"
 	"imagestudio/internal/businessimage"
 	"imagestudio/internal/businessjobs"
@@ -199,6 +200,13 @@ func (s *Server) newBusinessCreditStore() (*businesscredits.Store, error) {
 		return businesscredits.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
 	}
 	return businesscredits.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessCodeStore() (*businesscodes.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businesscodes.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businesscodes.NewStore(s.cfg)
 }
 
 func (s *Server) newBusinessJobStore() (*businessjobs.Store, error) {
@@ -544,9 +552,18 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/business/admin/notifications", s.requireAdminAuth(http.HandlerFunc(s.handleAdminCreateBusinessNotification)))
 	mux.Handle("PUT /api/business/admin/notifications/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminUpdateBusinessNotification)))
 	mux.Handle("DELETE /api/business/admin/notifications/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminDeleteBusinessNotification)))
+	mux.Handle("GET /api/business/admin/codes", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListBusinessCodes)))
+	mux.Handle("POST /api/business/admin/codes", s.requireAdminAuth(http.HandlerFunc(s.handleAdminCreateBusinessCode)))
+	mux.Handle("POST /api/business/admin/codes/batch-status", s.requireAdminAuth(http.HandlerFunc(s.handleAdminBatchUpdateBusinessCodeStatus)))
+	mux.Handle("PUT /api/business/admin/codes/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminUpdateBusinessCode)))
+	mux.Handle("GET /api/business/admin/codes/{id}/usages", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListBusinessCodeUsages)))
+	mux.Handle("DELETE /api/business/admin/codes/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminDeleteBusinessCode)))
 	mux.Handle("GET /api/business/me", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessMe)))
 	mux.Handle("PATCH /api/business/me/password", s.requireUIAuth(http.HandlerFunc(s.handleChangeBusinessMePassword)))
 	mux.Handle("GET /api/business/credit", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessCredit)))
+	mux.Handle("GET /api/business/credit/ledger", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessCreditLedger)))
+	mux.Handle("POST /api/business/credit/redeem", s.requireUIAuth(http.HandlerFunc(s.handleRedeemBusinessCode)))
+	mux.Handle("GET /api/business/affiliate", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessAffiliateSummary)))
 	mux.Handle("GET /api/business/notifications", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessNotifications)))
 	mux.Handle("POST /api/business/notifications/read", s.requireUIAuth(http.HandlerFunc(s.handleMarkBusinessNotificationsRead)))
 	mux.Handle("GET /api/business/usage", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessUsage)))

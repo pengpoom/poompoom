@@ -28,7 +28,7 @@ export function EmptyState({ inspirationExamples, composer, onApplyPromptExample
           <Sparkles className="size-5" />
         </div>
         <h1 className="mt-6 text-3xl font-semibold tracking-tight text-[var(--app-text-primary)] lg:text-5xl">
-          把想法变成画面。
+          把想法变成画面
         </h1>
       </div>
 

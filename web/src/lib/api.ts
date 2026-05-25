@@ -97,6 +97,7 @@ export type BusinessSystemSettings = {
     defaultRole: AuthRole;
     defaultCredits: number;
     registration: boolean;
+    registrationCodeRequired: boolean;
   };
   email: {
     smtpHost: string;
@@ -129,6 +130,11 @@ export type BusinessSystemSettings = {
   };
   security: {
     imageFileAuthRequired: boolean;
+  };
+  affiliate: {
+    enabled: boolean;
+    registrationRewardEnabled: boolean;
+    registrationRewardCredits: number;
   };
 };
 export type BusinessSystemRuntime = {
@@ -853,6 +859,7 @@ export type LoginResult = {
 export type RegistrationOptions = {
   enabled: boolean;
   registration: boolean;
+  registrationCodeRequired: boolean;
   emailVerificationConfigured: boolean;
   codeTTLSeconds: number;
   codeCooldownSeconds: number;
@@ -893,6 +900,65 @@ export type BusinessCreditSummary = {
   balance: number;
   spent: number;
   updated_at?: string;
+};
+export type BusinessCodeType = "redeem" | "promo" | "invite";
+export type BusinessCodeStatus = "active" | "disabled" | "expired";
+export type BusinessCode = {
+  id: string;
+  codePreview: string;
+  type: BusinessCodeType;
+  title: string;
+  credits: number;
+  maxUses: number;
+  usedCount: number;
+  status: BusinessCodeStatus;
+  startsAt?: string;
+  expiresAt?: string;
+  createdBy: string;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+};
+export type BusinessCodeInput = {
+  code?: string;
+  type: BusinessCodeType;
+  title: string;
+  credits: number;
+  maxUses: number;
+  status: BusinessCodeStatus;
+  startsAt?: string;
+  expiresAt?: string;
+  note?: string;
+};
+export type BusinessCodeMutationResponse = {
+  item: BusinessCode;
+  code?: string;
+};
+export type BusinessCodeUsage = {
+  id: string;
+  codeId: string;
+  userId: string;
+  uid: number;
+  username: string;
+  email: string;
+  userStatus: string;
+  context: string;
+  creditsGranted: number;
+  ledgerId: string;
+  createdAt: string;
+};
+export type BusinessAffiliateSummary = {
+  enabled: boolean;
+  profile?: {
+    userId: string;
+    codePreview: string;
+    enabled: boolean;
+    createdAt: string;
+    updatedAt: string;
+  };
+  referralCount: number;
+  registrationRewardEnabled: boolean;
+  registrationRewardCredits: number;
 };
 
 export type BusinessStorageReport = {
@@ -1268,6 +1334,8 @@ export async function registerBusinessUser(payload: {
   username?: string;
   password: string;
   code: string;
+  registerCode?: string;
+  affiliateCode?: string;
 }): Promise<LoginResult> {
   return httpRequest<LoginResult>("/auth/register", {
     method: "POST",
@@ -1276,6 +1344,8 @@ export async function registerBusinessUser(payload: {
       username: payload.username?.trim() || undefined,
       password: payload.password,
       code: payload.code.trim(),
+      registerCode: payload.registerCode?.trim() || undefined,
+      affiliateCode: payload.affiliateCode?.trim() || undefined,
     },
     redirectOnUnauthorized: false,
   });
@@ -1390,7 +1460,7 @@ export async function markBusinessNotificationsRead(ids: string[]) {
 function buildQuery(params: Record<string, string | number | undefined>) {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === "") {
+    if (value === undefined || value === "" || value === "all") {
       return;
     }
     search.set(key, String(value));
@@ -1434,6 +1504,34 @@ export async function changeBusinessMePassword(payload: {
 
 export async function fetchBusinessCredit() {
   return httpRequest<BusinessCreditSummary>("/api/business/credit");
+}
+
+export async function fetchBusinessCreditLedger(query: {
+  page?: number;
+  pageSize?: number;
+} = {}) {
+  return httpRequest<{ items: BusinessCreditLedgerEntry[]; page: PaginationMeta }>(
+    `/api/business/credit/ledger${buildQuery(query)}`,
+  );
+}
+
+export async function redeemBusinessCode(code: string) {
+  return httpRequest<{
+    ok: boolean;
+    result: {
+      creditsGranted: number;
+      ledgerId?: string;
+      code: BusinessCode;
+    };
+    credit: BusinessCreditSummary;
+  }>("/api/business/credit/redeem", {
+    method: "POST",
+    body: { code: String(code || "").trim() },
+  });
+}
+
+export async function fetchBusinessAffiliateSummary() {
+  return httpRequest<BusinessAffiliateSummary>("/api/business/affiliate");
 }
 
 export async function fetchBusinessUsage(query: BusinessUsageQuery = {}) {
@@ -1547,6 +1645,64 @@ export async function updateBusinessSystemSettings(settings: BusinessSystemSetti
     method: "PUT",
     body: { settings },
   });
+}
+
+export async function updateBusinessAffiliateSettings(affiliate: BusinessSystemSettings["affiliate"]) {
+  const current = await fetchBusinessSystemSettings();
+  return updateBusinessSystemSettings({
+    ...current.settings,
+    affiliate: {
+      ...current.settings.affiliate,
+      ...affiliate,
+    },
+  });
+}
+
+export async function fetchBusinessCodes(query: {
+  type?: BusinessCodeType | "registration" | "all";
+  status?: BusinessCodeStatus | "all";
+  search?: string;
+} = {}) {
+  return httpRequest<{ items: BusinessCode[] }>(
+    `/api/business/admin/codes${buildQuery(query)}`,
+  );
+}
+
+export async function createBusinessCode(payload: BusinessCodeInput) {
+  return httpRequest<BusinessCodeMutationResponse>("/api/business/admin/codes", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateBusinessCode(id: string, payload: Omit<BusinessCodeInput, "code" | "type">) {
+  return httpRequest<BusinessCodeMutationResponse>(
+    `/api/business/admin/codes/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      body: payload,
+    },
+  );
+}
+
+export async function updateBusinessCodeStatusBatch(ids: string[], status: BusinessCodeStatus) {
+  return httpRequest<{ ok: boolean; updated: number }>("/api/business/admin/codes/batch-status", {
+    method: "POST",
+    body: { ids, status },
+  });
+}
+
+export async function fetchBusinessCodeUsages(id: string) {
+  return httpRequest<{ items: BusinessCodeUsage[] }>(
+    `/api/business/admin/codes/${encodeURIComponent(id)}/usages`,
+  );
+}
+
+export async function deleteBusinessCode(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/admin/codes/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
 }
 
 export async function createBusinessUser(payload: {

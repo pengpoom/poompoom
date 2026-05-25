@@ -23,6 +23,7 @@ type Settings struct {
 	Billing    BillingSettings    `json:"billing"`
 	Runtime    RuntimeSettings    `json:"runtime"`
 	Security   SecuritySettings   `json:"security"`
+	Affiliate  AffiliateSettings  `json:"affiliate"`
 }
 
 type SiteSettings struct {
@@ -33,9 +34,10 @@ type SiteSettings struct {
 }
 
 type UserSettings struct {
-	DefaultRole    string `json:"defaultRole"`
-	DefaultCredits int64  `json:"defaultCredits"`
-	Registration   bool   `json:"registration"`
+	DefaultRole              string `json:"defaultRole"`
+	DefaultCredits           int64  `json:"defaultCredits"`
+	Registration             bool   `json:"registration"`
+	RegistrationCodeRequired bool   `json:"registrationCodeRequired"`
 }
 
 type EmailSettings struct {
@@ -73,6 +75,12 @@ type RuntimeSettings struct {
 
 type SecuritySettings struct {
 	ImageFileAuthRequired bool `json:"imageFileAuthRequired"`
+}
+
+type AffiliateSettings struct {
+	Enabled                   bool  `json:"enabled"`
+	RegistrationRewardEnabled bool  `json:"registrationRewardEnabled"`
+	RegistrationRewardCredits int64 `json:"registrationRewardCredits"`
 }
 
 type RuntimeInfo struct {
@@ -193,9 +201,10 @@ func Defaults() Settings {
 			ContactInfo: "",
 		},
 		User: UserSettings{
-			DefaultRole:    "user",
-			DefaultCredits: 20,
-			Registration:   false,
+			DefaultRole:              "user",
+			DefaultCredits:           20,
+			Registration:             false,
+			RegistrationCodeRequired: false,
 		},
 		Email: EmailSettings{
 			SMTPHost: "",
@@ -229,6 +238,11 @@ func Defaults() Settings {
 		Security: SecuritySettings{
 			ImageFileAuthRequired: true,
 		},
+		Affiliate: AffiliateSettings{
+			Enabled:                   false,
+			RegistrationRewardEnabled: false,
+			RegistrationRewardCredits: 0,
+		},
 	}
 }
 
@@ -248,6 +262,9 @@ func Normalize(settings Settings) Settings {
 	settings.User.DefaultRole = normalizeRole(settings.User.DefaultRole)
 	if settings.User.DefaultCredits < 0 {
 		settings.User.DefaultCredits = 0
+	}
+	if !settings.User.Registration {
+		settings.User.RegistrationCodeRequired = false
 	}
 	settings.Email.SMTPHost = strings.TrimSpace(settings.Email.SMTPHost)
 	if settings.Email.SMTPPort <= 0 {
@@ -324,6 +341,12 @@ func Normalize(settings Settings) Settings {
 	}
 	if settings.Runtime.MaxQueuedJobs > 1000000 {
 		settings.Runtime.MaxQueuedJobs = 1000000
+	}
+	if settings.Affiliate.RegistrationRewardCredits < 0 {
+		settings.Affiliate.RegistrationRewardCredits = 0
+	}
+	if settings.Affiliate.RegistrationRewardCredits > 1000000000 {
+		settings.Affiliate.RegistrationRewardCredits = 1000000000
 	}
 	return settings
 }

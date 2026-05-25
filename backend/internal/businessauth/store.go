@@ -87,6 +87,8 @@ type BootstrapUser struct {
 	Role     string
 }
 
+type CreateUserTxHook func(context.Context, *sql.Tx, User) error
+
 type Store struct {
 	db     *sql.DB
 	driver string
@@ -607,6 +609,10 @@ func (s *Store) ConsumeEmailVerificationCode(ctx context.Context, email, purpose
 }
 
 func (s *Store) CreateUserWithUsername(ctx context.Context, email, username, password, role string) (User, error) {
+	return s.CreateUserWithUsernameTx(ctx, email, username, password, role, nil)
+}
+
+func (s *Store) CreateUserWithUsernameTx(ctx context.Context, email, username, password, role string, hook CreateUserTxHook) (User, error) {
 	rawEmail := strings.TrimSpace(email)
 	email = normalizeEmail(rawEmail)
 	if email == "" {
@@ -693,6 +699,11 @@ func (s *Store) CreateUserWithUsername(ctx context.Context, email, username, pas
 	)
 	if err != nil {
 		return User{}, err
+	}
+	if hook != nil {
+		if err := hook(ctx, tx, user); err != nil {
+			return User{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return User{}, err

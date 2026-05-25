@@ -148,6 +148,11 @@ type businessMeResponse struct {
 	Credit businesscredits.Summary `json:"credit"`
 }
 
+type businessCreditLedgerResponse struct {
+	Items []businesscredits.LedgerEntry `json:"items"`
+	Page  paginationMeta                `json:"page"`
+}
+
 type businessUserDetailResponse struct {
 	User               businessauth.User             `json:"user"`
 	Usage              businessimage.UserUsage       `json:"usage"`
@@ -1120,6 +1125,30 @@ func (s *Server) handleGetBusinessCredit(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Server) handleListBusinessCreditLedger(w http.ResponseWriter, r *http.Request) {
+	session, ok := requestAuthSession(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authorization is invalid"})
+		return
+	}
+	page, pageSize, offset := paginationFromQuery(r, "", 10, 50)
+	store, err := s.newBusinessCreditStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
+		return
+	}
+	defer store.Close()
+	items, total, err := store.BalanceLedgerEntriesPage(r.Context(), session.UserID, pageSize, offset)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, businessCreditLedgerResponse{
+		Items: items,
+		Page:  paginationMeta{Page: page, PageSize: pageSize, Total: total},
+	})
 }
 
 func (s *Server) handleSetBusinessUserCredit(w http.ResponseWriter, r *http.Request) {

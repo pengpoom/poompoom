@@ -43,6 +43,8 @@ export function AuthCard({
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [code, setCode] = useState("");
+  const [registerCode, setRegisterCode] = useState("");
+  const [affiliateCode, setAffiliateCode] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSendingCode, setIsSendingCode] = useState(false);
   const [codeCooldownLeft, setCodeCooldownLeft] = useState(0);
@@ -65,6 +67,7 @@ export function AuthCard({
             emailVerificationConfigured: false,
             codeTTLSeconds: 600,
             codeCooldownSeconds: 60,
+            registrationCodeRequired: false,
           });
         }
       }
@@ -73,6 +76,14 @@ export function AuthCard({
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const aff = params.get("aff") || "";
+    if (aff.trim()) {
+      setAffiliateCode(aff.trim());
+    }
   }, []);
 
   useEffect(() => {
@@ -86,6 +97,7 @@ export function AuthCard({
   }, [codeCooldownLeft]);
 
   const registrationOpen = Boolean(registrationOptions?.registration);
+  const registrationCodeRequired = Boolean(registrationOptions?.registrationCodeRequired);
   const canSendCode = !isSendingCode && codeCooldownLeft <= 0;
   const formDisabled = useMemo(
     () => isSubmitting || isSendingCode,
@@ -185,6 +197,10 @@ export function AuthCard({
       toast.error("请输入邮箱、密码、确认密码和验证码");
       return;
     }
+    if (registrationCodeRequired && !registerCode.trim()) {
+      toast.error("请输入注册码");
+      return;
+    }
     if (password.trim().length < 6) {
       toast.error("密码至少 6 位");
       return;
@@ -200,6 +216,8 @@ export function AuthCard({
         username: normalizedUsername || undefined,
         password,
         code,
+        registerCode,
+        affiliateCode,
       });
       toast.success("注册成功");
       await completeLogin(result, normalizedEmail);
@@ -341,6 +359,23 @@ export function AuthCard({
                 </Button>
               </div>
             </Field>
+            {registrationCodeRequired ? (
+              <Field label="注册码" htmlFor="register-code">
+                <Input
+                  id="register-code"
+                  name="register-code"
+                  value={registerCode}
+                  onChange={(event) => setRegisterCode(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      void handleRegister();
+                    }
+                  }}
+                  placeholder="邀请码或优惠码"
+                  className={inputClass}
+                />
+              </Field>
+            ) : null}
           </>
         ) : null}
 

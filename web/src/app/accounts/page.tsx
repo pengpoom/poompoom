@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { LoaderCircle, RefreshCcw, RefreshCw, Save, Shield } from "lucide-react";
+import { Activity, LoaderCircle, RefreshCcw, RefreshCw, Save } from "lucide-react";
 import { toast } from "sonner";
 
 import { AdminHeader, AdminPage } from "@/components/admin-layout";
@@ -135,7 +135,7 @@ export default function AccountsPage() {
           }
         >
           <div className="mb-3 inline-flex size-12 items-center justify-center rounded-[var(--app-radius-lg)] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)]">
-            <Shield className="size-5" />
+            <Activity className="size-5" />
           </div>
         </AdminHeader>
 

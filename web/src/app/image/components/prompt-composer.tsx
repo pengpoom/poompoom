@@ -331,7 +331,7 @@ export function PromptComposer({
     if (typeof window === "undefined") {
       return false;
     }
-    return window.matchMedia("(min-width: 1024px)").matches;
+    return window.matchMedia("(min-width: 768px)").matches;
   });
   const [isMobileComposerExpanded, setIsMobileComposerExpanded] = useState(hasComposerContent);
   const isMobileComposerCollapsed = !isMobileComposerExpanded;
@@ -355,7 +355,7 @@ export function PromptComposer({
   }, [hasComposerContent]);
 
   useEffect(() => {
-    const media = window.matchMedia("(min-width: 1024px)");
+    const media = window.matchMedia("(min-width: 768px)");
     const syncDesktopComposer = () => setIsDesktopComposer(media.matches);
 
     syncDesktopComposer();
@@ -401,7 +401,7 @@ export function PromptComposer({
       className={cn(
         inlinePlacement
           ? "relative z-10 mx-auto w-full max-w-[920px] px-0"
-          : "fixed inset-x-0 bottom-0 z-30 px-3 pb-4 sm:px-6 lg:absolute lg:inset-x-8 lg:bottom-8 lg:p-0",
+          : "fixed inset-x-0 bottom-0 z-30 px-3 pb-4 sm:px-6 md:absolute md:inset-x-8 md:bottom-8 md:p-0",
       )}
     >
       <div
@@ -411,8 +411,8 @@ export function PromptComposer({
           inlinePlacement
             ? "min-h-[132px]"
             : isComposerCollapsed
-              ? "min-h-[86px] lg:min-h-[118px]"
-              : "min-h-[164px] lg:min-h-[118px]",
+              ? "min-h-[86px] md:min-h-[118px]"
+              : "min-h-[164px] md:min-h-[118px]",
         )}
         onPointerDown={(event) => {
           if (inlinePlacement || !isComposerCollapsed) {
@@ -426,7 +426,7 @@ export function PromptComposer({
           <div
             className={cn(
               "hide-scrollbar mb-3 gap-3 overflow-x-auto border-b border-[var(--app-border)] pb-3",
-              showMobileExpandedSections ? "flex" : "hidden lg:flex",
+              showMobileExpandedSections ? "flex" : "hidden md:flex",
             )}
           >
             {sourceImages.map((item) => (
@@ -519,7 +519,7 @@ export function PromptComposer({
           )}
         </div>
 
-        <div className={cn("mt-3", inlinePlacement || showMobileExpandedSections ? "block" : "hidden lg:block")}>
+        <div className={cn("mt-3", inlinePlacement || showMobileExpandedSections ? "block" : "hidden md:block")}>
           <div className="flex items-end justify-between gap-3">
             <div className="hide-scrollbar flex min-w-0 flex-1 items-center gap-2 overflow-x-auto pb-0.5">
               <button

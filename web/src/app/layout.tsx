@@ -36,7 +36,7 @@ export default function AppShell({
               '"SF Pro Display","SF Pro Text","PingFang SC","Microsoft YaHei","Helvetica Neue",sans-serif',
           }}
         >
-          <div className="relative z-10 grid h-screen min-h-screen grid-cols-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden lg:grid-cols-[82px_minmax(0,1fr)] lg:grid-rows-1">
+          <div className="relative z-10 grid h-screen min-h-screen grid-cols-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden md:grid-cols-[82px_minmax(0,1fr)] md:grid-rows-1">
             <AppShellNav role={role} />
             <div className="app-content min-h-0 min-w-0 overflow-y-auto bg-transparent">
               {children}

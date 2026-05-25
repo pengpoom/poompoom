@@ -178,10 +178,10 @@ export const HistorySidebar = memo(
             "min-h-0 overflow-hidden border-[var(--app-border)] bg-[var(--app-bg-sidebar)] text-[var(--app-text-primary)]",
             standalone
               ? "min-h-[420px] rounded-[18px] border"
-              : "hidden border-r lg:block",
+              : "hidden border-r md:block",
           )}
         >
-          <div className="flex h-full min-h-0 flex-col px-5 py-8 lg:px-[21px] lg:py-[46px]">
+          <div className="flex h-full min-h-0 flex-col px-5 py-8 md:px-[21px] md:py-[46px]">
             <header className="flex items-center justify-between gap-4">
               <h1 className="m-0 text-[17px] font-semibold tracking-normal text-[var(--app-text-primary)]">
                 开始你的创作

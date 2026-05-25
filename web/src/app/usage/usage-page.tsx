@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Clock3, Coins, ImageIcon, LoaderCircle, RefreshCw, UserRound } from "lucide-react";
+import { Activity, Clock3, Coins, History, ImageIcon, LoaderCircle, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -222,7 +222,7 @@ export default function UsagePage({ scope }: UsagePageProps) {
           }
         >
           <div className="mb-3 inline-flex size-12 items-center justify-center rounded-[var(--app-radius-lg)] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)]">
-            {isAdminScope ? <UserRound className="size-5" /> : <Activity className="size-5" />}
+            <History className="size-5" />
           </div>
         </AdminHeader>
 
@@ -286,7 +286,7 @@ export default function UsagePage({ scope }: UsagePageProps) {
             { label: "记录数", value: numberText(stats.records), icon: Activity, color: "text-[var(--app-text-primary)]" },
             { label: "图片数", value: numberText(stats.images), icon: ImageIcon, color: "text-violet-300" },
             { label: "扣点", value: numberText(stats.credits), icon: Coins, color: "text-amber-300" },
-            { label: "总耗时", value: formatDuration(stats.durationMs), icon: Clock3, color: "text-[var(--app-text-muted)]" },
+            ...(isAdminScope ? [{ label: "总耗时", value: formatDuration(stats.durationMs), icon: Clock3, color: "text-[var(--app-text-muted)]" }] : []),
           ].map((item) => {
             return <AdminStatCard key={item.label} {...item} />;
           })}

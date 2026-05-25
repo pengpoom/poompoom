@@ -461,7 +461,7 @@ export default function ImagePage() {
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [isDesktopLayout, setIsDesktopLayout] = useState(() =>
     typeof window !== "undefined"
-      ? window.matchMedia("(min-width: 1024px)").matches
+      ? window.matchMedia("(min-width: 768px)").matches
       : false,
   );
   const [availableAccounts, setAvailableAccounts] = useState<Account[]>([]);
@@ -755,7 +755,7 @@ export default function ImagePage() {
   }, []);
 
   useEffect(() => {
-    const media = window.matchMedia("(min-width: 1024px)");
+    const media = window.matchMedia("(min-width: 768px)");
     const updateLayout = (matches: boolean) => {
       setIsDesktopLayout(matches);
     };
@@ -1485,7 +1485,7 @@ export default function ImagePage() {
       data-image-workspace-panel
       className={cn(
         "relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-transparent",
-        !isStandaloneWorkspace && "lg:min-h-0",
+        !isStandaloneWorkspace && "md:min-h-0",
       )}
     >
       <WorkspaceHeader
@@ -1521,7 +1521,7 @@ export default function ImagePage() {
         <div
           ref={resultsViewportRef}
           className={cn(
-            "hide-scrollbar min-h-[240px] overflow-visible lg:h-full lg:min-h-0 lg:overflow-y-auto lg:pb-0",
+            "hide-scrollbar min-h-[240px] overflow-visible md:h-full md:min-h-0 md:overflow-y-auto md:pb-0",
             isMobileComposerCollapsed
               ? "pb-[180px] sm:pb-[190px]"
               : "pb-[248px] sm:pb-[264px]",
@@ -1562,7 +1562,7 @@ export default function ImagePage() {
             type="button"
             onClick={() => scrollToBottom("smooth")}
             className={cn(
-              "absolute right-5 z-10 inline-flex size-11 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)] shadow-lg shadow-black/40 backdrop-blur transition hover:bg-[var(--app-bg-surface-hover)] lg:bottom-5",
+              "absolute right-5 z-10 inline-flex size-11 items-center justify-center rounded-full border border-[var(--app-border)] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)] shadow-lg shadow-black/40 backdrop-blur transition hover:bg-[var(--app-bg-surface-hover)] md:bottom-5",
               isMobileComposerCollapsed
                 ? "bottom-[148px] sm:bottom-[158px]"
                 : "bottom-[190px] sm:bottom-[204px]",
@@ -1584,8 +1584,8 @@ export default function ImagePage() {
       className={cn(
         "grid h-full min-h-full grid-cols-1 overflow-hidden bg-transparent text-[var(--app-text-primary)]",
         historyCollapsed || isStandaloneWorkspace || isStandaloneHistory
-          ? "lg:grid-cols-[minmax(0,1fr)]"
-          : "lg:grid-cols-[276px_minmax(0,1fr)]",
+          ? "md:grid-cols-[minmax(0,1fr)]"
+          : "md:grid-cols-[276px_minmax(0,1fr)]",
       )}
     >
       {!isStandaloneWorkspace && !historyCollapsed ? historyPanel : null}

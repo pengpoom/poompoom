@@ -34,8 +34,14 @@ export function AdminHeader({
   return (
     <section className="flex flex-col gap-4 border-b border-[var(--app-border)] pb-5 lg:flex-row lg:items-end lg:justify-between">
       <div className="min-w-0">
-        {children}
-        <h1 className="text-[26px] font-semibold leading-tight tracking-normal text-[var(--app-text-primary)]">{title}</h1>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h1 className="text-[26px] font-semibold leading-tight tracking-normal text-[var(--app-text-primary)]">{title}</h1>
+          {children ? (
+            <div className="inline-flex shrink-0 items-center [&>*]:!mb-0 [&_.size-10]:!size-8 [&_.size-11]:!size-8 [&_.size-12]:!size-8 [&_svg]:!size-4">
+              {children}
+            </div>
+          ) : null}
+        </div>
         {description ? <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--app-text-muted)]">{description}</p> : null}
       </div>
       {actions ? <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">{actions}</div> : null}

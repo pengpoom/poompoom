@@ -20,6 +20,9 @@ const (
 	ReasonAdminRefund            = "admin_refund"
 	ReasonImageGenerationReserve = "image_generation_reserve"
 	ReasonImageGenerationRefund  = "image_generation_refund"
+	ReasonRedeemCode             = "redeem_code"
+	ReasonRegistrationPromo      = "registration_promo"
+	ReasonAffiliateRegistration  = "affiliate_registration"
 )
 
 var ErrInsufficientBalance = errors.New("insufficient credits")
@@ -330,6 +333,32 @@ func (s *Store) Add(ctx context.Context, userID string, delta int64, reason stri
 	return summary, entry, nil
 }
 
+func (s *Store) AddWithTx(ctx context.Context, tx *sql.Tx, userID string, delta int64, reason string, requireSufficient bool) (LedgerEntry, error) {
+	userID = cleanUserID(userID)
+	reason = normalizeReason(reason, ReasonAdminAdjustment)
+	if userID == "" {
+		return LedgerEntry{}, fmt.Errorf("user id is required")
+	}
+	if tx == nil {
+		return LedgerEntry{}, fmt.Errorf("transaction is required")
+	}
+	if delta == 0 {
+		return LedgerEntry{}, nil
+	}
+	current, err := s.balanceForUpdate(ctx, tx, userID)
+	if err != nil {
+		return LedgerEntry{}, err
+	}
+	next := current + delta
+	if next < 0 && requireSufficient {
+		return LedgerEntry{}, ErrInsufficientBalance
+	}
+	if next < 0 {
+		return LedgerEntry{}, fmt.Errorf("balance cannot be negative")
+	}
+	return s.writeBalanceDelta(ctx, tx, userID, delta, reason, "", next)
+}
+
 func (s *Store) LedgerEntries(ctx context.Context, userID string, limit int) ([]LedgerEntry, error) {
 	items, _, err := s.LedgerEntriesPage(ctx, userID, limit, 0)
 	return items, err
@@ -355,6 +384,17 @@ func (s *Store) DeleteUserCreditData(ctx context.Context, userID string) error {
 }
 
 func (s *Store) LedgerEntriesPage(ctx context.Context, userID string, limit int, offset int) ([]LedgerEntry, int64, error) {
+	return s.ledgerEntriesPage(ctx, userID, limit, offset, nil)
+}
+
+func (s *Store) BalanceLedgerEntriesPage(ctx context.Context, userID string, limit int, offset int) ([]LedgerEntry, int64, error) {
+	return s.ledgerEntriesPage(ctx, userID, limit, offset, []string{
+		ReasonImageGenerationReserve,
+		ReasonImageGenerationRefund,
+	})
+}
+
+func (s *Store) ledgerEntriesPage(ctx context.Context, userID string, limit int, offset int, excludedReasons []string) ([]LedgerEntry, int64, error) {
 	userID = cleanUserID(userID)
 	if userID == "" {
 		return nil, 0, fmt.Errorf("user id is required")
@@ -365,26 +405,42 @@ func (s *Store) LedgerEntriesPage(ctx context.Context, userID string, limit int,
 	if offset < 0 {
 		offset = 0
 	}
+
+	where := `WHERE user_id = ?`
+	args := []any{userID}
+	placeholders := make([]string, 0, len(excludedReasons))
+	for _, reason := range excludedReasons {
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			continue
+		}
+		placeholders = append(placeholders, "?")
+		args = append(args, reason)
+	}
+	if len(placeholders) > 0 {
+		where += ` AND reason NOT IN (` + strings.Join(placeholders, ", ") + `)`
+	}
+
 	var total int64
 	if err := s.db.QueryRowContext(
 		ctx,
 		s.rebind(`SELECT COUNT(*)
 		 FROM business_credit_ledger
-		 WHERE user_id = ?`),
-		userID,
+		 `+where),
+		args...,
 	).Scan(&total); err != nil {
 		return nil, 0, err
 	}
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, limit, offset)
 	rows, err := s.db.QueryContext(
 		ctx,
 		s.rebind(`SELECT id, user_id, delta, balance_after, reason, generation_id, created_at
 		 FROM business_credit_ledger
-		 WHERE user_id = ?
+		 `+where+`
 		 ORDER BY created_at DESC, id DESC
 		 LIMIT ? OFFSET ?`),
-		userID,
-		limit,
-		offset,
+		queryArgs...,
 	)
 	if err != nil {
 		return nil, 0, err

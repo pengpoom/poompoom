@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Activity, AlertTriangle, CheckCircle2, Coins, Database, ImageIcon, LoaderCircle, RefreshCw, UsersRound } from "lucide-react";
+import { Activity, AlertTriangle, BarChart3, CheckCircle2, Coins, Database, ImageIcon, LoaderCircle, RefreshCw, UsersRound } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
@@ -87,7 +87,11 @@ export default function DashboardPage() {
             </Button>
             </div>
           }
-        />
+        >
+          <div className="mb-3 inline-flex size-12 items-center justify-center rounded-[var(--app-radius-lg)] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)]">
+            <BarChart3 className="size-5" />
+          </div>
+        </AdminHeader>
 
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
           {[

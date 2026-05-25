@@ -26,6 +26,7 @@ import {
   Sparkles,
   Sun,
   SwatchBook,
+  Ticket,
   Wrench,
   UsersRound,
   type LucideIcon,
@@ -60,6 +61,8 @@ import {
 } from "@/store/auth";
 import { cn } from "@/lib/utils";
 
+export const BUSINESS_CREDIT_CHANGED_EVENT = "image-studio:business-credit-changed";
+
 type ShellNavItem = {
   href: string;
   matchPrefix: string;
@@ -73,6 +76,8 @@ const adminItems: readonly ShellNavItem[] = [
   { href: "/admin/usage", matchPrefix: "/admin/usage", label: "记录", icon: History },
   { href: "/users", matchPrefix: "/users", label: "用户", icon: UsersRound },
   { href: "/notifications", matchPrefix: "/notifications", label: "通知", icon: Bell },
+  { href: "/codes", matchPrefix: "/codes", label: "码券", icon: Ticket },
+  { href: "/affiliate", matchPrefix: "/affiliate", label: "返利", icon: Share2 },
   { href: "/accounts", matchPrefix: "/accounts", label: "接入", icon: Activity },
   { href: "/storage", matchPrefix: "/storage", label: "存储", icon: Database },
 ];
@@ -231,19 +236,32 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
 
   useEffect(() => {
     let cancelled = false;
-    void fetchBusinessCredit()
-      .then((credit) => {
-        if (!cancelled) {
-          setBalance(credit.balance);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setBalance(null);
-        }
-      });
+    const loadBalance = () => {
+      void fetchBusinessCredit()
+        .then((credit) => {
+          if (!cancelled) {
+            setBalance(credit.balance);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setBalance(null);
+          }
+        });
+    };
+    const handleCreditChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ balance?: number | null }>).detail;
+      if (typeof detail?.balance === "number") {
+        setBalance(detail.balance);
+        return;
+      }
+      loadBalance();
+    };
+    loadBalance();
+    window.addEventListener(BUSINESS_CREDIT_CHANGED_EVENT, handleCreditChanged as EventListener);
     return () => {
       cancelled = true;
+      window.removeEventListener(BUSINESS_CREDIT_CHANGED_EVENT, handleCreditChanged as EventListener);
     };
   }, []);
 
@@ -467,7 +485,7 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
 
   return (
     <>
-      <aside className="hidden min-h-0 border-r border-[var(--app-border)] bg-[var(--app-bg-rail)] px-0 pb-5 pt-4 shadow-[inset_-1px_0_0_var(--app-border)] backdrop-blur-2xl lg:flex lg:w-[82px] lg:flex-col lg:items-center">
+      <aside className="hidden min-h-0 border-r border-[var(--app-border)] bg-[var(--app-bg-rail)] px-0 pb-5 pt-4 shadow-[inset_-1px_0_0_var(--app-border)] backdrop-blur-2xl md:flex md:w-[82px] md:flex-col md:items-center">
         <Link
           to={role === "admin" ? "/admin/dashboard" : "/image/history"}
           className="grid justify-items-center gap-1.5 text-[12px] font-extrabold leading-none text-[var(--app-accent-cyan)] drop-shadow-[0_0_18px_rgba(91,214,255,0.26)]"
@@ -795,7 +813,7 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
         </DialogContent>
       </Dialog>
 
-      <header className="border-b border-[var(--app-border)] bg-[var(--app-bg-rail)] px-3 py-3 shadow-[var(--app-shadow-floating)] backdrop-blur-2xl lg:hidden">
+      <header className="border-b border-[var(--app-border)] bg-[var(--app-bg-rail)] px-3 py-3 shadow-[var(--app-shadow-floating)] backdrop-blur-2xl md:hidden">
         <div className="flex items-center gap-3">
           <Link
             to={role === "admin" ? "/admin/dashboard" : "/image/history"}

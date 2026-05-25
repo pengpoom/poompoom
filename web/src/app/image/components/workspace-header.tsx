@@ -13,7 +13,7 @@ export function WorkspaceHeader({
 }: WorkspaceHeaderProps) {
   return (
     <div className="flex min-h-[82px] items-start justify-end bg-transparent px-4 pt-5 sm:min-h-[104px] sm:px-[50px] sm:pt-[39px]">
-      <div className="flex min-w-0 flex-1 items-center gap-3 lg:hidden">
+      <div className="flex min-w-0 flex-1 items-center gap-3 md:hidden">
         <h1 className="truncate text-lg font-bold text-[var(--app-text-primary)]">
           {selectedConversationTitle || "生图"}
         </h1>
