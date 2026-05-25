@@ -901,6 +901,109 @@ export type BusinessCreditSummary = {
   spent: number;
   updated_at?: string;
 };
+export type BusinessPaymentPackage = {
+  id: string;
+  packageType: "balance" | "subscription" | "monthly";
+  name: string;
+  description: string;
+  amountCents: number;
+  credits: number;
+  durationDays?: number;
+  currency: string;
+  enabled: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+};
+export type BusinessPaymentPackageInput = {
+  packageType?: "balance" | "subscription";
+  name: string;
+  description?: string;
+  amountCents: number;
+  credits: number;
+  durationDays?: number;
+  currency?: string;
+  enabled: boolean;
+  sortOrder?: number;
+};
+export type BusinessPaymentOrderStatus = "pending" | "paid" | "completed" | "expired" | "cancelled" | "failed" | "refunded";
+export type BusinessPaymentOrder = {
+  id: string;
+  userId: string;
+  userEmail: string;
+  username: string;
+  packageId: string;
+  packageType: "balance" | "subscription" | "monthly";
+  amountCents: number;
+  credits: number;
+  durationDays?: number;
+  currency: string;
+  providerKey: string;
+  providerInstanceId: string;
+  outTradeNo: string;
+  providerTradeNo: string;
+  status: BusinessPaymentOrderStatus;
+  payUrl: string;
+  qrCode: string;
+  expiresAt?: string;
+  paidAt?: string;
+  completedAt?: string;
+  failedAt?: string;
+  refundedAt?: string;
+  creditLedgerId?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+export type BusinessPaymentCommission = {
+  id: string;
+  orderId: string;
+  referrerUserId: string;
+  referredUserId: string;
+  baseAmountCents: number;
+  rateBps: number;
+  credits: number;
+  ledgerId?: string;
+  status: string;
+  createdAt: string;
+  settledAt?: string;
+  reversedAt?: string;
+};
+export type BusinessSubscription = {
+  id?: string;
+  userId?: string;
+  orderId?: string;
+  packageId?: string;
+  packageName?: string;
+  durationDays?: number;
+  creditsTotal?: number;
+  creditsUsed?: number;
+  creditsLeft?: number;
+  status?: "active" | "expired" | "cancelled" | string;
+  active?: boolean;
+  startsAt?: string;
+  expiresAt?: string;
+  cancelledAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+export type BusinessPaymentProvider = {
+  id: string;
+  providerKey: string;
+  name: string;
+  enabled: boolean;
+  supportedMethods: string[];
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+};
+export type BusinessPaymentAuditLog = {
+  id: string;
+  orderId: string;
+  action: string;
+  detail?: unknown;
+  operator: string;
+  createdAt: string;
+};
 export type BusinessCodeType = "redeem" | "promo" | "invite";
 export type BusinessCodeStatus = "active" | "disabled" | "expired";
 export type BusinessCode = {
@@ -1549,6 +1652,30 @@ export async function redeemBusinessCode(code: string) {
   });
 }
 
+export async function fetchBusinessPaymentPackages() {
+  return httpRequest<{ items: BusinessPaymentPackage[] }>("/api/business/payment/packages");
+}
+
+export async function fetchBusinessPaymentOrders(query: {
+  status?: BusinessPaymentOrderStatus | "all";
+  limit?: number;
+} = {}) {
+  return httpRequest<{ items: BusinessPaymentOrder[] }>(
+    `/api/business/payment/orders${buildQuery(query)}`,
+  );
+}
+
+export async function createBusinessPaymentOrder(packageId: string) {
+  return httpRequest<{ order: BusinessPaymentOrder }>("/api/business/payment/orders", {
+    method: "POST",
+    body: { packageId },
+  });
+}
+
+export async function fetchBusinessSubscription() {
+  return httpRequest<{ subscription: BusinessSubscription }>("/api/business/subscription");
+}
+
 export async function fetchBusinessAffiliateSummary() {
   return httpRequest<BusinessAffiliateSummary>("/api/business/affiliate");
 }
@@ -1727,6 +1854,74 @@ export async function deleteBusinessCode(id: string) {
   return httpRequest<{ ok: boolean }>(
     `/api/business/admin/codes/${encodeURIComponent(id)}`,
     { method: "DELETE" },
+  );
+}
+
+export async function fetchAdminBusinessPaymentPackages() {
+  return httpRequest<{ items: BusinessPaymentPackage[] }>("/api/business/admin/payment/packages");
+}
+
+export async function createAdminBusinessPaymentPackage(payload: BusinessPaymentPackageInput) {
+  return httpRequest<{ item: BusinessPaymentPackage }>("/api/business/admin/payment/packages", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateAdminBusinessPaymentPackage(id: string, payload: BusinessPaymentPackageInput) {
+  return httpRequest<{ item: BusinessPaymentPackage }>(
+    `/api/business/admin/payment/packages/${encodeURIComponent(id)}`,
+    { method: "PUT", body: payload },
+  );
+}
+
+export async function deleteAdminBusinessPaymentPackage(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/admin/payment/packages/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function fetchAdminBusinessPaymentProviders() {
+  return httpRequest<{ items: BusinessPaymentProvider[] }>("/api/business/admin/payment/providers");
+}
+
+export async function fetchAdminBusinessPaymentOrders(query: {
+  status?: BusinessPaymentOrderStatus | "all";
+  limit?: number;
+} = {}) {
+  return httpRequest<{ items: BusinessPaymentOrder[] }>(
+    `/api/business/admin/payment/orders${buildQuery(query)}`,
+  );
+}
+
+export async function completeAdminBusinessPaymentOrder(id: string, payload: {
+  providerTradeNo?: string;
+  commissionRateBps?: number;
+} = {}) {
+  return httpRequest<{ order: BusinessPaymentOrder; commission?: BusinessPaymentCommission }>(
+    `/api/business/admin/payment/orders/${encodeURIComponent(id)}/complete`,
+    { method: "POST", body: payload },
+  );
+}
+
+export async function cancelAdminBusinessPaymentOrder(id: string) {
+  return httpRequest<{ order: BusinessPaymentOrder }>(
+    `/api/business/admin/payment/orders/${encodeURIComponent(id)}/cancel`,
+    { method: "POST" },
+  );
+}
+
+export async function refundAdminBusinessPaymentOrder(id: string) {
+  return httpRequest<{ order: BusinessPaymentOrder; commission?: BusinessPaymentCommission }>(
+    `/api/business/admin/payment/orders/${encodeURIComponent(id)}/refund`,
+    { method: "POST" },
+  );
+}
+
+export async function fetchAdminBusinessPaymentOrderAuditLogs(id: string) {
+  return httpRequest<{ items: BusinessPaymentAuditLog[] }>(
+    `/api/business/admin/payment/orders/${encodeURIComponent(id)}/audit`,
   );
 }
 

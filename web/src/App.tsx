@@ -19,6 +19,7 @@ const ForgotPasswordPage = lazy(() => import("@/app/forgot-password/page"));
 const ImagePage = lazy(() => import("@/app/image/page"));
 const LoginPage = lazy(() => import("@/app/login/page"));
 const OperationsPage = lazy(() => import("@/app/operations/page"));
+const PaymentsPage = lazy(() => import("@/app/payments/page"));
 const HomePage = lazy(() => import("@/app/page"));
 const ProfilePage = lazy(() => import("@/app/profile/page"));
 const NotificationsPage = lazy(() => import("@/app/notifications/page"));
@@ -234,6 +235,7 @@ export default function App() {
             <Route path="/notifications" element={<ProtectedRoute role={role} adminOnly><NotificationsPage /></ProtectedRoute>} />
             <Route path="/codes" element={<ProtectedRoute role={role} adminOnly><CodesPage /></ProtectedRoute>} />
             <Route path="/affiliate" element={<ProtectedRoute role={role} adminOnly><AffiliatePage /></ProtectedRoute>} />
+            <Route path="/payments" element={<ProtectedRoute role={role} adminOnly><PaymentsPage /></ProtectedRoute>} />
             <Route path="/users" element={<ProtectedRoute role={role} adminOnly><UsersPage /></ProtectedRoute>} />
             <Route path="/users/:id" element={<ProtectedRoute role={role} adminOnly><UserDetailPage /></ProtectedRoute>} />
             <Route path="/storage" element={<ProtectedRoute role={role} adminOnly><StoragePage /></ProtectedRoute>} />

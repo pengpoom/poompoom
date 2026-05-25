@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   Check,
+  CreditCard,
   Database,
   FileText,
   Gauge,
@@ -78,6 +79,7 @@ const adminItems: readonly ShellNavItem[] = [
   { href: "/notifications", matchPrefix: "/notifications", label: "通知", icon: Bell },
   { href: "/codes", matchPrefix: "/codes", label: "码券", icon: Ticket },
   { href: "/affiliate", matchPrefix: "/affiliate", label: "返利", icon: Share2 },
+  { href: "/payments", matchPrefix: "/payments", label: "支付", icon: CreditCard },
   { href: "/accounts", matchPrefix: "/accounts", label: "接入", icon: Activity },
   { href: "/storage", matchPrefix: "/storage", label: "存储", icon: Database },
 ];

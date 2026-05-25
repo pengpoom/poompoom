@@ -14,7 +14,7 @@ export function AdminPage({
   maxWidth?: string;
 }) {
   return (
-    <main className="app-admin-page-bg relative min-h-full px-5 py-5 text-[var(--app-text-primary)] sm:px-7 sm:py-7 lg:px-10 lg:py-8 xl:px-12">
+    <main className="app-admin-page-bg relative min-h-full px-5 pb-14 pt-5 text-[var(--app-text-primary)] sm:px-7 sm:pb-16 sm:pt-7 lg:px-10 lg:pb-20 lg:pt-8 xl:px-12">
       <div className={cn("relative z-10 mx-auto flex w-full flex-col gap-5 sm:gap-6", maxWidth, className)}>{children}</div>
     </main>
   );

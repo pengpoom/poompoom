@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarDays, Coins, Copy, Gift, LoaderCircle, RefreshCw, Send, Sparkles, UsersRound } from "lucide-react";
+import { CalendarDays, CheckCircle2, Coins, Copy, CreditCard, Gift, LoaderCircle, RefreshCw, Send, Sparkles, TicketCheck, UsersRound } from "lucide-react";
 import { toast } from "sonner";
 
 import { AdminHeader, AdminPage, AdminPanel } from "@/components/admin-layout";
@@ -13,10 +13,17 @@ import {
   fetchBusinessAffiliateSummary,
   fetchBusinessCredit,
   fetchBusinessCreditLedger,
+  fetchBusinessPaymentOrders,
+  fetchBusinessPaymentPackages,
+  fetchBusinessSubscription,
+  createBusinessPaymentOrder,
   redeemBusinessCode,
   type BusinessAffiliateSummary,
   type BusinessCreditLedgerEntry,
   type BusinessCreditSummary,
+  type BusinessPaymentOrder,
+  type BusinessPaymentPackage,
+  type BusinessSubscription,
   type PaginationMeta,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -37,6 +44,10 @@ function ledgerReasonText(reason: string) {
   if (reason === "registration_default") return "注册送点";
   if (reason === "registration_promo") return "优惠码赠送";
   if (reason === "affiliate_registration") return "邀请注册奖励";
+  if (reason === "payment_recharge") return "充值到账";
+  if (reason === "payment_refund") return "充值退款";
+  if (reason === "affiliate_order_commission") return "订单邀请返利";
+  if (reason === "affiliate_order_commission_reversal") return "订单返利退回";
   if (reason === "redeem_code") return "兑换码到账";
   if (reason === "admin_recharge") return "管理员充值";
   if (reason === "admin_refund") return "管理员扣减";
@@ -74,25 +85,73 @@ function paginationText(page: PaginationMeta) {
   return `${start}-${end} / ${page.total}`;
 }
 
+function moneyText(amountCents?: number | null, currency = "CNY") {
+  const amount = Number(amountCents || 0) / 100;
+  const prefix = currency === "CNY" ? "¥" : `${currency} `;
+  return `${prefix}${amount.toFixed(2)}`;
+}
+
+function orderStatusText(status: string) {
+  if (status === "pending") return "待确认";
+  if (status === "paid") return "已支付";
+  if (status === "completed") return "已到账";
+  if (status === "cancelled") return "已取消";
+  if (status === "refunded") return "已退款";
+  if (status === "expired") return "已过期";
+  if (status === "failed") return "失败";
+  return status || "-";
+}
+
+function packageTypeText(type?: string) {
+  if (type === "subscription" || type === "monthly") return "订阅";
+  return "余额";
+}
+
+function subscriptionStatusText(subscription?: BusinessSubscription | null) {
+  if (!subscription?.id) return "未订阅";
+  if (subscription.active) return "订阅中";
+  if (subscription.status === "cancelled") return "已取消";
+  if (subscription.status === "expired") return "已过期";
+  return "未订阅";
+}
+
+function daysLeft(value?: string) {
+  const expiresAt = new Date(value || "");
+  if (Number.isNaN(expiresAt.getTime())) {
+    return 0;
+  }
+  return Math.max(0, Math.ceil((expiresAt.getTime() - Date.now()) / 86400000));
+}
+
 export default function CreditsPage() {
   const [credit, setCredit] = useState<BusinessCreditSummary | null>(null);
   const [affiliate, setAffiliate] = useState<BusinessAffiliateSummary | null>(null);
+  const [subscription, setSubscription] = useState<BusinessSubscription | null>(null);
+  const [packages, setPackages] = useState<BusinessPaymentPackage[]>([]);
+  const [orders, setOrders] = useState<BusinessPaymentOrder[]>([]);
   const [ledgerItems, setLedgerItems] = useState<BusinessCreditLedgerEntry[]>([]);
   const [ledgerPage, setLedgerPage] = useState<PaginationMeta>(defaultLedgerPage());
   const [redeemCode, setRedeemCode] = useState("");
   const [loading, setLoading] = useState(true);
   const [redeeming, setRedeeming] = useState(false);
+  const [creatingOrderId, setCreatingOrderId] = useState("");
 
   const loadData = async (nextLedgerPage = ledgerPage.page) => {
     setLoading(true);
     try {
-      const [creditPayload, affiliatePayload, ledgerPayload] = await Promise.all([
+      const [creditPayload, affiliatePayload, subscriptionPayload, packagePayload, orderPayload, ledgerPayload] = await Promise.all([
         fetchBusinessCredit(),
         fetchBusinessAffiliateSummary().catch(() => null),
+        fetchBusinessSubscription().catch(() => ({ subscription: {} })),
+        fetchBusinessPaymentPackages().catch(() => ({ items: [] })),
+        fetchBusinessPaymentOrders({ limit: 10 }).catch(() => ({ items: [] })),
         fetchBusinessCreditLedger({ page: nextLedgerPage, pageSize: ledgerPage.pageSize }),
       ]);
       setCredit(creditPayload);
       setAffiliate(affiliatePayload);
+      setSubscription(subscriptionPayload.subscription || null);
+      setPackages(packagePayload.items || []);
+      setOrders(orderPayload.items || []);
       setLedgerItems(ledgerPayload.items || []);
       setLedgerPage(ledgerPayload.page || { ...ledgerPage, page: nextLedgerPage });
     } catch (error) {
@@ -138,6 +197,20 @@ export default function CreditsPage() {
     toast.success("邀请链接已复制");
   };
 
+  const createOrder = async (packageId: string) => {
+    setCreatingOrderId(packageId);
+    try {
+      const selectedPackage = packages.find((item) => item.id === packageId);
+      const payload = await createBusinessPaymentOrder(packageId);
+      setOrders((current) => [payload.order, ...current.filter((item) => item.id !== payload.order.id)].slice(0, 10));
+      toast.success(selectedPackage?.packageType === "subscription" || selectedPackage?.packageType === "monthly" ? "订阅订单已创建，等待管理员确认" : "充值订单已创建，等待管理员确认");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "创建订单失败");
+    } finally {
+      setCreatingOrderId("");
+    }
+  };
+
   return (
     <AdminPage>
       <AdminHeader
@@ -155,31 +228,71 @@ export default function CreditsPage() {
         </div>
       </AdminHeader>
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-        <AdminPanel className="p-6">
-          <div className="flex items-start gap-4">
-            <div className="grid size-12 shrink-0 place-items-center rounded-[16px] bg-[linear-gradient(135deg,rgba(255,214,92,0.28),rgba(40,214,255,0.16))] text-amber-200">
-              <Sparkles className="size-5" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <h2 className="text-lg font-bold text-[var(--app-text-primary)]">当前余额</h2>
-              <div className="mt-3 text-4xl font-semibold text-[var(--app-accent-cyan)]">
-                {loading ? "-" : numberText(credit?.balance)}
+      <div className="grid gap-5 xl:grid-cols-[minmax(340px,0.75fr)_minmax(0,1.25fr)]">
+        <div className="grid content-start gap-5">
+          <AdminPanel className="p-5">
+            <div className="flex items-start gap-4">
+              <div className="grid size-12 shrink-0 place-items-center rounded-[16px] bg-[linear-gradient(135deg,rgba(255,214,92,0.28),rgba(40,214,255,0.16))] text-amber-200">
+                <Sparkles className="size-5" />
               </div>
-              <p className="mt-2 text-sm leading-6 text-[var(--app-text-secondary)]">
-                已消耗 {loading ? "-" : numberText(credit?.spent)} 点。
-              </p>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-lg font-bold text-[var(--app-text-primary)]">账户概览</h2>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <div className={cn(adminSubPanelClass, "px-4 py-3")}>
+                    <div className="text-xs text-[var(--app-text-muted)]">普通余额</div>
+                    <div className="mt-2 text-4xl font-semibold text-[var(--app-accent-cyan)]">
+                      {loading ? "-" : numberText(credit?.balance)}
+                    </div>
+                  </div>
+                  <div className={cn(adminSubPanelClass, "px-4 py-3")}>
+                    <div className="text-xs text-[var(--app-text-muted)]">累计消耗</div>
+                    <div className="mt-2 text-2xl font-semibold text-[var(--app-text-primary)]">
+                      {loading ? "-" : numberText(credit?.spent)}
+                    </div>
+                  </div>
+                </div>
+                <p className="mt-3 text-sm leading-6 text-[var(--app-text-secondary)]">
+                  余额用于图片生成扣点；充值和兑换成功后会自动刷新。
+                </p>
+              </div>
             </div>
-          </div>
-        </AdminPanel>
+          </AdminPanel>
 
-        <div className="grid gap-5">
+          {subscription?.active ? (
+            <AdminPanel className="p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <TicketCheck className="size-4 text-emerald-300" />
+                <h2 className="text-sm font-semibold text-[var(--app-text-primary)]">订阅状态</h2>
+              </div>
+              <div className={cn(adminSubPanelClass, "p-4")}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-base font-semibold text-[var(--app-text-primary)]">{subscription.packageName || "订阅"}</div>
+                    <div className="mt-1 text-xs text-[var(--app-text-muted)]">
+                      {subscription.active ? `剩余 ${daysLeft(subscription.expiresAt)} 天` : subscriptionStatusText(subscription)}
+                    </div>
+                  </div>
+                  <span className={cn("inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold", subscription.active ? "bg-emerald-400/10 text-emerald-300" : "bg-[var(--app-bg-surface)] text-[var(--app-text-muted)]")}>
+                    <CheckCircle2 className="size-3.5" />
+                    {subscriptionStatusText(subscription)}
+                  </span>
+                </div>
+                <div className="mt-4 grid gap-2 text-xs leading-5 text-[var(--app-text-muted)]">
+                  <div>生效时间：{formatDateTime(subscription.startsAt)}</div>
+                  <div>到期时间：{formatDateTime(subscription.expiresAt)}</div>
+                  <div>订阅点数：剩余 {numberText(subscription.creditsLeft)} / {numberText(subscription.creditsTotal)}</div>
+                  <div>会员权益：订阅期内优先消耗订阅点数；到期后未用订阅点数自动失效。</div>
+                </div>
+              </div>
+            </AdminPanel>
+          ) : null}
+
           <AdminPanel className="p-5">
             <div className="mb-4 flex items-center gap-2">
               <Gift className="size-4 text-[var(--app-accent-cyan)]" />
               <h2 className="text-sm font-semibold text-[var(--app-text-primary)]">兑换码</h2>
             </div>
-            <div className="flex flex-col gap-3 sm:flex-row">
+            <div className="flex flex-col gap-3">
               <Input
                 value={redeemCode}
                 onChange={(event) => setRedeemCode(event.target.value)}
@@ -195,6 +308,69 @@ export default function CreditsPage() {
                 {redeeming ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}
                 兑换
               </Button>
+            </div>
+          </AdminPanel>
+        </div>
+
+        <div className="grid gap-5">
+          <AdminPanel className="p-5">
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2">
+                <CreditCard className="size-4 text-emerald-300" />
+                <h2 className="text-sm font-semibold text-[var(--app-text-primary)]">充值与订阅</h2>
+              </div>
+              {subscription?.active ? (
+                <span className="rounded-full bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-300">
+                  订阅至 {formatDateTime(subscription.expiresAt)}
+                </span>
+              ) : null}
+            </div>
+            {packages.length === 0 ? (
+              <div className={cn(adminSubPanelClass, "px-4 py-3 text-sm text-[var(--app-text-muted)]")}>暂无可用套餐</div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {packages.map((item) => (
+                  <div key={item.id} className={cn(adminSubPanelClass, "p-4")}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold text-[var(--app-text-primary)]">{item.name}</div>
+                        <div className="mt-1 text-xs text-[var(--app-text-muted)]">{packageTypeText(item.packageType)} · {item.description || "人工确认后到账"}</div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <div className="text-sm font-semibold text-emerald-500 dark:text-emerald-300">
+                          {item.packageType === "subscription" || item.packageType === "monthly" ? `${numberText(item.credits)} 订阅点` : `+${numberText(item.credits)}`}
+                        </div>
+                        <div className="mt-1 text-xs text-[var(--app-text-muted)]">{moneyText(item.amountCents, item.currency)}</div>
+                      </div>
+                    </div>
+                    <Button type="button" className="mt-4 w-full" onClick={() => void createOrder(item.id)} disabled={creatingOrderId === item.id}>
+                      {creatingOrderId === item.id ? <LoaderCircle className="size-4 animate-spin" /> : <CreditCard className="size-4" />}
+                      {item.packageType === "subscription" || item.packageType === "monthly" ? "创建订阅订单" : "创建订单"}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-4 border-t border-[var(--app-border)] pt-4">
+              <div className="mb-3 text-xs font-medium text-[var(--app-text-muted)]">最近订单</div>
+              <div className="grid gap-2">
+                {orders.length === 0 ? (
+                  <div className={cn(adminSubPanelClass, "px-4 py-3 text-sm text-[var(--app-text-muted)]")}>暂无充值订单</div>
+                ) : (
+                  orders.map((item) => (
+                    <div key={item.id} className={cn(adminSubPanelClass, "flex items-center justify-between gap-3 px-4 py-3")}>
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-[var(--app-text-primary)]">{item.outTradeNo}</div>
+                        <div className="mt-1 text-xs text-[var(--app-text-muted)]">{formatDateTime(item.createdAt)}</div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <div className="text-sm font-semibold text-[var(--app-text-primary)]">+{numberText(item.credits)}</div>
+                        <div className="mt-1 text-xs text-[var(--app-text-muted)]">{orderStatusText(item.status)}</div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           </AdminPanel>
 

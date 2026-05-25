@@ -24,6 +24,7 @@ import (
 	"imagestudio/internal/businesscredits"
 	"imagestudio/internal/businessimage"
 	"imagestudio/internal/businessjobs"
+	"imagestudio/internal/businesspayments"
 	"imagestudio/internal/businessproviders"
 	"imagestudio/internal/businesssettings"
 	"imagestudio/internal/businesstracker"
@@ -688,49 +689,98 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		return providerImageGenerateError(http.StatusInternalServerError, "credit_store_failed", "credit store failed")
 	}
 	defer creditStore.Close()
-	if _, _, err := creditStore.Reserve(ctx, userID, creditCost, generationID); err != nil {
-		if errors.Is(err, businesscredits.ErrInsufficientBalance) {
-			s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", "点数余额不足", startedAt)
-			finishJob(businessjobs.StatusFailed, "credit", "insufficient_credits", "点数余额不足")
-			finishTracker(businesstracker.StatusFailed, "credit", "insufficient_credits", "点数余额不足")
-			return providerImageGenerateError(http.StatusPaymentRequired, "insufficient_credits", "点数余额不足")
-		}
+	paymentStore, err := s.newBusinessPaymentStore()
+	if err != nil {
+		s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", "payment store failed", startedAt)
+		finishJob(businessjobs.StatusFailed, "credit", "payment_store_failed", "payment store failed")
+		finishTracker(businesstracker.StatusFailed, "credit", "payment_store_failed", "payment store failed")
+		return providerImageGenerateError(http.StatusInternalServerError, "payment_store_failed", "payment store failed")
+	}
+	defer paymentStore.Close()
+	subscriptionReserved := int64(0)
+	if subscriptionReserve, err := paymentStore.ReserveSubscriptionCredits(ctx, userID, creditCost, generationID); err != nil {
 		s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", err.Error(), startedAt)
-		finishJob(businessjobs.StatusFailed, "credit", "credit_reserve_failed", err.Error())
-		finishTracker(businesstracker.StatusFailed, "credit", "credit_reserve_failed", err.Error())
-		return providerImageGenerateError(http.StatusInternalServerError, "credit_reserve_failed", err.Error())
+		finishJob(businessjobs.StatusFailed, "credit", "subscription_credit_reserve_failed", err.Error())
+		finishTracker(businesstracker.StatusFailed, "credit", "subscription_credit_reserve_failed", err.Error())
+		return providerImageGenerateError(http.StatusInternalServerError, "subscription_credit_reserve_failed", err.Error())
+	} else {
+		subscriptionReserved = subscriptionReserve.Reserved
+	}
+	balanceReserved := creditCost - subscriptionReserved
+	if balanceReserved > 0 {
+		if _, _, err := creditStore.Reserve(ctx, userID, balanceReserved, generationID); err != nil {
+			if subscriptionReserved > 0 {
+				_, _ = paymentStore.RefundSubscriptionCredits(context.Background(), userID, subscriptionReserved, generationID)
+			}
+			if errors.Is(err, businesscredits.ErrInsufficientBalance) {
+				s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", "点数余额不足", startedAt)
+				finishJob(businessjobs.StatusFailed, "credit", "insufficient_credits", "点数余额不足")
+				finishTracker(businesstracker.StatusFailed, "credit", "insufficient_credits", "点数余额不足")
+				return providerImageGenerateError(http.StatusPaymentRequired, "insufficient_credits", "点数余额不足")
+			}
+			s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", err.Error(), startedAt)
+			finishJob(businessjobs.StatusFailed, "credit", "credit_reserve_failed", err.Error())
+			finishTracker(businesstracker.StatusFailed, "credit", "credit_reserve_failed", err.Error())
+			return providerImageGenerateError(http.StatusInternalServerError, "credit_reserve_failed", err.Error())
+		}
 	}
 	creditsSettled := false
 	var refundedCredits int64
-	syncRefundedCredits := func() businesscredits.GenerationTotals {
-		totals, err := creditStore.GenerationTotals(context.Background(), userID, generationID)
+	syncRefundedCredits := func() int64 {
+		balanceTotals, err := creditStore.GenerationTotals(context.Background(), userID, generationID)
 		if err != nil {
-			return businesscredits.GenerationTotals{}
+			balanceTotals = businesscredits.GenerationTotals{}
 		}
-		if totals.Refunded > refundedCredits {
-			refundedCredits = totals.Refunded
+		subscriptionTotals, err := paymentStore.SubscriptionGenerationTotals(context.Background(), userID, generationID)
+		if err != nil {
+			subscriptionTotals = businesspayments.SubscriptionTotals{}
+		}
+		totalRefunded := balanceTotals.Refunded + subscriptionTotals.Refunded
+		if totalRefunded > refundedCredits {
+			refundedCredits = totalRefunded
 			tracker.CreditRefunded = refundedCredits
 			job.CreditRefunded = refundedCredits
 		}
-		return totals
+		return totalRefunded
 	}
 	refundReservedCredits := func(amount int64) {
 		if amount <= 0 {
 			return
 		}
-		totals := syncRefundedCredits()
-		if totals.Reserved <= totals.Refunded {
+		balanceTotals, _ := creditStore.GenerationTotals(context.Background(), userID, generationID)
+		subscriptionTotals, _ := paymentStore.SubscriptionGenerationTotals(context.Background(), userID, generationID)
+		totalReserved := balanceTotals.Reserved + subscriptionTotals.Reserved
+		totalRefunded := balanceTotals.Refunded + subscriptionTotals.Refunded
+		if totalReserved <= totalRefunded {
+			syncRefundedCredits()
 			return
 		}
-		refundable := totals.Reserved - totals.Refunded
+		refundable := totalReserved - totalRefunded
 		if amount > refundable {
 			amount = refundable
 		}
-		if _, _, err := creditStore.Refund(context.Background(), userID, amount, generationID); err == nil {
-			refundedCredits = totals.Refunded + amount
-			tracker.CreditRefunded = refundedCredits
-			job.CreditRefunded = refundedCredits
+		remaining := amount
+		subscriptionRefundable := subscriptionTotals.Reserved - subscriptionTotals.Refunded
+		if subscriptionRefundable > 0 && remaining > 0 {
+			refundAmount := remaining
+			if refundAmount > subscriptionRefundable {
+				refundAmount = subscriptionRefundable
+			}
+			if _, err := paymentStore.RefundSubscriptionCredits(context.Background(), userID, refundAmount, generationID); err == nil {
+				remaining -= refundAmount
+			}
 		}
+		balanceRefundable := balanceTotals.Reserved - balanceTotals.Refunded
+		if balanceRefundable > 0 && remaining > 0 {
+			refundAmount := remaining
+			if refundAmount > balanceRefundable {
+				refundAmount = balanceRefundable
+			}
+			if _, _, err := creditStore.Refund(context.Background(), userID, refundAmount, generationID); err == nil {
+				remaining -= refundAmount
+			}
+		}
+		syncRefundedCredits()
 	}
 	refundCredits := func(amount int64) {
 		if !systemSettings.Billing.RefundOnFailure {

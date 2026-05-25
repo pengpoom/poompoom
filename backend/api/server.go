@@ -29,6 +29,7 @@ import (
 	"imagestudio/internal/businessimage"
 	"imagestudio/internal/businessjobs"
 	"imagestudio/internal/businessnotifications"
+	"imagestudio/internal/businesspayments"
 	"imagestudio/internal/businessproviders"
 	"imagestudio/internal/businesssettings"
 	"imagestudio/internal/businesstracker"
@@ -207,6 +208,13 @@ func (s *Server) newBusinessCodeStore() (*businesscodes.Store, error) {
 		return businesscodes.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
 	}
 	return businesscodes.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessPaymentStore() (*businesspayments.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businesspayments.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businesspayments.NewStore(s.cfg)
 }
 
 func (s *Server) newBusinessJobStore() (*businessjobs.Store, error) {
@@ -537,6 +545,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/business/users/{id}/data", s.requireAdminAuth(http.HandlerFunc(s.handleClearBusinessUserData)))
 	mux.Handle("PATCH /api/business/users/{id}/password", s.requireAdminAuth(http.HandlerFunc(s.handleResetBusinessUserPassword)))
 	mux.Handle("PUT /api/business/users/{id}/credit", s.requireAdminAuth(http.HandlerFunc(s.handleSetBusinessUserCredit)))
+	mux.Handle("GET /api/business/users/{id}/subscription", s.requireAdminAuth(http.HandlerFunc(s.handleAdminGetBusinessSubscription)))
 	mux.Handle("GET /api/business/admin/usage", s.requireAdminAuth(http.HandlerFunc(s.handleListAllBusinessUsage)))
 	mux.Handle("GET /api/business/admin/jobs", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListBusinessImageJobs)))
 	mux.Handle("GET /api/business/storage/report", s.requireAdminAuth(http.HandlerFunc(s.handleBusinessStorageReport)))
@@ -559,12 +568,26 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/business/admin/codes/{id}/usages", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListBusinessCodeUsages)))
 	mux.Handle("DELETE /api/business/admin/codes/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminDeleteBusinessCode)))
 	mux.Handle("GET /api/business/admin/affiliate/referrals", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListBusinessAffiliateReferrals)))
+	mux.Handle("GET /api/business/admin/payment/packages", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListPaymentPackages)))
+	mux.Handle("POST /api/business/admin/payment/packages", s.requireAdminAuth(http.HandlerFunc(s.handleAdminCreatePaymentPackage)))
+	mux.Handle("PUT /api/business/admin/payment/packages/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminUpdatePaymentPackage)))
+	mux.Handle("DELETE /api/business/admin/payment/packages/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminDeletePaymentPackage)))
+	mux.Handle("GET /api/business/admin/payment/providers", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListPaymentProviders)))
+	mux.Handle("GET /api/business/admin/payment/orders", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListPaymentOrders)))
+	mux.Handle("POST /api/business/admin/payment/orders/{id}/complete", s.requireAdminAuth(http.HandlerFunc(s.handleAdminCompletePaymentOrder)))
+	mux.Handle("POST /api/business/admin/payment/orders/{id}/cancel", s.requireAdminAuth(http.HandlerFunc(s.handleAdminCancelPaymentOrder)))
+	mux.Handle("POST /api/business/admin/payment/orders/{id}/refund", s.requireAdminAuth(http.HandlerFunc(s.handleAdminRefundPaymentOrder)))
+	mux.Handle("GET /api/business/admin/payment/orders/{id}/audit", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListPaymentOrderAuditLogs)))
 	mux.Handle("GET /api/business/me", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessMe)))
 	mux.Handle("PATCH /api/business/me/password", s.requireUIAuth(http.HandlerFunc(s.handleChangeBusinessMePassword)))
 	mux.Handle("GET /api/business/credit", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessCredit)))
 	mux.Handle("GET /api/business/credit/ledger", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessCreditLedger)))
 	mux.Handle("POST /api/business/credit/redeem", s.requireUIAuth(http.HandlerFunc(s.handleRedeemBusinessCode)))
 	mux.Handle("GET /api/business/affiliate", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessAffiliateSummary)))
+	mux.Handle("GET /api/business/subscription", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessSubscription)))
+	mux.Handle("GET /api/business/payment/packages", s.requireUIAuth(http.HandlerFunc(s.handleListPaymentPackages)))
+	mux.Handle("GET /api/business/payment/orders", s.requireUIAuth(http.HandlerFunc(s.handleListPaymentOrders)))
+	mux.Handle("POST /api/business/payment/orders", s.requireUIAuth(http.HandlerFunc(s.handleCreatePaymentOrder)))
 	mux.Handle("GET /api/business/notifications", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessNotifications)))
 	mux.Handle("POST /api/business/notifications/read", s.requireUIAuth(http.HandlerFunc(s.handleMarkBusinessNotificationsRead)))
 	mux.Handle("GET /api/business/usage", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessUsage)))

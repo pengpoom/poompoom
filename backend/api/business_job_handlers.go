@@ -225,19 +225,32 @@ func (s *Server) refundCancelledPreUpstreamBusinessImageJob(ctx context.Context,
 		return job
 	}
 	defer creditStore.Close()
+	totalRefunded := int64(0)
 	totals, err := creditStore.GenerationTotals(ctx, job.UserID, job.GenerationID)
 	if err != nil {
 		return job
 	}
-	if totals.Reserved <= totals.Refunded {
-		job.CreditRefunded = totals.Refunded
-		return s.saveBusinessImageJobSnapshot(ctx, job)
+	totalRefunded += totals.Refunded
+	if totals.Reserved > totals.Refunded {
+		refundable := totals.Reserved - totals.Refunded
+		if _, _, err := creditStore.Refund(ctx, job.UserID, refundable, job.GenerationID); err == nil {
+			totalRefunded += refundable
+		}
 	}
-	refundable := totals.Reserved - totals.Refunded
-	if _, _, err := creditStore.Refund(ctx, job.UserID, refundable, job.GenerationID); err != nil {
-		return job
+	paymentStore, err := s.newBusinessPaymentStore()
+	if err == nil {
+		defer paymentStore.Close()
+		if subscriptionTotals, totalsErr := paymentStore.SubscriptionGenerationTotals(ctx, job.UserID, job.GenerationID); totalsErr == nil {
+			totalRefunded += subscriptionTotals.Refunded
+			if subscriptionTotals.Reserved > subscriptionTotals.Refunded {
+				refundable := subscriptionTotals.Reserved - subscriptionTotals.Refunded
+				if _, refundErr := paymentStore.RefundSubscriptionCredits(ctx, job.UserID, refundable, job.GenerationID); refundErr == nil {
+					totalRefunded += refundable
+				}
+			}
+		}
 	}
-	job.CreditRefunded = totals.Refunded + refundable
+	job.CreditRefunded = totalRefunded
 	return s.saveBusinessImageJobSnapshot(ctx, job)
 }
 

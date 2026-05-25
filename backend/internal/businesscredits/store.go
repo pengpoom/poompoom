@@ -23,6 +23,12 @@ const (
 	ReasonRedeemCode             = "redeem_code"
 	ReasonRegistrationPromo      = "registration_promo"
 	ReasonAffiliateRegistration  = "affiliate_registration"
+	ReasonPaymentRecharge        = "payment_recharge"
+	ReasonPaymentRefund          = "payment_refund"
+	ReasonSubscriptionReserve    = "subscription_credit_reserve"
+	ReasonSubscriptionRefund     = "subscription_credit_refund"
+	ReasonAffiliateOrderReward   = "affiliate_order_commission"
+	ReasonAffiliateOrderReversal = "affiliate_order_commission_reversal"
 )
 
 var ErrInsufficientBalance = errors.New("insufficient credits")
@@ -41,6 +47,8 @@ type LedgerEntry struct {
 	BalanceAfter int64  `json:"balance_after"`
 	Reason       string `json:"reason"`
 	GenerationID string `json:"generation_id,omitempty"`
+	SourceType   string `json:"source_type,omitempty"`
+	SourceID     string `json:"source_id,omitempty"`
 	CreatedAt    string `json:"created_at"`
 }
 
@@ -334,8 +342,19 @@ func (s *Store) Add(ctx context.Context, userID string, delta int64, reason stri
 }
 
 func (s *Store) AddWithTx(ctx context.Context, tx *sql.Tx, userID string, delta int64, reason string, requireSufficient bool) (LedgerEntry, error) {
+	return s.addWithTx(ctx, tx, userID, delta, reason, "", "", "", requireSufficient)
+}
+
+func (s *Store) AddWithTxSource(ctx context.Context, tx *sql.Tx, userID string, delta int64, reason string, sourceType string, sourceID string, requireSufficient bool) (LedgerEntry, error) {
+	return s.addWithTx(ctx, tx, userID, delta, reason, "", sourceType, sourceID, requireSufficient)
+}
+
+func (s *Store) addWithTx(ctx context.Context, tx *sql.Tx, userID string, delta int64, reason string, generationID string, sourceType string, sourceID string, requireSufficient bool) (LedgerEntry, error) {
 	userID = cleanUserID(userID)
 	reason = normalizeReason(reason, ReasonAdminAdjustment)
+	generationID = strings.TrimSpace(generationID)
+	sourceType = normalizeReason(sourceType, "")
+	sourceID = strings.TrimSpace(sourceID)
 	if userID == "" {
 		return LedgerEntry{}, fmt.Errorf("user id is required")
 	}
@@ -356,7 +375,7 @@ func (s *Store) AddWithTx(ctx context.Context, tx *sql.Tx, userID string, delta 
 	if next < 0 {
 		return LedgerEntry{}, fmt.Errorf("balance cannot be negative")
 	}
-	return s.writeBalanceDelta(ctx, tx, userID, delta, reason, "", next)
+	return s.writeBalanceDeltaWithSource(ctx, tx, userID, delta, reason, generationID, sourceType, sourceID, next)
 }
 
 func (s *Store) LedgerEntries(ctx context.Context, userID string, limit int) ([]LedgerEntry, error) {
@@ -391,6 +410,8 @@ func (s *Store) BalanceLedgerEntriesPage(ctx context.Context, userID string, lim
 	return s.ledgerEntriesPage(ctx, userID, limit, offset, []string{
 		ReasonImageGenerationReserve,
 		ReasonImageGenerationRefund,
+		ReasonSubscriptionReserve,
+		ReasonSubscriptionRefund,
 	})
 }
 
@@ -435,7 +456,7 @@ func (s *Store) ledgerEntriesPage(ctx context.Context, userID string, limit int,
 	queryArgs = append(queryArgs, limit, offset)
 	rows, err := s.db.QueryContext(
 		ctx,
-		s.rebind(`SELECT id, user_id, delta, balance_after, reason, generation_id, created_at
+		s.rebind(`SELECT id, user_id, delta, balance_after, reason, generation_id, source_type, source_id, created_at
 		 FROM business_credit_ledger
 		 `+where+`
 		 ORDER BY created_at DESC, id DESC
@@ -457,6 +478,8 @@ func (s *Store) ledgerEntriesPage(ctx context.Context, userID string, limit int,
 			&item.BalanceAfter,
 			&item.Reason,
 			&item.GenerationID,
+			&item.SourceType,
+			&item.SourceID,
 			&item.CreatedAt,
 		); err != nil {
 			return nil, 0, err
@@ -524,6 +547,10 @@ func (s *Store) balanceForUpdate(ctx context.Context, tx *sql.Tx, userID string)
 }
 
 func (s *Store) writeBalanceDelta(ctx context.Context, tx *sql.Tx, userID string, delta int64, reason string, generationID string, balanceAfter int64) (LedgerEntry, error) {
+	return s.writeBalanceDeltaWithSource(ctx, tx, userID, delta, reason, generationID, "", "", balanceAfter)
+}
+
+func (s *Store) writeBalanceDeltaWithSource(ctx context.Context, tx *sql.Tx, userID string, delta int64, reason string, generationID string, sourceType string, sourceID string, balanceAfter int64) (LedgerEntry, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	entry := LedgerEntry{
 		ID:           newLedgerID(),
@@ -532,6 +559,8 @@ func (s *Store) writeBalanceDelta(ctx context.Context, tx *sql.Tx, userID string
 		BalanceAfter: balanceAfter,
 		Reason:       reason,
 		GenerationID: generationID,
+		SourceType:   sourceType,
+		SourceID:     sourceID,
 		CreatedAt:    now,
 	}
 	_, err := tx.ExecContext(
@@ -549,14 +578,16 @@ func (s *Store) writeBalanceDelta(ctx context.Context, tx *sql.Tx, userID string
 	_, err = tx.ExecContext(
 		ctx,
 		s.rebind(`INSERT INTO business_credit_ledger(
-			id, user_id, delta, balance_after, reason, generation_id, created_at
-		) VALUES(?, ?, ?, ?, ?, ?, ?)`),
+			id, user_id, delta, balance_after, reason, generation_id, source_type, source_id, created_at
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		entry.ID,
 		entry.UserID,
 		entry.Delta,
 		entry.BalanceAfter,
 		entry.Reason,
 		entry.GenerationID,
+		entry.SourceType,
+		entry.SourceID,
 		entry.CreatedAt,
 	)
 	if err != nil {
