@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Coins, KeyRound, LoaderCircle, RefreshCw, ShieldCheck, UserRound } from "lucide-react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { Coins, KeyRound, LoaderCircle, RefreshCw, ShieldCheck, Upload, UserRound } from "lucide-react";
 import { toast } from "sonner";
 
 import { AdminHeader, AdminPage, AdminPanel, AdminStatCard } from "@/components/admin-layout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { changeBusinessMePassword, fetchBusinessMe, type BusinessMe } from "@/lib/api";
+import { changeBusinessMePassword, fetchBusinessMe, uploadBusinessMeAvatar, type BusinessMe } from "@/lib/api";
+import { setStoredAuthAvatarUrl } from "@/store/auth";
 
 function roleText(value: string | undefined) {
   return value === "admin" ? "管理员" : "普通用户";
@@ -36,9 +37,11 @@ export default function ProfilePage() {
   const [me, setMe] = useState<BusinessMe | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [avatarUploading, setAvatarUploading] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadMe = async () => {
     setLoading(true);
@@ -86,6 +89,33 @@ export default function ProfilePage() {
     }
   };
 
+  const handleAvatarChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+    if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)) {
+      toast.error("头像只支持 PNG、JPG、WebP 或 GIF");
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      toast.error("头像不能超过 4MB");
+      return;
+    }
+    setAvatarUploading(true);
+    try {
+      const payload = await uploadBusinessMeAvatar(file);
+      setMe((currentMe) => currentMe ? { ...currentMe, user: payload.user } : currentMe);
+      await setStoredAuthAvatarUrl(payload.user.avatarUrl || null);
+      toast.success("头像已更新");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "上传头像失败");
+    } finally {
+      setAvatarUploading(false);
+    }
+  };
+
   const summaryItems = [
     { label: "角色", value: roleText(me?.user.role), icon: ShieldCheck, color: "text-[var(--app-text-primary)]" },
     { label: "余额", value: numberText(me?.credit.balance), icon: Coins, color: "text-violet-600 dark:text-violet-300" },
@@ -128,6 +158,36 @@ export default function ProfilePage() {
               </div>
             ) : (
               <div className="space-y-4 text-sm">
+                <div className="flex items-center gap-4 rounded-[var(--app-radius-lg)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] p-4">
+                  <div className="grid size-16 shrink-0 place-items-center overflow-hidden rounded-full border border-[var(--app-border-strong)] bg-[var(--app-bg-muted)] text-[var(--app-text-muted)]">
+                    {me?.user.avatarUrl ? (
+                      <img src={me.user.avatarUrl} alt="当前头像" className="size-full object-cover" />
+                    ) : (
+                      <UserRound className="size-7" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-semibold text-[var(--app-text-primary)]">{me?.user.username || "-"}</div>
+                    <div className="mt-1 truncate text-xs text-[var(--app-text-muted)]">{me?.user.email || "-"}</div>
+                  </div>
+                  <input
+                    ref={avatarInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    className="hidden"
+                    onChange={(event) => void handleAvatarChange(event)}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => avatarInputRef.current?.click()}
+                    disabled={avatarUploading}
+                  >
+                    {avatarUploading ? <LoaderCircle className="size-4 animate-spin" /> : <Upload className="size-4" />}
+                    上传
+                  </Button>
+                </div>
                 <div>
                   <div className="text-xs text-[var(--app-text-muted)]">用户名</div>
                   <div className="mt-1 font-medium text-[var(--app-text-primary)]">{me?.user.username || "-"}</div>

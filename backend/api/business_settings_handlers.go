@@ -16,7 +16,20 @@ func (s *Server) handleGetPublicSiteSettings(w http.ResponseWriter, r *http.Requ
 			"subtitle": settings.Site.Subtitle,
 			"logoUrl":  settings.Site.LogoURL,
 		},
+		"turnstile": publicTurnstileSettings(settings),
 	})
+}
+
+func publicTurnstileSettings(settings businesssettings.Settings) map[string]any {
+	settings = businesssettings.Normalize(settings)
+	return map[string]any{
+		"enabled":        settings.User.TurnstileEnabled,
+		"siteKey":        settings.User.TurnstileSiteKey,
+		"login":          settings.User.TurnstileLogin,
+		"registerCode":   settings.User.TurnstileRegisterCode,
+		"registerSubmit": settings.User.TurnstileRegisterSubmit,
+		"passwordReset":  settings.User.TurnstilePasswordReset,
+	}
 }
 
 func (s *Server) handleGetBusinessSystemSettings(w http.ResponseWriter, r *http.Request) {

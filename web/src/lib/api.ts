@@ -98,6 +98,13 @@ export type BusinessSystemSettings = {
     defaultCredits: number;
     registration: boolean;
     registrationCodeRequired: boolean;
+    turnstileEnabled: boolean;
+    turnstileSiteKey: string;
+    turnstileSecretKey: string;
+    turnstileLogin: boolean;
+    turnstileRegisterCode: boolean;
+    turnstileRegisterSubmit: boolean;
+    turnstilePasswordReset: boolean;
   };
   email: {
     smtpHost: string;
@@ -150,6 +157,14 @@ export type BusinessSystemSettingsResponse = {
 };
 export type PublicSiteSettings = {
   site: Pick<BusinessSystemSettings["site"], "name" | "subtitle" | "logoUrl">;
+  turnstile?: {
+    enabled: boolean;
+    siteKey: string;
+    login?: boolean;
+    registerCode?: boolean;
+    registerSubmit?: boolean;
+    passwordReset?: boolean;
+  };
 };
 export type ImageResponseItem = {
   url?: string;
@@ -849,6 +864,7 @@ export type LoginResult = {
   ok: boolean;
   token: string;
   role: AuthRole;
+  avatarUrl?: string;
   email?: string;
   username?: string;
   userId?: string;
@@ -860,6 +876,14 @@ export type RegistrationOptions = {
   enabled: boolean;
   registration: boolean;
   registrationCodeRequired: boolean;
+  turnstile?: {
+    enabled: boolean;
+    siteKey: string;
+    login?: boolean;
+    registerCode?: boolean;
+    registerSubmit?: boolean;
+    passwordReset?: boolean;
+  };
   emailVerificationConfigured: boolean;
   codeTTLSeconds: number;
   codeCooldownSeconds: number;
@@ -875,6 +899,7 @@ export type BusinessUser = {
   email: string;
   role: BusinessUserRole;
   status: BusinessUserStatus;
+  avatarUrl?: string;
   deleted_at?: string;
   created_at: string;
   updated_at: string;
@@ -1413,12 +1438,12 @@ type BusinessUserMutationResponse = {
   item: BusinessUser;
 };
 
-export async function login(email: string, password: string): Promise<LoginResult> {
+export async function login(email: string, password: string, turnstileToken?: string): Promise<LoginResult> {
   const normalizedEmail = String(email || "").trim();
   try {
     return await httpRequest<LoginResult>("/auth/login", {
       method: "POST",
-      body: { email: normalizedEmail, password },
+      body: { email: normalizedEmail, password, turnstileToken: turnstileToken?.trim() || undefined },
       redirectOnUnauthorized: false,
     });
   } catch (error) {
@@ -1435,18 +1460,18 @@ export async function fetchRegistrationOptions() {
   });
 }
 
-export async function requestRegistrationCode(email: string) {
+export async function requestRegistrationCode(email: string, turnstileToken?: string) {
   return httpRequest<{ ok: boolean; expiresIn: number; cooldownSeconds: number }>("/auth/register/code", {
     method: "POST",
-    body: { email: String(email || "").trim() },
+    body: { email: String(email || "").trim(), turnstileToken: turnstileToken?.trim() || undefined },
     redirectOnUnauthorized: false,
   });
 }
 
-export async function requestPasswordResetCode(email: string) {
+export async function requestPasswordResetCode(email: string, turnstileToken?: string) {
   return httpRequest<{ ok: boolean; expiresIn: number; cooldownSeconds: number }>("/auth/password-reset/code", {
     method: "POST",
-    body: { email: String(email || "").trim() },
+    body: { email: String(email || "").trim(), turnstileToken: turnstileToken?.trim() || undefined },
     redirectOnUnauthorized: false,
   });
 }
@@ -1458,6 +1483,7 @@ export async function registerBusinessUser(payload: {
   code: string;
   registerCode?: string;
   affiliateCode?: string;
+  turnstileToken?: string;
 }): Promise<LoginResult> {
   return httpRequest<LoginResult>("/auth/register", {
     method: "POST",
@@ -1468,6 +1494,7 @@ export async function registerBusinessUser(payload: {
       code: payload.code.trim(),
       registerCode: payload.registerCode?.trim() || undefined,
       affiliateCode: payload.affiliateCode?.trim() || undefined,
+      turnstileToken: payload.turnstileToken?.trim() || undefined,
     },
     redirectOnUnauthorized: false,
   });
@@ -1612,6 +1639,15 @@ export async function fetchBusinessUserDetail(id: string, query: {
 
 export async function fetchBusinessMe() {
   return httpRequest<BusinessMe>("/api/business/me");
+}
+
+export async function uploadBusinessMeAvatar(file: File) {
+  const body = new FormData();
+  body.append("avatar", file);
+  return httpRequest<{ user: BusinessUser }>("/api/business/me/avatar", {
+    method: "POST",
+    body,
+  });
 }
 
 export async function changeBusinessMePassword(payload: {

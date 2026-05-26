@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { TurnstileWidget } from "@/components/turnstile-widget";
 import {
   fetchRegistrationOptions,
   login,
@@ -15,8 +16,8 @@ import {
   type LoginResult,
   type RegistrationOptions,
 } from "@/lib/api";
-import { usePublicSiteSettings } from "@/lib/site-settings";
-import { setStoredAuthRole, setStoredAuthUsername } from "@/store/auth";
+import { usePublicSiteSettings, usePublicTurnstileSettings } from "@/lib/site-settings";
+import { setStoredAuthAvatarUrl, setStoredAuthRole, setStoredAuthUsername } from "@/store/auth";
 import { cn } from "@/lib/utils";
 
 export type AuthMode = "login" | "register";
@@ -38,6 +39,7 @@ export function AuthCard({
 }: AuthCardProps) {
   const navigate = useNavigate();
   const site = usePublicSiteSettings();
+  const turnstile = usePublicTurnstileSettings();
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -45,6 +47,8 @@ export function AuthCard({
   const [code, setCode] = useState("");
   const [registerCode, setRegisterCode] = useState("");
   const [affiliateCode, setAffiliateCode] = useState("");
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileResetKey, setTurnstileResetKey] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSendingCode, setIsSendingCode] = useState(false);
   const [codeCooldownLeft, setCodeCooldownLeft] = useState(0);
@@ -103,6 +107,15 @@ export function AuthCard({
     () => isSubmitting || isSendingCode,
     [isSubmitting, isSendingCode],
   );
+  const loginTurnstileRequired = Boolean(turnstile.enabled && turnstile.siteKey && turnstile.login);
+  const registerCodeTurnstileRequired = Boolean(turnstile.enabled && turnstile.siteKey && turnstile.registerCode);
+  const registerSubmitTurnstileRequired = Boolean(turnstile.enabled && turnstile.siteKey && turnstile.registerSubmit);
+  const visibleTurnstileRequired = mode === "login" ? loginTurnstileRequired : registerSubmitTurnstileRequired;
+  const showRegisterCodeTurnstile = mode === "register" && registerCodeTurnstileRequired && !registerSubmitTurnstileRequired && codeCooldownLeft <= 0;
+  const resetTurnstile = () => {
+    setTurnstileToken("");
+    setTurnstileResetKey((current) => current + 1);
+  };
   const authTitle =
     mode === "register" ? "Create your account" : "Log in to Image Studio";
   const authSubtitle =
@@ -113,6 +126,7 @@ export function AuthCard({
   const completeLogin = async (result: LoginResult, fallbackEmail: string) => {
     await setStoredAuthRole(result.role);
     await setStoredAuthUsername(result.username || result.email || fallbackEmail);
+    await setStoredAuthAvatarUrl(result.avatarUrl || null);
     const fallback = result.role === "admin" ? "/admin/dashboard" : "/image/history";
     navigate(from && from !== "/login" ? from : fallback, { replace: true });
   };
@@ -144,12 +158,17 @@ export function AuthCard({
       toast.error("请输入邮箱和密码");
       return;
     }
+    if (loginTurnstileRequired && !turnstileToken) {
+      toast.error("请先完成人机验证");
+      return;
+    }
 
     setIsSubmitting(true);
     try {
-      const result = await login(normalizedEmail, password);
+      const result = await login(normalizedEmail, password, turnstileToken);
       await completeLogin(result, normalizedEmail);
     } catch (error) {
+      resetTurnstile();
       toast.error(error instanceof Error ? error.message : "登录失败");
     } finally {
       setIsSubmitting(false);
@@ -169,9 +188,14 @@ export function AuthCard({
       toast.error("请输入邮箱");
       return;
     }
+    if (registerCodeTurnstileRequired && !turnstileToken) {
+      toast.error("请先完成人机验证");
+      return;
+    }
     setIsSendingCode(true);
     try {
-      const result = await requestRegistrationCode(normalizedEmail);
+      const result = await requestRegistrationCode(normalizedEmail, turnstileToken);
+      resetTurnstile();
       setCodeCooldownLeft(
         Math.max(
           1,
@@ -180,6 +204,7 @@ export function AuthCard({
       );
       toast.success("验证码已发送，请检查邮箱");
     } catch (error) {
+      resetTurnstile();
       toast.error(error instanceof Error ? error.message : "发送验证码失败");
     } finally {
       setIsSendingCode(false);
@@ -209,6 +234,10 @@ export function AuthCard({
       toast.error("两次输入的密码不一致");
       return;
     }
+    if (registerSubmitTurnstileRequired && !turnstileToken) {
+      toast.error("请先完成人机验证");
+      return;
+    }
     setIsSubmitting(true);
     try {
       const result = await registerBusinessUser({
@@ -218,10 +247,12 @@ export function AuthCard({
         code,
         registerCode,
         affiliateCode,
+        turnstileToken,
       });
       toast.success("注册成功");
       await completeLogin(result, normalizedEmail);
     } catch (error) {
+      resetTurnstile();
       toast.error(error instanceof Error ? error.message : "注册失败");
     } finally {
       setIsSubmitting(false);
@@ -379,10 +410,30 @@ export function AuthCard({
           </>
         ) : null}
 
+        {showRegisterCodeTurnstile ? (
+          <TurnstileWidget
+            enabled
+            siteKey={turnstile.siteKey}
+            action="register-code"
+            disabled={formDisabled}
+            resetKey={turnstileResetKey}
+            onTokenChange={setTurnstileToken}
+          />
+        ) : (
+          <TurnstileWidget
+            enabled={visibleTurnstileRequired}
+            siteKey={turnstile.siteKey}
+            action={mode}
+            disabled={formDisabled}
+            resetKey={turnstileResetKey}
+            onTokenChange={setTurnstileToken}
+          />
+        )}
+
         <Button
           className="mt-2 h-12 w-full rounded-lg border border-cyan-200/40 bg-[linear-gradient(135deg,rgba(255,255,255,0.18),rgba(255,255,255,0.05)),linear-gradient(135deg,rgba(63,105,255,0.9),rgba(31,220,255,0.78))] text-white shadow-[0_18px_40px_rgba(41,152,255,0.26)] hover:bg-[linear-gradient(135deg,rgba(255,255,255,0.22),rgba(255,255,255,0.08)),linear-gradient(135deg,rgba(63,105,255,0.95),rgba(31,220,255,0.82))]"
           onClick={() => void submit()}
-          disabled={isSubmitting}
+          disabled={isSubmitting || (visibleTurnstileRequired && !turnstileToken)}
         >
           {isSubmitting ? (
             <LoaderCircle className="size-4 animate-spin" />

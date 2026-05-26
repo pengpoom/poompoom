@@ -38,6 +38,13 @@ type UserSettings struct {
 	DefaultCredits           int64  `json:"defaultCredits"`
 	Registration             bool   `json:"registration"`
 	RegistrationCodeRequired bool   `json:"registrationCodeRequired"`
+	TurnstileEnabled         bool   `json:"turnstileEnabled"`
+	TurnstileSiteKey         string `json:"turnstileSiteKey"`
+	TurnstileSecretKey       string `json:"turnstileSecretKey"`
+	TurnstileLogin           bool   `json:"turnstileLogin"`
+	TurnstileRegisterCode    bool   `json:"turnstileRegisterCode"`
+	TurnstileRegisterSubmit  bool   `json:"turnstileRegisterSubmit"`
+	TurnstilePasswordReset   bool   `json:"turnstilePasswordReset"`
 }
 
 type EmailSettings struct {
@@ -205,6 +212,13 @@ func Defaults() Settings {
 			DefaultCredits:           20,
 			Registration:             false,
 			RegistrationCodeRequired: false,
+			TurnstileEnabled:         false,
+			TurnstileSiteKey:         "",
+			TurnstileSecretKey:       "",
+			TurnstileLogin:           false,
+			TurnstileRegisterCode:    true,
+			TurnstileRegisterSubmit:  false,
+			TurnstilePasswordReset:   true,
 		},
 		Email: EmailSettings{
 			SMTPHost: "",
@@ -265,6 +279,17 @@ func Normalize(settings Settings) Settings {
 	}
 	if !settings.User.Registration {
 		settings.User.RegistrationCodeRequired = false
+	}
+	settings.User.TurnstileSiteKey = strings.TrimSpace(settings.User.TurnstileSiteKey)
+	settings.User.TurnstileSecretKey = strings.TrimSpace(settings.User.TurnstileSecretKey)
+	if settings.User.TurnstileSiteKey == "" || settings.User.TurnstileSecretKey == "" {
+		settings.User.TurnstileEnabled = false
+	}
+	if !settings.User.TurnstileEnabled {
+		settings.User.TurnstileLogin = false
+		settings.User.TurnstileRegisterCode = false
+		settings.User.TurnstileRegisterSubmit = false
+		settings.User.TurnstilePasswordReset = false
 	}
 	settings.Email.SMTPHost = strings.TrimSpace(settings.Email.SMTPHost)
 	if settings.Email.SMTPPort <= 0 {

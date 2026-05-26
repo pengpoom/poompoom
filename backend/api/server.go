@@ -116,14 +116,16 @@ type authSession struct {
 	Email     string
 	Role      string
 	UserID    string
+	AvatarURL string
 	ExpiresAt time.Time
 }
 
 type loginAccount struct {
-	Username string
-	Email    string
-	Role     string
-	UserID   string
+	Username  string
+	Email     string
+	Role      string
+	UserID    string
+	AvatarURL string
 }
 
 func (e *requestError) Error() string {
@@ -579,7 +581,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/business/admin/payment/orders/{id}/refund", s.requireAdminAuth(http.HandlerFunc(s.handleAdminRefundPaymentOrder)))
 	mux.Handle("GET /api/business/admin/payment/orders/{id}/audit", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListPaymentOrderAuditLogs)))
 	mux.Handle("GET /api/business/me", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessMe)))
+	mux.Handle("POST /api/business/me/avatar", s.requireUIAuth(http.HandlerFunc(s.handleUploadBusinessMeAvatar)))
 	mux.Handle("PATCH /api/business/me/password", s.requireUIAuth(http.HandlerFunc(s.handleChangeBusinessMePassword)))
+	mux.Handle("GET /api/business/avatars/{name}", s.requireUIAuth(http.HandlerFunc(s.handleBusinessAvatarFile)))
 	mux.Handle("GET /api/business/credit", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessCredit)))
 	mux.Handle("GET /api/business/credit/ledger", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessCreditLedger)))
 	mux.Handle("POST /api/business/credit/redeem", s.requireUIAuth(http.HandlerFunc(s.handleRedeemBusinessCode)))
@@ -621,12 +625,16 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Email    string `json:"email"`
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Email          string `json:"email"`
+		Username       string `json:"username"`
+		Password       string `json:"password"`
+		TurnstileToken string `json:"turnstileToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		return
+	}
+	if !s.verifyTurnstileForSettings(w, r, s.businessSystemSettingsForContext(r.Context()), turnstileActionLogin, body.TurnstileToken) {
 		return
 	}
 
@@ -668,6 +676,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"username":  session.Username,
 		"email":     session.Email,
 		"userId":    session.UserID,
+		"avatarUrl": session.AvatarURL,
 		"expiresAt": session.ExpiresAt.Format(time.RFC3339),
 		"version":   buildinfo.ResolveVersion(s.cfg.App.Version),
 	})
@@ -1811,6 +1820,7 @@ func (s *Server) persistentAuthSessionForToken(ctx context.Context, token string
 		Email:     session.User.Email,
 		Role:      session.User.Role,
 		UserID:    session.User.ID,
+		AvatarURL: session.User.AvatarURL,
 		ExpiresAt: expiresAt,
 	}, true, nil
 }
@@ -1896,10 +1906,11 @@ func (s *Server) loginAccountForCredentials(ctx context.Context, username, passw
 		return loginAccount{}, false, err
 	}
 	return loginAccount{
-		Username: user.Username,
-		Email:    user.Email,
-		Role:     user.Role,
-		UserID:   user.ID,
+		Username:  user.Username,
+		Email:     user.Email,
+		Role:      user.Role,
+		UserID:    user.ID,
+		AvatarURL: user.AvatarURL,
 	}, true, nil
 }
 
@@ -1981,14 +1992,16 @@ func (s *Server) createAuthSession(ctx context.Context, account loginAccount) (s
 		Email:     account.Email,
 		Role:      account.Role,
 		UserID:    account.UserID,
+		AvatarURL: account.AvatarURL,
 		ExpiresAt: expiresAt,
 	}
 	_, err = store.CreateSession(ctx, sessionID, token, businessauth.User{
-		ID:       account.UserID,
-		Username: account.Username,
-		Email:    account.Email,
-		Role:     account.Role,
-		Status:   businessauth.StatusActive,
+		ID:        account.UserID,
+		Username:  account.Username,
+		Email:     account.Email,
+		Role:      account.Role,
+		Status:    businessauth.StatusActive,
+		AvatarURL: account.AvatarURL,
 	}, expiresAt)
 	if err != nil {
 		return "", authSession{}, err

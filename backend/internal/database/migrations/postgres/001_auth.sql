@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS business_users (
 	role TEXT NOT NULL,
 	status TEXT NOT NULL,
 	deleted_at TIMESTAMPTZ,
+	avatar_url TEXT NOT NULL DEFAULT '',
 	created_at TIMESTAMPTZ NOT NULL,
 	updated_at TIMESTAMPTZ NOT NULL
 );

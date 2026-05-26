@@ -6,22 +6,31 @@ import { ArrowLeft, CheckCircle2, LoaderCircle, MailCheck, ShieldCheck } from "l
 import { toast } from "sonner";
 
 import { AuthBrandMark } from "@/components/auth-card";
+import { TurnstileWidget } from "@/components/turnstile-widget";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { requestPasswordResetCode, resetBusinessUserPasswordByEmail } from "@/lib/api";
-import { usePublicSiteSettings } from "@/lib/site-settings";
+import { usePublicSiteSettings, usePublicTurnstileSettings } from "@/lib/site-settings";
 
 export default function ForgotPasswordPage() {
   const navigate = useNavigate();
   const site = usePublicSiteSettings();
+  const turnstile = usePublicTurnstileSettings();
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileResetKey, setTurnstileResetKey] = useState(0);
   const [cooldownLeft, setCooldownLeft] = useState(0);
   const [isSendingCode, setIsSendingCode] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [completed, setCompleted] = useState(false);
+  const turnstileRequired = Boolean(turnstile.enabled && turnstile.siteKey && turnstile.passwordReset);
+  const resetTurnstile = () => {
+    setTurnstileToken("");
+    setTurnstileResetKey((current) => current + 1);
+  };
 
   useEffect(() => {
     if (cooldownLeft <= 0) {
@@ -42,12 +51,18 @@ export default function ForgotPasswordPage() {
     if (cooldownLeft > 0 || isSendingCode) {
       return;
     }
+    if (turnstileRequired && !turnstileToken) {
+      toast.error("请先完成人机验证");
+      return;
+    }
     setIsSendingCode(true);
     try {
-      const result = await requestPasswordResetCode(normalizedEmail);
+      const result = await requestPasswordResetCode(normalizedEmail, turnstileToken);
+      resetTurnstile();
       setCooldownLeft(Math.max(1, result.cooldownSeconds || 60));
       toast.success("如果邮箱已注册，验证码会发送到该邮箱");
     } catch (error) {
+      resetTurnstile();
       toast.error(error instanceof Error ? error.message : "发送验证码失败");
     } finally {
       setIsSendingCode(false);
@@ -198,6 +213,15 @@ export default function ForgotPasswordPage() {
                     className={inputClass}
                   />
                 </Field>
+
+                <TurnstileWidget
+                  enabled={turnstileRequired}
+                  siteKey={turnstile.siteKey}
+                  action="password-reset"
+                  disabled={isSendingCode || isSubmitting}
+                  resetKey={turnstileResetKey}
+                  onTokenChange={setTurnstileToken}
+                />
 
                 <Button
                   type="button"

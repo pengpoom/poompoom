@@ -57,6 +57,7 @@ import {
   beginIntentionalLogout,
   clearStoredAuthKey,
   finishIntentionalLogout,
+  getStoredAuthAvatarUrl,
   getStoredAuthUsername,
   type AuthRole,
 } from "@/store/auth";
@@ -219,6 +220,7 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
   const railNavRef = useRef<HTMLElement | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
   const [username, setUsername] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState("");
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [moreMenuStyle, setMoreMenuStyle] = useState<CSSProperties | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -269,15 +271,19 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
 
   useEffect(() => {
     let cancelled = false;
-    const loadUsername = async () => {
-      const storedUsername = await getStoredAuthUsername();
+    const loadAccountProfile = async () => {
+      const [storedUsername, storedAvatarUrl] = await Promise.all([
+        getStoredAuthUsername(),
+        getStoredAuthAvatarUrl(),
+      ]);
       if (!cancelled) {
         setUsername(storedUsername);
+        setAvatarUrl(storedAvatarUrl);
       }
     };
-    void loadUsername();
+    void loadAccountProfile();
     const handleAuthChange = () => {
-      void loadUsername();
+      void loadAccountProfile();
     };
     window.addEventListener(AUTH_STATE_CHANGED_EVENT, handleAuthChange);
     return () => {
@@ -534,7 +540,11 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
               )}
             >
               <span className="grid size-10 place-items-center overflow-hidden rounded-full border border-transparent bg-[linear-gradient(rgba(7,10,18,0.9),rgba(7,10,18,0.9))_padding-box,conic-gradient(#e8ed48,#28d9ef,#6257f8,#57f08b,#e8ed48)_border-box] px-0.5 text-[10px] font-bold leading-none text-white shadow-[0_0_24px_rgba(40,214,255,0.14)]">
-                {avatarText(username, role)}
+                {avatarUrl ? (
+                  <img src={avatarUrl} alt={displayUsername} className="size-full rounded-full object-cover" />
+                ) : (
+                  avatarText(username, role)
+                )}
               </span>
             </Link>
             <Link

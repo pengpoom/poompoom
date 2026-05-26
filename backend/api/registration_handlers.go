@@ -40,6 +40,7 @@ func (s *Server) handleRegistrationOptions(w http.ResponseWriter, r *http.Reques
 		"enabled":                     settings.User.Registration && emailConfigured,
 		"registration":                settings.User.Registration,
 		"registrationCodeRequired":    settings.User.RegistrationCodeRequired,
+		"turnstile":                   publicTurnstileSettings(settings),
 		"emailVerificationConfigured": emailConfigured,
 		"codeTTLSeconds":              int(registrationVerificationTTL / time.Second),
 		"codeCooldownSeconds":         int(registrationVerificationCooldown / time.Second),
@@ -48,13 +49,17 @@ func (s *Server) handleRegistrationOptions(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleSendRegistrationVerificationCode(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Email string `json:"email"`
+		Email          string `json:"email"`
+		TurnstileToken string `json:"turnstileToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
 		return
 	}
 	settings := s.businessSystemSettingsForContext(r.Context())
+	if !s.verifyTurnstileForSettings(w, r, settings, turnstileActionRegisterCode, body.TurnstileToken) {
+		return
+	}
 	emailConfig := registrationEmailConfigFromSettings(settings)
 	if !settings.User.Registration {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "registration is disabled"})
@@ -115,19 +120,23 @@ func (s *Server) handleSendRegistrationVerificationCode(w http.ResponseWriter, r
 
 func (s *Server) handleRegisterBusinessUser(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Email         string `json:"email"`
-		Username      string `json:"username"`
-		Password      string `json:"password"`
-		Code          string `json:"code"`
-		InviteCode    string `json:"inviteCode"`
-		RegisterCode  string `json:"registerCode"`
-		AffiliateCode string `json:"affiliateCode"`
+		Email          string `json:"email"`
+		Username       string `json:"username"`
+		Password       string `json:"password"`
+		Code           string `json:"code"`
+		InviteCode     string `json:"inviteCode"`
+		RegisterCode   string `json:"registerCode"`
+		AffiliateCode  string `json:"affiliateCode"`
+		TurnstileToken string `json:"turnstileToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
 		return
 	}
 	settings := s.businessSystemSettingsForContext(r.Context())
+	if !s.verifyTurnstileForSettings(w, r, settings, turnstileActionRegisterSubmit, body.TurnstileToken) {
+		return
+	}
 	if !settings.User.Registration {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "registration is disabled"})
 		return
@@ -257,13 +266,15 @@ func (s *Server) handleRegisterBusinessUser(w http.ResponseWriter, r *http.Reque
 		"username":  session.Username,
 		"email":     session.Email,
 		"userId":    session.UserID,
+		"avatarUrl": session.AvatarURL,
 		"expiresAt": session.ExpiresAt.Format(time.RFC3339),
 	})
 }
 
 func (s *Server) handleSendPasswordResetVerificationCode(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Email string `json:"email"`
+		Email          string `json:"email"`
+		TurnstileToken string `json:"turnstileToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
@@ -275,6 +286,9 @@ func (s *Server) handleSendPasswordResetVerificationCode(w http.ResponseWriter, 
 		return
 	}
 	settings := s.businessSystemSettingsForContext(r.Context())
+	if !s.verifyTurnstileForSettings(w, r, settings, turnstileActionPasswordReset, body.TurnstileToken) {
+		return
+	}
 	emailConfig := registrationEmailConfigFromSettings(settings)
 	if !emailConfig.configured() {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "email is not configured"})

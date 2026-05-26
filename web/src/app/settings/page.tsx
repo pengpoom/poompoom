@@ -90,6 +90,13 @@ function defaultSystemSettings(): BusinessSystemSettings {
       defaultCredits: 20,
       registration: false,
       registrationCodeRequired: false,
+      turnstileEnabled: false,
+      turnstileSiteKey: "",
+      turnstileSecretKey: "",
+      turnstileLogin: false,
+      turnstileRegisterCode: true,
+      turnstileRegisterSubmit: false,
+      turnstilePasswordReset: true,
     },
     email: {
       smtpHost: "",
@@ -180,6 +187,13 @@ function normalizeSettings(settings: BusinessSystemSettings): BusinessSystemSett
       defaultRole: next.user.defaultRole === "admin" ? "admin" : "user",
       defaultCredits: normalizeNonNegativeInt(next.user.defaultCredits),
       registrationCodeRequired: Boolean(next.user.registration) && Boolean(next.user.registrationCodeRequired),
+      turnstileEnabled: Boolean(next.user.turnstileEnabled && next.user.turnstileSiteKey.trim() && next.user.turnstileSecretKey.trim()),
+      turnstileSiteKey: next.user.turnstileSiteKey.trim(),
+      turnstileSecretKey: next.user.turnstileSecretKey.trim(),
+      turnstileLogin: Boolean(next.user.turnstileEnabled && next.user.turnstileLogin),
+      turnstileRegisterCode: Boolean(next.user.turnstileEnabled && next.user.turnstileRegisterCode),
+      turnstileRegisterSubmit: Boolean(next.user.turnstileEnabled && next.user.turnstileRegisterSubmit),
+      turnstilePasswordReset: Boolean(next.user.turnstileEnabled && next.user.turnstilePasswordReset),
     },
     email: {
       ...next.email,
@@ -311,6 +325,160 @@ function ToggleRow({
           <div className="mt-1 text-xs leading-5 text-[var(--app-text-muted)]">{hint}</div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function CompactToggle({
+  label,
+  hint,
+  checked,
+  disabled = false,
+  onCheckedChange,
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  disabled?: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => onCheckedChange(!checked)}
+      className={cn(
+        "flex min-h-[76px] items-start gap-3 rounded-[var(--app-radius-md)] border px-3 py-3 text-left transition",
+        checked
+          ? "border-cyan-300/35 bg-cyan-300/10"
+          : "border-[var(--app-border-subtle)] bg-[var(--app-bg-surface)]",
+        disabled && "cursor-not-allowed opacity-50",
+      )}
+    >
+      <Checkbox checked={checked} disabled={disabled} className="mt-0.5" />
+      <span className="min-w-0">
+        <span className="block text-sm font-medium text-[var(--app-text-secondary)]">{label}</span>
+        <span className="mt-1 block text-xs leading-5 text-[var(--app-text-muted)]">{hint}</span>
+      </span>
+    </button>
+  );
+}
+
+function TurnstileSettingsPanel({
+  settings,
+  setSettings,
+}: {
+  settings: BusinessSystemSettings;
+  setSettings: React.Dispatch<React.SetStateAction<BusinessSystemSettings>>;
+}) {
+  const keysReady = Boolean(settings.user.turnstileSiteKey.trim() && settings.user.turnstileSecretKey.trim());
+  const enabled = Boolean(settings.user.turnstileEnabled);
+  return (
+    <div className={cn(adminSubPanelClass, "space-y-4 p-4 md:col-span-2")}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-[var(--app-text-secondary)]">人机验证</div>
+          <div className="mt-1 text-xs leading-5 text-[var(--app-text-muted)]">
+            使用 Cloudflare Turnstile。默认只保护发送验证码，避免登录和注册提交重复打扰用户。
+          </div>
+        </div>
+        <button
+          type="button"
+          disabled={!keysReady}
+          onClick={() =>
+            setSettings((current) => {
+              const checked = !current.user.turnstileEnabled;
+              return {
+                ...current,
+                user: {
+                  ...current.user,
+                  turnstileEnabled: checked,
+                  turnstileLogin: checked ? current.user.turnstileLogin : false,
+                  turnstileRegisterCode: checked ? current.user.turnstileRegisterCode : false,
+                  turnstileRegisterSubmit: checked ? current.user.turnstileRegisterSubmit : false,
+                  turnstilePasswordReset: checked ? current.user.turnstilePasswordReset : false,
+                },
+              };
+            })
+          }
+          className={cn(
+            "inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-[var(--app-radius-md)] border px-4 text-sm font-semibold transition",
+            enabled
+              ? "border-cyan-300/40 bg-cyan-300/15 text-cyan-100"
+              : "border-[var(--app-border-subtle)] bg-[var(--app-bg-surface)] text-[var(--app-text-secondary)]",
+            !keysReady && "cursor-not-allowed opacity-50",
+          )}
+        >
+          <Checkbox checked={enabled} disabled={!keysReady} />
+          {enabled ? "已启用" : "未启用"}
+        </button>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <CompactToggle
+          label="注册验证码"
+          hint="推荐开启，防止刷邮件。"
+          checked={enabled && settings.user.turnstileRegisterCode}
+          disabled={!enabled}
+          onCheckedChange={(checked) =>
+            setSettings((current) => ({
+              ...current,
+              user: {
+                ...current.user,
+                turnstileRegisterCode: current.user.turnstileEnabled ? checked : false,
+              },
+            }))
+          }
+        />
+        <CompactToggle
+          label="忘记密码验证码"
+          hint="推荐开启，防止刷重置邮件。"
+          checked={enabled && settings.user.turnstilePasswordReset}
+          disabled={!enabled}
+          onCheckedChange={(checked) =>
+            setSettings((current) => ({
+              ...current,
+              user: {
+                ...current.user,
+                turnstilePasswordReset: current.user.turnstileEnabled ? checked : false,
+              },
+            }))
+          }
+        />
+        <CompactToggle
+          label="登录"
+          hint="默认关闭，后续可改成失败多次触发。"
+          checked={enabled && settings.user.turnstileLogin}
+          disabled={!enabled}
+          onCheckedChange={(checked) =>
+            setSettings((current) => ({
+              ...current,
+              user: {
+                ...current.user,
+                turnstileLogin: current.user.turnstileEnabled ? checked : false,
+              },
+            }))
+          }
+        />
+        <CompactToggle
+          label="注册提交"
+          hint="默认关闭，邮箱验证码已兜底。"
+          checked={enabled && settings.user.turnstileRegisterSubmit}
+          disabled={!enabled}
+          onCheckedChange={(checked) =>
+            setSettings((current) => ({
+              ...current,
+              user: {
+                ...current.user,
+                turnstileRegisterSubmit: current.user.turnstileEnabled ? checked : false,
+              },
+            }))
+          }
+        />
+      </div>
+      {!keysReady ? (
+        <div className="text-xs leading-5 text-amber-200/90">填写 Site Key 和 Secret Key 后才能启用。</div>
+      ) : null}
     </div>
   );
 }
@@ -588,6 +756,41 @@ export default function SettingsPage() {
                   }))
                 }
               />
+              <TurnstileSettingsPanel settings={settings} setSettings={setSettings} />
+              <Field label="Turnstile Site Key" hint="Cloudflare Turnstile 的公开 site key，会下发到登录页。">
+                <Input
+                  value={settings.user.turnstileSiteKey}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      user: {
+                        ...current.user,
+                        turnstileSiteKey: event.target.value,
+                      },
+                    }))
+                  }
+                  className={settingsInputClass}
+                  placeholder="0x4AAAA..."
+                />
+              </Field>
+              <Field label="Turnstile Secret Key" hint="Cloudflare Turnstile 的服务端密钥，只用于后端校验。">
+                <Input
+                  type="password"
+                  value={settings.user.turnstileSecretKey}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      user: {
+                        ...current.user,
+                        turnstileSecretKey: event.target.value,
+                      },
+                    }))
+                  }
+                  className={settingsInputClass}
+                  placeholder="0x4AAAA..."
+                  autoComplete="new-password"
+                />
+              </Field>
             </SettingSection>
 
             <SettingSection

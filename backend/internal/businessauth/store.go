@@ -55,6 +55,7 @@ type User struct {
 	Role         string `json:"role"`
 	Status       string `json:"status"`
 	DeletedAt    string `json:"deleted_at,omitempty"`
+	AvatarURL    string `json:"avatarUrl,omitempty"`
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at"`
 }
@@ -150,6 +151,7 @@ func (s *Store) init() error {
 			role TEXT NOT NULL,
 			status TEXT NOT NULL,
 			deleted_at TEXT NOT NULL DEFAULT '',
+			avatar_url TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);`,
@@ -189,6 +191,9 @@ func (s *Store) init() error {
 		return err
 	}
 	if err := s.migrateBusinessUsersUID(); err != nil {
+		return err
+	}
+	if err := s.migrateBusinessUsersAvatarURL(); err != nil {
 		return err
 	}
 	return nil
@@ -263,6 +268,13 @@ func (s *Store) migrateBusinessUsersUID() error {
 	}
 	_, err = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_business_users_created_uid ON business_users(created_at, uid)`)
 	return err
+}
+
+func (s *Store) migrateBusinessUsersAvatarURL() error {
+	if _, err := s.db.Exec(`ALTER TABLE business_users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''`); err != nil && !isDuplicateColumnError(err) {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) EnsureBootstrapUsers(ctx context.Context, users []BootstrapUser) error {
@@ -407,7 +419,7 @@ func (s *Store) GetUserByEmail(ctx context.Context, email string) (User, bool, e
 	var user User
 	err := s.db.QueryRowContext(
 		ctx,
-		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at
+		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, avatar_url, created_at, updated_at
 		 FROM business_users
 		 WHERE email = ?`),
 		email,
@@ -433,7 +445,7 @@ func (s *Store) GetUserByUsername(ctx context.Context, username string) (User, b
 	var user User
 	err := s.db.QueryRowContext(
 		ctx,
-		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at
+		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, avatar_url, created_at, updated_at
 		 FROM business_users
 		 WHERE username = ?`),
 		username,
@@ -456,7 +468,7 @@ func (s *Store) ListUsers(ctx context.Context, options ...ListUsersOptions) ([]U
 	if len(options) > 0 {
 		includeDeleted = options[0].IncludeDeleted
 	}
-	query := `SELECT id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at
+	query := `SELECT id, uid, username, email, password_hash, role, status, deleted_at, avatar_url, created_at, updated_at
 		 FROM business_users`
 	args := []any{}
 	if !includeDeleted {
@@ -940,7 +952,7 @@ func (s *Store) GetUserByID(ctx context.Context, id string) (User, bool, error) 
 	var user User
 	err := s.db.QueryRowContext(
 		ctx,
-		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at
+		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, avatar_url, created_at, updated_at
 		 FROM business_users
 		 WHERE id = ?`),
 		id,
@@ -956,6 +968,42 @@ func (s *Store) GetUserByID(ctx context.Context, id string) (User, bool, error) 
 	user.Role = normalizeRole(user.Role)
 	user.Status = normalizeStatus(user.Status)
 	return user, true, nil
+}
+
+func (s *Store) UpdateUserAvatar(ctx context.Context, id, avatarURL string) (User, bool, error) {
+	id = cleanID(id)
+	avatarURL = strings.TrimSpace(avatarURL)
+	if id == "" {
+		return User{}, false, nil
+	}
+	user, ok, err := s.GetUserByID(ctx, id)
+	if err != nil || !ok {
+		return User{}, ok, err
+	}
+	if user.Status == StatusDeleted {
+		return user, true, ErrUserDeleted
+	}
+	result, err := s.db.ExecContext(
+		ctx,
+		s.rebind(`UPDATE business_users
+		 SET avatar_url = ?, updated_at = ?
+		 WHERE id = ?`),
+		avatarURL,
+		s.dbTime(time.Now().UTC()),
+		id,
+	)
+	if err != nil {
+		return User{}, false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return User{}, false, err
+	}
+	if affected == 0 {
+		return User{}, false, nil
+	}
+	user, ok, err = s.GetUserByID(ctx, id)
+	return user, ok, err
 }
 
 func (s *Store) DeleteUser(ctx context.Context, id string) (User, bool, error) {
@@ -1051,7 +1099,7 @@ func (s *Store) RestoreUser(ctx context.Context, id string) (User, bool, error) 
 func (s *Store) DeletedUsersBefore(ctx context.Context, cutoff time.Time) ([]User, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, created_at, updated_at
+		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, avatar_url, created_at, updated_at
 		 FROM business_users
 		 WHERE status = ? AND deleted_at IS NOT NULL AND deleted_at <= ?
 		 ORDER BY deleted_at ASC`),
@@ -1177,7 +1225,7 @@ func (s *Store) GetSessionByToken(ctx context.Context, token string) (Session, b
 		ctx,
 		s.rebind(`SELECT
 			s.id, s.user_id, s.token_hash, s.expires_at, s.revoked_at, s.created_at, s.last_seen_at,
-			u.id, u.uid, u.username, u.email, u.password_hash, u.role, u.status, u.deleted_at, u.created_at, u.updated_at
+			u.id, u.uid, u.username, u.email, u.password_hash, u.role, u.status, u.deleted_at, u.avatar_url, u.created_at, u.updated_at
 		 FROM user_sessions s
 		 JOIN business_users u ON u.id = s.user_id
 		 WHERE s.token_hash = ?`),
@@ -1443,6 +1491,7 @@ func (s *Store) userScanDest(user *User) []any {
 			&user.Role,
 			&user.Status,
 			nullableStringDest(&user.DeletedAt),
+			&user.AvatarURL,
 			&timeString{target: &user.CreatedAt},
 			&timeString{target: &user.UpdatedAt},
 		}
@@ -1456,6 +1505,7 @@ func (s *Store) userScanDest(user *User) []any {
 		&user.Role,
 		&user.Status,
 		&user.DeletedAt,
+		&user.AvatarURL,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 	}
