@@ -14,9 +14,11 @@ import (
 	"testing"
 	"time"
 
+	"imagestudio/internal/businessauth"
 	"imagestudio/internal/businesscredits"
 	"imagestudio/internal/businessimage"
 	"imagestudio/internal/businessjobs"
+	"imagestudio/internal/businesspayments"
 	"imagestudio/internal/businessproviders"
 	"imagestudio/internal/businesssettings"
 	"imagestudio/internal/businesstracker"
@@ -250,6 +252,82 @@ func TestProviderImageGenerateProxiesOpenAICompatibleRequest(t *testing.T) {
 	}
 	if job.RequestedCount != 1 || job.ActualCount != 1 || job.StorageBytes <= 0 {
 		t.Fatalf("job stats = requested:%d actual:%d storage:%d", job.RequestedCount, job.ActualCount, job.StorageBytes)
+	}
+}
+
+func TestProviderImageGenerateKeepsSubscriptionFirstAfterPartialRefund(t *testing.T) {
+	imageB64 := base64.StdEncoding.EncodeToString([]byte("partial-image"))
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data": []map[string]any{
+				{"b64_json": imageB64, "revised_prompt": "cat"},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	t.Setenv("IMAGE_PROVIDER", "openai_compatible")
+	t.Setenv("IMAGE_BASE_URL", upstream.URL)
+	t.Setenv("IMAGE_API_KEY", "provider-key")
+	t.Setenv("IMAGE_MODEL", "gpt-image-test")
+
+	cfg := newBusinessImageTestConfig(t)
+	cfg.Storage.ImageDir = "data/business-images"
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 5)
+	seedBusinessSubscription(t, cfg, businessimage.DevUserID, 2)
+	server := NewServer(cfg, nil, nil)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/image/generate",
+		strings.NewReader(`{"prompt":"cat","n":4,"conversationId":"conv-partial-subscription","turnId":"turn-partial-subscription","jobId":"job-partial-subscription"}`),
+	)
+	rec := httptest.NewRecorder()
+
+	server.handleProviderImageGenerate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	paymentStore, err := businesspayments.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open payment store: %v", err)
+	}
+	defer paymentStore.Close()
+	subscriptionTotals, err := paymentStore.SubscriptionGenerationTotals(context.Background(), businessimage.DevUserID, "job-partial-subscription")
+	if err != nil {
+		t.Fatalf("subscription totals: %v", err)
+	}
+	if subscriptionTotals.Reserved != 2 || subscriptionTotals.Refunded != 1 {
+		t.Fatalf("subscription totals = %#v, want reserved 2 refunded 1", subscriptionTotals)
+	}
+	subscription, err := paymentStore.GetCurrentSubscription(context.Background(), businessimage.DevUserID)
+	if err != nil {
+		t.Fatalf("current subscription: %v", err)
+	}
+	if subscription.CreditsLeft != 1 {
+		t.Fatalf("subscription credits left = %d, want 1", subscription.CreditsLeft)
+	}
+
+	creditStore, err := businesscredits.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open credit store: %v", err)
+	}
+	defer creditStore.Close()
+	balanceTotals, err := creditStore.GenerationTotals(context.Background(), businessimage.DevUserID, "job-partial-subscription")
+	if err != nil {
+		t.Fatalf("balance totals: %v", err)
+	}
+	if balanceTotals.Reserved != 2 || balanceTotals.Refunded != 2 {
+		t.Fatalf("balance totals = %#v, want reserved 2 refunded 2", balanceTotals)
+	}
+	summary, err := creditStore.Summary(context.Background(), businessimage.DevUserID)
+	if err != nil {
+		t.Fatalf("credit summary: %v", err)
+	}
+	if summary.Balance != 5 || summary.Spent != 0 {
+		t.Fatalf("credit summary = %#v, want unchanged balance 5", summary)
 	}
 }
 
@@ -2674,6 +2752,57 @@ func seedBusinessCredit(t *testing.T, cfg *config.Config, userID string, balance
 	defer store.Close()
 	if _, _, err := store.SetBalance(context.Background(), userID, balance, businesscredits.ReasonAdminAdjustment); err != nil {
 		t.Fatalf("seed credit: %v", err)
+	}
+}
+
+func seedBusinessSubscription(t *testing.T, cfg *config.Config, userID string, credits int64) {
+	t.Helper()
+	authStore, err := businessauth.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open auth store: %v", err)
+	}
+	if err := authStore.EnsureBootstrapUser(context.Background(), businessauth.BootstrapUser{
+		ID:       userID,
+		Username: userID,
+		Email:    userID + "@example.test",
+		Password: "test-password",
+		Role:     businessauth.RoleUser,
+	}); err != nil {
+		t.Fatalf("ensure subscription user: %v", err)
+	}
+	if err := authStore.Close(); err != nil {
+		t.Fatalf("close auth store: %v", err)
+	}
+
+	store, err := businesspayments.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open payment store: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	pkg, err := store.CreatePackage(ctx, businesspayments.PackageInput{
+		PackageType:  businesspayments.PackageTypeSubscription,
+		Name:         "测试订阅",
+		AmountCents:  990,
+		Credits:      credits,
+		DurationDays: 30,
+		Currency:     "CNY",
+		Enabled:      true,
+	})
+	if err != nil {
+		t.Fatalf("create subscription package: %v", err)
+	}
+	order, err := store.CreateOrder(ctx, businesspayments.CreateOrderInput{
+		UserID:    userID,
+		Username:  userID,
+		UserEmail: userID + "@example.test",
+		PackageID: pkg.ID,
+	})
+	if err != nil {
+		t.Fatalf("create subscription order: %v", err)
+	}
+	if _, err := store.CompleteOrder(ctx, businesspayments.CompleteOrderInput{OrderID: order.ID, Operator: "test_admin"}); err != nil {
+		t.Fatalf("complete subscription order: %v", err)
 	}
 }
 

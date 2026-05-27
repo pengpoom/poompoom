@@ -263,7 +263,55 @@ func (s *Store) Reserve(ctx context.Context, userID string, amount int64, genera
 }
 
 func (s *Store) Refund(ctx context.Context, userID string, amount int64, generationID string) (Summary, LedgerEntry, error) {
-	return s.Add(ctx, userID, amount, ReasonImageGenerationRefund, generationID, false)
+	userID = cleanUserID(userID)
+	generationID = strings.TrimSpace(generationID)
+	if userID == "" {
+		return Summary{}, LedgerEntry{}, fmt.Errorf("user id is required")
+	}
+	if amount <= 0 {
+		summary, err := s.Summary(ctx, userID)
+		return summary, LedgerEntry{}, err
+	}
+	if generationID == "" {
+		return s.Add(ctx, userID, amount, ReasonImageGenerationRefund, generationID, false)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Summary{}, LedgerEntry{}, err
+	}
+	defer tx.Rollback()
+	current, err := s.balanceForUpdate(ctx, tx, userID)
+	if err != nil {
+		return Summary{}, LedgerEntry{}, err
+	}
+	totals, err := s.generationTotalsWithTx(ctx, tx, userID, generationID)
+	if err != nil {
+		return Summary{}, LedgerEntry{}, err
+	}
+	refundable := totals.Reserved - totals.Refunded
+	if refundable <= 0 {
+		if err := tx.Commit(); err != nil {
+			return Summary{}, LedgerEntry{}, err
+		}
+		summary, err := s.Summary(ctx, userID)
+		return summary, LedgerEntry{}, err
+	}
+	if amount > refundable {
+		amount = refundable
+	}
+	next := current + amount
+	entry, err := s.writeBalanceDelta(ctx, tx, userID, amount, ReasonImageGenerationRefund, generationID, next)
+	if err != nil {
+		return Summary{}, LedgerEntry{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Summary{}, LedgerEntry{}, err
+	}
+	summary, err := s.Summary(ctx, userID)
+	if err != nil {
+		return Summary{}, LedgerEntry{}, err
+	}
+	return summary, entry, nil
 }
 
 func (s *Store) GenerationTotals(ctx context.Context, userID string, generationID string) (GenerationTotals, error) {
@@ -272,8 +320,28 @@ func (s *Store) GenerationTotals(ctx context.Context, userID string, generationI
 	if userID == "" || generationID == "" {
 		return GenerationTotals{}, nil
 	}
+	return s.generationTotalsQuery(ctx, s.db, userID, generationID)
+}
+
+func (s *Store) generationTotalsWithTx(ctx context.Context, tx *sql.Tx, userID string, generationID string) (GenerationTotals, error) {
+	if tx == nil {
+		return GenerationTotals{}, fmt.Errorf("transaction is required")
+	}
+	userID = cleanUserID(userID)
+	generationID = strings.TrimSpace(generationID)
+	if userID == "" || generationID == "" {
+		return GenerationTotals{}, nil
+	}
+	return s.generationTotalsQuery(ctx, tx, userID, generationID)
+}
+
+type creditQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (s *Store) generationTotalsQuery(ctx context.Context, queryer creditQueryer, userID string, generationID string) (GenerationTotals, error) {
 	var totals GenerationTotals
-	err := s.db.QueryRowContext(
+	err := queryer.QueryRowContext(
 		ctx,
 		s.rebind(`SELECT
 		    COALESCE(SUM(CASE WHEN reason = ? THEN -delta ELSE 0 END), 0),
@@ -412,6 +480,13 @@ func (s *Store) BalanceLedgerEntriesPage(ctx context.Context, userID string, lim
 		ReasonImageGenerationRefund,
 		ReasonSubscriptionReserve,
 		ReasonSubscriptionRefund,
+	})
+}
+
+func (s *Store) UserFacingLedgerEntriesPage(ctx context.Context, userID string, limit int, offset int) ([]LedgerEntry, int64, error) {
+	return s.ledgerEntriesPage(ctx, userID, limit, offset, []string{
+		ReasonImageGenerationReserve,
+		ReasonImageGenerationRefund,
 	})
 }
 

@@ -963,6 +963,7 @@ export type BusinessPaymentOrder = {
   credits: number;
   durationDays?: number;
   currency: string;
+  paymentMethod?: string;
   providerKey: string;
   providerInstanceId: string;
   outTradeNo: string;
@@ -976,6 +977,10 @@ export type BusinessPaymentOrder = {
   failedAt?: string;
   refundedAt?: string;
   creditLedgerId?: string;
+  billingAction?: "new" | "renewal" | "upgrade" | string;
+  upgradeFromSubscriptionId?: string;
+  upgradeCreditCents?: number;
+  originalAmountCents?: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -996,6 +1001,8 @@ export type BusinessPaymentCommission = {
 export type BusinessSubscription = {
   id?: string;
   userId?: string;
+  userEmail?: string;
+  username?: string;
   orderId?: string;
   packageId?: string;
   packageName?: string;
@@ -1003,10 +1010,11 @@ export type BusinessSubscription = {
   creditsTotal?: number;
   creditsUsed?: number;
   creditsLeft?: number;
-  status?: "active" | "expired" | "cancelled" | string;
+  status?: "active" | "expired" | "cancelled" | "upgraded" | string;
   active?: boolean;
   startsAt?: string;
   expiresAt?: string;
+  coverageExpiresAt?: string;
   cancelledAt?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -1017,9 +1025,23 @@ export type BusinessPaymentProvider = {
   name: string;
   enabled: boolean;
   supportedMethods: string[];
+  config?: Record<string, string>;
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
+};
+export type BusinessPaymentProviderInput = {
+  providerKey: string;
+  name: string;
+  enabled: boolean;
+  supportedMethods: string[];
+  config?: Record<string, string>;
+  sortOrder?: number;
+};
+export type BusinessPaymentMethod = {
+  key: string;
+  label: string;
+  providerKey: string;
 };
 export type BusinessPaymentAuditLog = {
   id: string;
@@ -1220,6 +1242,8 @@ export type BusinessCreditLedgerEntry = {
   balance_after: number;
   reason: string;
   generation_id?: string;
+  source_type?: string;
+  source_id?: string;
   created_at: string;
 };
 
@@ -1692,19 +1716,27 @@ export async function fetchBusinessPaymentPackages() {
   return httpRequest<{ items: BusinessPaymentPackage[] }>("/api/business/payment/packages");
 }
 
+export async function fetchBusinessPaymentMethods() {
+  return httpRequest<{ items: BusinessPaymentMethod[] }>("/api/business/payment/methods");
+}
+
 export async function fetchBusinessPaymentOrders(query: {
   status?: BusinessPaymentOrderStatus | "all";
+  kind?: "all" | "balance" | "subscription" | "renewal" | "upgrade";
+  search?: string;
+  page?: number;
+  pageSize?: number;
   limit?: number;
 } = {}) {
-  return httpRequest<{ items: BusinessPaymentOrder[] }>(
+  return httpRequest<{ items: BusinessPaymentOrder[]; page?: PaginationMeta }>(
     `/api/business/payment/orders${buildQuery(query)}`,
   );
 }
 
-export async function createBusinessPaymentOrder(packageId: string) {
+export async function createBusinessPaymentOrder(packageId: string, paymentMethod?: string) {
   return httpRequest<{ order: BusinessPaymentOrder }>("/api/business/payment/orders", {
     method: "POST",
-    body: { packageId },
+    body: { packageId, paymentMethod },
   });
 }
 
@@ -1922,12 +1954,53 @@ export async function fetchAdminBusinessPaymentProviders() {
   return httpRequest<{ items: BusinessPaymentProvider[] }>("/api/business/admin/payment/providers");
 }
 
+export async function createAdminBusinessPaymentProvider(payload: BusinessPaymentProviderInput) {
+  return httpRequest<{ item: BusinessPaymentProvider }>("/api/business/admin/payment/providers", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateAdminBusinessPaymentProvider(id: string, payload: BusinessPaymentProviderInput) {
+  return httpRequest<{ item: BusinessPaymentProvider }>(
+    `/api/business/admin/payment/providers/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      body: payload,
+    },
+  );
+}
+
+export async function deleteAdminBusinessPaymentProvider(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/admin/payment/providers/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
 export async function fetchAdminBusinessPaymentOrders(query: {
   status?: BusinessPaymentOrderStatus | "all";
+  kind?: "all" | "balance" | "subscription" | "renewal" | "upgrade";
+  search?: string;
+  page?: number;
+  pageSize?: number;
   limit?: number;
 } = {}) {
-  return httpRequest<{ items: BusinessPaymentOrder[] }>(
+  return httpRequest<{ items: BusinessPaymentOrder[]; page?: PaginationMeta }>(
     `/api/business/admin/payment/orders${buildQuery(query)}`,
+  );
+}
+
+export async function fetchAdminBusinessSubscriptions(query: {
+  status?: "active" | "expired" | "cancelled" | "upgraded" | "all";
+  activeWindow?: "current" | "future" | "history" | "all";
+  search?: string;
+  page?: number;
+  pageSize?: number;
+  limit?: number;
+} = {}) {
+  return httpRequest<{ items: BusinessSubscription[]; page?: PaginationMeta }>(
+    `/api/business/admin/payment/subscriptions${buildQuery(query)}`,
   );
 }
 

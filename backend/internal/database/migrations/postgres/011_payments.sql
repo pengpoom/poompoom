@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS business_payment_orders (
 	credits BIGINT NOT NULL,
 	duration_days INTEGER NOT NULL DEFAULT 0,
 	currency TEXT NOT NULL,
+	payment_method TEXT NOT NULL DEFAULT 'manual',
 	provider_key TEXT NOT NULL,
 	provider_instance_id TEXT NOT NULL,
 	provider_snapshot_json BYTEA,
@@ -71,6 +72,10 @@ CREATE TABLE IF NOT EXISTS business_payment_orders (
 	failed_at TIMESTAMPTZ,
 	refunded_at TIMESTAMPTZ,
 	credit_ledger_id TEXT NOT NULL DEFAULT '',
+	billing_action TEXT NOT NULL DEFAULT '',
+	upgrade_from_subscription_id TEXT NOT NULL DEFAULT '',
+	upgrade_credit_cents BIGINT NOT NULL DEFAULT 0,
+	original_amount_cents BIGINT NOT NULL DEFAULT 0,
 	created_at TIMESTAMPTZ NOT NULL,
 	updated_at TIMESTAMPTZ NOT NULL
 );
@@ -84,6 +89,10 @@ CREATE INDEX IF NOT EXISTS idx_business_payment_orders_status_created
 CREATE INDEX IF NOT EXISTS idx_business_payment_orders_expires
 	ON business_payment_orders(expires_at)
 	WHERE expires_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_business_payment_orders_billing_action
+	ON business_payment_orders(billing_action, created_at DESC)
+	WHERE billing_action <> '';
 
 CREATE TABLE IF NOT EXISTS business_idempotency_records (
 	scope TEXT NOT NULL,
@@ -152,3 +161,7 @@ CREATE TABLE IF NOT EXISTS business_user_subscriptions (
 
 CREATE INDEX IF NOT EXISTS idx_business_user_subscriptions_user_status_expires
 	ON business_user_subscriptions(user_id, status, expires_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_business_user_subscriptions_active_credits
+	ON business_user_subscriptions(user_id, starts_at, expires_at)
+	WHERE status = 'active' AND credits_total > credits_used;

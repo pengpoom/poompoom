@@ -760,16 +760,6 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 			amount = refundable
 		}
 		remaining := amount
-		subscriptionRefundable := subscriptionTotals.Reserved - subscriptionTotals.Refunded
-		if subscriptionRefundable > 0 && remaining > 0 {
-			refundAmount := remaining
-			if refundAmount > subscriptionRefundable {
-				refundAmount = subscriptionRefundable
-			}
-			if _, err := paymentStore.RefundSubscriptionCredits(context.Background(), userID, refundAmount, generationID); err == nil {
-				remaining -= refundAmount
-			}
-		}
 		balanceRefundable := balanceTotals.Reserved - balanceTotals.Refunded
 		if balanceRefundable > 0 && remaining > 0 {
 			refundAmount := remaining
@@ -777,6 +767,16 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 				refundAmount = balanceRefundable
 			}
 			if _, _, err := creditStore.Refund(context.Background(), userID, refundAmount, generationID); err == nil {
+				remaining -= refundAmount
+			}
+		}
+		subscriptionRefundable := subscriptionTotals.Reserved - subscriptionTotals.Refunded
+		if subscriptionRefundable > 0 && remaining > 0 {
+			refundAmount := remaining
+			if refundAmount > subscriptionRefundable {
+				refundAmount = subscriptionRefundable
+			}
+			if _, err := paymentStore.RefundSubscriptionCredits(context.Background(), userID, refundAmount, generationID); err == nil {
 				remaining -= refundAmount
 			}
 		}

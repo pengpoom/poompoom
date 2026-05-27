@@ -1,6 +1,6 @@
 "use client";
 
-import { type CSSProperties, memo, useState } from "react";
+import { type CSSProperties, memo, useEffect, useState } from "react";
 import Zoom from "react-medium-image-zoom";
 import {
   Brush,
@@ -299,6 +299,7 @@ function GeneratedImageCard({
   onCancelTurn,
 }: GeneratedImageCardProps) {
   const [actualDimensions, setActualDimensions] = useState<ImageDimensions | null>(null);
+  const [imageLoadFailed, setImageLoadFailed] = useState(false);
   const imageDataUrl = buildImageDataUrl(image);
   const downloadName = buildDownloadName(turn.createdAt, turn.id, index);
   const cancelRequested = Boolean(turn.cancelRequested);
@@ -306,17 +307,27 @@ function GeneratedImageCard({
   const showRunningState = turn.status === "running" || turn.status === "generating";
   const frameMetrics = resultFrameMetrics(actualDimensions ?? parseSizeDimensions(turn.size));
   const aspectRatioLabel = formatAspectRatioLabel(actualDimensions, turn.size);
+  const frameStyle = {
+    aspectRatio: frameMetrics.style.aspectRatio,
+    maxWidth: frameMetrics.style.maxWidth,
+  } satisfies CSSProperties;
+
+  useEffect(() => {
+    setImageLoadFailed(false);
+    setActualDimensions(null);
+  }, [imageDataUrl]);
 
   return (
     <div
       data-generated-image-card
-      className="w-max max-w-full"
+      className="w-full max-w-full"
+      style={{ maxWidth: frameMetrics.style.maxWidth }}
     >
       <div
         className="relative w-full overflow-hidden rounded-xl bg-[var(--app-bg-surface)] shadow-[inset_0_0_0_1px_var(--app-border)] [&_[data-rmiz-content]]:h-full [&_[data-rmiz-content]]:w-full [&_[data-rmiz]]:h-full [&_[data-rmiz]]:w-full"
-        style={frameMetrics.style}
+        style={frameStyle}
       >
-        {image.status === "success" && imageDataUrl ? (
+        {image.status === "success" && imageDataUrl && !imageLoadFailed ? (
           <>
             <Zoom>
               <Image
@@ -330,12 +341,14 @@ function GeneratedImageCard({
                   if (naturalWidth <= 0 || naturalHeight <= 0) {
                     return;
                   }
+                  setImageLoadFailed(false);
                   setActualDimensions((current) =>
                     current?.width === naturalWidth && current.height === naturalHeight
                       ? current
                       : { width: naturalWidth, height: naturalHeight },
                   );
                 }}
+                onError={() => setImageLoadFailed(true)}
                 className="block h-full w-full cursor-zoom-in object-contain"
               />
             </Zoom>
@@ -376,6 +389,23 @@ function GeneratedImageCard({
               </button>
             </div>
           </>
+        ) : image.status === "success" && imageLoadFailed ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 bg-rose-950/20 px-6 py-8 text-center text-rose-300">
+            <div className="rounded-full bg-rose-500/10 p-3">
+              <X className="size-5" />
+            </div>
+            <p className="text-sm font-bold">图片加载失败</p>
+            <p className="text-xs leading-6 text-rose-200/80">图片地址不可用或文件暂时无法访问。</p>
+            <button
+              type="button"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-rose-300/25 px-3 text-xs font-semibold text-rose-100 transition hover:bg-rose-300/10 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => void onRetryTurn(conversationId, turn, index)}
+              disabled={turnProcessing}
+            >
+              <RotateCcw className="size-3.5" />
+              重试
+            </button>
+          </div>
         ) : turn.status === "cancelled" ? (
           <div className="flex h-full items-center justify-center px-6 py-8 text-center text-sm font-semibold leading-7 text-[var(--app-text-muted)]">
             本次生成已取消
@@ -417,7 +447,7 @@ function GeneratedImageCard({
         )}
       </div>
 
-      <div className="mt-4 flex w-max max-w-none items-center gap-2 whitespace-nowrap text-[12px]">
+      <div className="mt-4 flex w-full flex-wrap items-center gap-2 text-[12px]">
         <span className={metaPillClass}>
           <span className={metaLabelClass}>模型</span>
           <span>{turn.providerPlatform || turn.model}</span>
@@ -540,12 +570,14 @@ export const ConversationTurns = memo(function ConversationTurns({
               </div>
             </div>
 
-            <div className="w-full max-w-[720px] space-y-5" data-image-result-group>
+            <div className="w-full max-w-[760px] space-y-5" data-image-result-group>
               {turn.images.length > 0 ? (
                 <div
                   className={cn(
-                    "grid justify-items-start gap-5",
-                    turn.images.length === 1 ? "grid-cols-1" : "grid-cols-1 xl:grid-cols-2",
+                    "grid w-full justify-items-start gap-5",
+                    turn.images.length === 1
+                      ? "grid-cols-[minmax(180px,350px)]"
+                      : "grid-cols-[minmax(180px,350px)] xl:grid-cols-[minmax(180px,350px)_minmax(180px,350px)]",
                   )}
                 >
                   {turn.images.map((image, index) => (

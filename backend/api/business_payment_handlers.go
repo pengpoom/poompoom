@@ -3,7 +3,9 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"imagestudio/internal/businesspayments"
@@ -19,6 +21,15 @@ type paymentPackagePayload struct {
 	Currency     string `json:"currency"`
 	Enabled      bool   `json:"enabled"`
 	SortOrder    int    `json:"sortOrder"`
+}
+
+type paymentProviderPayload struct {
+	ProviderKey      string            `json:"providerKey"`
+	Name             string            `json:"name"`
+	Enabled          bool              `json:"enabled"`
+	SupportedMethods []string          `json:"supportedMethods"`
+	Config           map[string]string `json:"config"`
+	SortOrder        int               `json:"sortOrder"`
 }
 
 func (s *Server) handleListPaymentPackages(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +77,29 @@ func (s *Server) handleAdminGetBusinessSubscription(w http.ResponseWriter, r *ht
 	writeJSON(w, http.StatusOK, map[string]any{"subscription": item})
 }
 
+func (s *Server) handleAdminListBusinessSubscriptions(w http.ResponseWriter, r *http.Request) {
+	store, err := s.newBusinessPaymentStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "payment store failed"})
+		return
+	}
+	defer store.Close()
+	page, pageSize, offset := paginationFromQuery(r, "", 20, 100)
+	items, total, err := store.ListSubscriptions(r.Context(), businesspayments.SubscriptionFilters{
+		Status:       r.URL.Query().Get("status"),
+		Search:       r.URL.Query().Get("search"),
+		ActiveWindow: r.URL.Query().Get("activeWindow"),
+	}, pageSize, offset)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+		"page":  paginationMeta{Page: page, PageSize: pageSize, Total: total},
+	})
+}
+
 func (s *Server) handleAdminListPaymentPackages(w http.ResponseWriter, r *http.Request) {
 	store, err := s.newBusinessPaymentStore()
 	if err != nil {
@@ -94,6 +128,84 @@ func (s *Server) handleAdminListPaymentProviders(w http.ResponseWriter, r *http.
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) handleListPaymentMethods(w http.ResponseWriter, r *http.Request) {
+	store, err := s.newBusinessPaymentStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "payment store failed"})
+		return
+	}
+	defer store.Close()
+	items, err := store.AvailablePaymentMethods(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) handleAdminCreatePaymentProvider(w http.ResponseWriter, r *http.Request) {
+	var body paymentProviderPayload
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		return
+	}
+	store, err := s.newBusinessPaymentStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "payment store failed"})
+		return
+	}
+	defer store.Close()
+	item, err := store.CreateProvider(r.Context(), paymentProviderInput(body))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": paymentErrorMessage(err)})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"item": item})
+}
+
+func (s *Server) handleAdminUpdatePaymentProvider(w http.ResponseWriter, r *http.Request) {
+	var body paymentProviderPayload
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		return
+	}
+	store, err := s.newBusinessPaymentStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "payment store failed"})
+		return
+	}
+	defer store.Close()
+	item, ok, err := store.UpdateProvider(r.Context(), r.PathValue("id"), paymentProviderInput(body))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": paymentErrorMessage(err)})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "provider not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"item": item})
+}
+
+func (s *Server) handleAdminDeletePaymentProvider(w http.ResponseWriter, r *http.Request) {
+	store, err := s.newBusinessPaymentStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "payment store failed"})
+		return
+	}
+	defer store.Close()
+	ok, err := store.DeleteProvider(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": paymentErrorMessage(err)})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "provider not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) handleAdminCreatePaymentPackage(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +273,8 @@ func (s *Server) handleAdminDeletePaymentPackage(w http.ResponseWriter, r *http.
 
 func (s *Server) handleCreatePaymentOrder(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		PackageID string `json:"packageId"`
+		PackageID     string `json:"packageId"`
+		PaymentMethod string `json:"paymentMethod"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
@@ -179,16 +292,50 @@ func (s *Server) handleCreatePaymentOrder(w http.ResponseWriter, r *http.Request
 	}
 	defer store.Close()
 	order, err := store.CreateOrder(r.Context(), businesspayments.CreateOrderInput{
-		UserID:    session.UserID,
-		Username:  session.Username,
-		UserEmail: session.Email,
-		PackageID: body.PackageID,
+		UserID:        session.UserID,
+		Username:      session.Username,
+		UserEmail:     session.Email,
+		PackageID:     body.PackageID,
+		PaymentMethod: body.PaymentMethod,
+		NotifyBaseURL: publicRequestBaseURL(r),
+		ReturnURL:     publicRequestBaseURL(r) + "/credits",
+		ClientIP:      clientIPFromRequest(r),
+		UserAgent:     r.UserAgent(),
 	})
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": paymentErrorMessage(err)})
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"order": order})
+}
+
+func (s *Server) handleEasyPayWebhook(w http.ResponseWriter, r *http.Request) {
+	raw := r.URL.RawQuery
+	if r.Method == http.MethodPost {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+			return
+		}
+		if strings.TrimSpace(string(body)) != "" {
+			raw = string(body)
+		}
+	}
+	if strings.TrimSpace(raw) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "empty callback"})
+		return
+	}
+	store, err := s.newBusinessPaymentStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "payment store failed"})
+		return
+	}
+	defer store.Close()
+	if _, err := store.HandleEasyPayNotification(r.Context(), raw); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": paymentErrorMessage(err)})
+		return
+	}
+	_, _ = w.Write([]byte("success"))
 }
 
 func (s *Server) handleListPaymentOrders(w http.ResponseWriter, r *http.Request) {
@@ -198,15 +345,21 @@ func (s *Server) handleListPaymentOrders(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer store.Close()
-	items, err := store.ListOrders(r.Context(), businesspayments.OrderFilters{
+	page, pageSize, offset := paginationFromQuery(r, "", 20, 100)
+	items, total, err := store.ListOrders(r.Context(), businesspayments.OrderFilters{
 		UserID: businessUserIDForRequest(r),
 		Status: r.URL.Query().Get("status"),
-	}, intQuery(r, "limit", 50))
+		Kind:   r.URL.Query().Get("kind"),
+		Search: r.URL.Query().Get("search"),
+	}, pageSize, offset)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+		"page":  paginationMeta{Page: page, PageSize: pageSize, Total: total},
+	})
 }
 
 func (s *Server) handleAdminListPaymentOrders(w http.ResponseWriter, r *http.Request) {
@@ -216,14 +369,20 @@ func (s *Server) handleAdminListPaymentOrders(w http.ResponseWriter, r *http.Req
 		return
 	}
 	defer store.Close()
-	items, err := store.ListOrders(r.Context(), businesspayments.OrderFilters{
+	page, pageSize, offset := paginationFromQuery(r, "", 20, 100)
+	items, total, err := store.ListOrders(r.Context(), businesspayments.OrderFilters{
 		Status: r.URL.Query().Get("status"),
-	}, intQuery(r, "limit", 100))
+		Kind:   r.URL.Query().Get("kind"),
+		Search: r.URL.Query().Get("search"),
+	}, pageSize, offset)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+		"page":  paginationMeta{Page: page, PageSize: pageSize, Total: total},
+	})
 }
 
 func (s *Server) handleAdminCompletePaymentOrder(w http.ResponseWriter, r *http.Request) {
@@ -317,6 +476,55 @@ func paymentPackageInput(body paymentPackagePayload) businesspayments.PackageInp
 	}
 }
 
+func paymentProviderInput(body paymentProviderPayload) businesspayments.ProviderInput {
+	return businesspayments.ProviderInput{
+		ProviderKey:      body.ProviderKey,
+		Name:             body.Name,
+		Enabled:          body.Enabled,
+		SupportedMethods: body.SupportedMethods,
+		Config:           body.Config,
+		SortOrder:        body.SortOrder,
+	}
+}
+
+func publicRequestBaseURL(r *http.Request) string {
+	proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if proto == "" {
+		proto = "http"
+		if r.TLS != nil {
+			proto = "https"
+		}
+	}
+	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	if host == "" {
+		host = r.Host
+	}
+	if strings.TrimSpace(host) == "" {
+		return ""
+	}
+	return strings.TrimRight(proto+"://"+host, "/")
+}
+
+func clientIPFromRequest(r *http.Request) string {
+	for _, header := range []string{"CF-Connecting-IP", "X-Real-IP", "X-Forwarded-For"} {
+		value := strings.TrimSpace(r.Header.Get(header))
+		if value == "" {
+			continue
+		}
+		if header == "X-Forwarded-For" {
+			value = strings.TrimSpace(strings.Split(value, ",")[0])
+		}
+		if value != "" {
+			return value
+		}
+	}
+	host := r.RemoteAddr
+	if parsed, err := url.Parse("//" + r.RemoteAddr); err == nil && parsed.Hostname() != "" {
+		host = parsed.Hostname()
+	}
+	return strings.TrimSpace(host)
+}
+
 func paymentErrorMessage(err error) string {
 	switch {
 	case errors.Is(err, businesspayments.ErrPackageInvalid):
@@ -331,6 +539,16 @@ func paymentErrorMessage(err error) string {
 		return "订单当前状态不能完成支付"
 	case errors.Is(err, businesspayments.ErrOrderNotRefundable):
 		return "订单当前状态不能退款"
+	case errors.Is(err, businesspayments.ErrSubscriptionChange):
+		return "当前订阅周期内不能降级套餐"
+	case errors.Is(err, businesspayments.ErrSubscriptionDurationMismatch):
+		return "只能升级相同订阅周期的套餐"
+	case errors.Is(err, businesspayments.ErrProviderInvalid):
+		return "支付渠道配置无效"
+	case errors.Is(err, businesspayments.ErrProviderUnavailable):
+		return "当前支付方式不可用"
+	case errors.Is(err, businesspayments.ErrProviderInUse):
+		return "渠道存在待处理订单，不能停用或删除"
 	default:
 		message := strings.TrimSpace(err.Error())
 		if message == "" {

@@ -1140,7 +1140,7 @@ func (s *Server) handleListBusinessCreditLedger(w http.ResponseWriter, r *http.R
 		return
 	}
 	defer store.Close()
-	items, total, err := store.BalanceLedgerEntriesPage(r.Context(), session.UserID, pageSize, offset)
+	items, total, err := store.UserFacingLedgerEntriesPage(r.Context(), session.UserID, pageSize, offset)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
