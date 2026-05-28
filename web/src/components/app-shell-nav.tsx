@@ -9,7 +9,6 @@ import {
   Bell,
   Boxes,
   CheckCircle2,
-  ChevronLeft,
   Check,
   CreditCard,
   Database,
@@ -34,6 +33,7 @@ import {
 } from "lucide-react";
 
 import { VersionUpdateDialog } from "@/components/version-update-dialog";
+import { AnnounceModal, AppModal, AppToastStack, type AppToastItem } from "@/components/app-controls";
 import { useTheme, type ThemeMode } from "@/components/theme-provider";
 import {
   Dialog,
@@ -135,6 +135,31 @@ function formatNoticeTime(value?: string) {
   return date.toLocaleString();
 }
 
+function formatRelativeTime(value?: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const diff = Date.now() - date.getTime();
+  if (diff < 0) return "刚刚";
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes}分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}小时前`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return "昨天";
+  if (days < 7) return `${days}天前`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return `${weeks}周前`;
+  return date.toLocaleDateString();
+}
+
+function levelToDotClass(level: string) {
+  if (level === "warning") return "important";
+  if (level === "success") return "success";
+  return "feature";
+}
+
 function avatarText(username: string, role: AuthRole | null) {
   const fallback = role === "admin" ? "管理员" : "用户";
   const normalized = String(username || fallback).trim();
@@ -229,8 +254,12 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
   const [notifications, setNotifications] = useState<BusinessNotification[]>([]);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
-  const [selectedNotification, setSelectedNotification] = useState<BusinessNotification | null>(null);
+  const [notifyFilter, setNotifyFilter] = useState<"all" | "info" | "success" | "warning">("all");
+  const [detailNotification, setDetailNotification] = useState<BusinessNotification | null>(null);
+  const notifyOverlayDownRef = useRef(false);
   const [popupNotification, setPopupNotification] = useState<BusinessNotification | null>(null);
+  const [toastItems, setToastItems] = useState<AppToastItem[]>([]);
+  const dismissToast = (id: string) => setToastItems((current) => current.filter((item) => item.id !== id));
   const [infoDialog, setInfoDialog] = useState<"terms" | "changelog" | null>(null);
   const [versionLabel, setVersionLabel] = useState("读取中");
 
@@ -301,13 +330,25 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
       const items = payload.items || [];
       setNotifications(items);
       setUnreadNotificationCount(Number(payload.unreadCount || 0));
+      const availablePopup = items.find((item) => item.notifyMode === "popup" && !item.readAt) || null;
+      if (availablePopup && availablePopup.level === "success") {
+        setToastItems((current) => {
+          if (current.some((t) => t.id === availablePopup.id)) return current;
+          void markBusinessNotificationsRead([availablePopup.id]).catch(() => {});
+          setNotifications((list) => list.map((notice) => (
+            notice.id === availablePopup.id ? { ...notice, readAt: new Date().toISOString() } : notice
+          )));
+          setUnreadNotificationCount((count) => Math.max(0, count - 1));
+          return [...current, { id: availablePopup.id, level: "success", title: availablePopup.title, summary: availablePopup.body }];
+        });
+      }
       setPopupNotification((current) => {
-        const availablePopup = items.find((item) => item.notifyMode === "popup" && !item.readAt) || null;
+        const modalCandidate = availablePopup && availablePopup.level !== "success" ? availablePopup : null;
         if (!current) {
-          return availablePopup;
+          return modalCandidate;
         }
         const stillAvailable = items.some((item) => item.id === current.id && item.notifyMode === "popup" && !item.readAt);
-        return stillAvailable ? current : availablePopup;
+        return stillAvailable ? current : modalCandidate;
       });
     } catch {
       setNotifications([]);
@@ -346,9 +387,6 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
       setNotifications((current) => current.map((notice) => (
         notice.id === item.id ? { ...notice, readAt } : notice
       )));
-      setSelectedNotification((current) => (
-        current?.id === item.id ? { ...current, readAt } : current
-      ));
       setPopupNotification((current) => (
         current?.id === item.id ? null : current
       ));
@@ -369,9 +407,6 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
       setNotifications((current) => current.map((item) => (
         unreadIDs.includes(item.id) ? { ...item, readAt: item.readAt || readAt } : item
       )));
-      setSelectedNotification((current) => (
-        current && unreadIDs.includes(current.id) ? { ...current, readAt: current.readAt || readAt } : current
-      ));
       setPopupNotification((current) => (
         current && unreadIDs.includes(current.id) ? null : current
       ));
@@ -380,6 +415,20 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
       // 保持本地状态不变，避免展示和服务端状态不一致。
     }
   };
+
+  useEffect(() => {
+    if (!notificationDialogOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setNotificationDialogOpen(false);
+    };
+    document.addEventListener("keydown", handler);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", handler);
+      document.body.style.overflow = prev;
+    };
+  }, [notificationDialogOpen]);
 
   useEffect(() => {
     if (role !== "admin") {
@@ -493,7 +542,7 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
 
   return (
     <>
-      <aside className="hidden min-h-0 border-r border-[var(--app-border)] bg-[var(--app-bg-rail)] px-0 pb-5 pt-4 shadow-[inset_-1px_0_0_var(--app-border)] backdrop-blur-2xl md:flex md:w-[82px] md:flex-col md:items-center">
+      <aside className="app-rail hidden min-h-0 border-r border-[var(--app-border)] bg-[var(--app-bg-rail)] px-0 pb-5 pt-4 shadow-[inset_-1px_0_0_var(--app-border)] backdrop-blur-[24px] backdrop-saturate-[1.3] md:flex md:w-[82px] md:flex-col md:items-center">
         <Link
           to={role === "admin" ? "/admin/dashboard" : "/image/history"}
           className="grid justify-items-center gap-1.5 text-[12px] font-extrabold leading-none text-[var(--app-accent-cyan)] drop-shadow-[0_0_18px_rgba(91,214,255,0.26)]"
@@ -516,7 +565,7 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
                   data-active-rail-item={active ? "true" : undefined}
                   className={cn(
                     "grid h-[58px] w-[58px] scroll-mb-3 scroll-mt-3 place-items-center rounded-[16px] px-1 transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)]",
-                    active && "border border-[var(--app-border-strong)] bg-[var(--app-bg-surface-hover)] text-[var(--app-text-primary)] shadow-[var(--app-shadow-floating)]",
+                    active && "rail-item-active border border-[var(--app-border-strong)] bg-[rgba(255,255,255,0.1)] text-[var(--app-text-primary)] shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_12px_36px_rgba(0,0,0,0.28)]",
                   )}
                 >
                   <Icon className="size-5" />
@@ -564,14 +613,13 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
                 aria-label="消息通知"
                 onClick={() => {
                   setNotificationDialogOpen(true);
-                  setSelectedNotification(null);
                   void loadNotifications();
                 }}
                 data-notification-action
               >
                 <Bell className={railActionIconClass} />
                 {unreadNotificationCount > 0 ? (
-                  <span className="absolute right-[17px] top-[8px] size-1.5 rounded-full bg-[var(--app-accent-cyan)] shadow-[0_0_12px_rgba(91,214,255,0.9)]" />
+                  <span className="badge-dot absolute right-[17px] top-[8px] size-1.5 rounded-full bg-[var(--app-accent-cyan)] shadow-[0_0_12px_rgba(91,214,255,0.9)]" />
                 ) : null}
               </button>
               <div className="pointer-events-none absolute bottom-2 left-[66px] whitespace-nowrap rounded-[12px] border border-[var(--app-border)] bg-[var(--app-bg-elevated)] px-3 py-1.5 text-xs font-semibold text-[var(--app-text-secondary)] opacity-0 shadow-[var(--app-shadow-floating)] backdrop-blur-xl transition-opacity delay-0 duration-150 group-hover:delay-1000 group-hover:opacity-100">
@@ -686,99 +734,152 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
           onVersionChange={(version) => setVersionLabel(formatVersionLabel(version))}
         />
       ) : null}
-      <Dialog
-        open={notificationDialogOpen}
-        onOpenChange={(open) => {
-          setNotificationDialogOpen(open);
-          if (!open) {
-            setSelectedNotification(null);
-          }
-        }}
-      >
-        <DialogContent className="w-[min(92vw,560px)]">
-          <DialogHeader>
-            <div className="flex items-start justify-between gap-3 pr-8">
-              <div>
-                <DialogTitle className="break-words pr-2 [overflow-wrap:anywhere]">{selectedNotification ? selectedNotification.title : "消息通知"}</DialogTitle>
-                <DialogDescription>
-                  {selectedNotification ? formatNoticeTime(selectedNotification.publishedAt || selectedNotification.createdAt) : "系统公告和运营通知。"}
-                </DialogDescription>
-              </div>
-              {!selectedNotification && unreadNotificationCount > 0 ? (
-                <Button type="button" size="sm" variant="outline" onClick={() => void markAllNotificationsRead()}>
-                  <CheckCircle2 className="size-4" />
-                  全部已读
-                </Button>
+      {mounted && notificationDialogOpen ? createPortal(
+        <div
+          className="app-modal-overlay open"
+          onMouseDown={(e) => { notifyOverlayDownRef.current = e.target === e.currentTarget; }}
+          onClick={(e) => {
+            if (notifyOverlayDownRef.current && e.target === e.currentTarget) {
+              setNotificationDialogOpen(false);
+            }
+            notifyOverlayDownRef.current = false;
+          }}
+        >
+          <div className="app-modal notify-modal">
+            <div className="notify-modal-head">
+              <h3>消息通知</h3>
+              {unreadNotificationCount > 0 ? (
+                <span className="unread-count">{unreadNotificationCount} 未读</span>
               ) : null}
-            </div>
-          </DialogHeader>
-          {selectedNotification ? (
-            <div className="grid max-h-[62vh] min-w-0 gap-4 overflow-y-auto overflow-x-hidden pr-1">
+              <span className="spacer" />
               <button
+                className="notify-mark-read"
                 type="button"
-                className="inline-flex w-fit items-center gap-1 text-sm font-medium text-[var(--app-text-secondary)] transition hover:text-[var(--app-text-primary)]"
-                onClick={() => setSelectedNotification(null)}
+                onClick={() => void markAllNotificationsRead()}
+                disabled={unreadNotificationCount === 0}
               >
-                <ChevronLeft className="size-4" />
-                返回列表
+                <CheckCircle2 className="size-3.5" />
+                全部已读
               </button>
-              <article className="min-w-0 rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] p-4">
-                <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[var(--app-text-muted)]">
-                  <span className={cn(
-                    "size-2 rounded-full shadow-[0_0_14px_rgba(91,214,255,0.68)]",
-                    selectedNotification.level === "warning" ? "bg-amber-300" : selectedNotification.level === "success" ? "bg-emerald-300" : "bg-[var(--app-accent-cyan)]",
-                  )} />
-                  <span>{selectedNotification.readAt ? "已读" : "未读"}</span>
-                </div>
-                <p className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--app-text-secondary)] [overflow-wrap:anywhere]">{selectedNotification.body}</p>
-              </article>
-            </div>
-          ) : (
-          <div className="grid max-h-[58vh] min-w-0 gap-3 overflow-y-auto overflow-x-hidden pr-1">
-            {notificationsLoading ? (
-              <div className="rounded-[var(--app-radius-md)] border border-dashed border-[var(--app-border)] bg-[var(--app-bg-surface)] px-4 py-6 text-center text-sm text-[var(--app-text-muted)]">
-                读取中
-              </div>
-            ) : notifications.length === 0 ? (
-              <div className="rounded-[var(--app-radius-md)] border border-dashed border-[var(--app-border)] bg-[var(--app-bg-surface)] px-4 py-6 text-center text-sm text-[var(--app-text-muted)]">
-              暂无新的通知
-              </div>
-            ) : notifications.map((item) => (
               <button
-                key={item.id}
+                className="app-modal-close"
                 type="button"
-                className={cn(
-                  "min-w-0 rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] p-4 text-left transition hover:bg-[var(--app-bg-surface-hover)]",
-                  !item.readAt && "border-[var(--app-border-strong)]",
-                )}
-                onClick={() => {
-                  setSelectedNotification(item);
-                  void markNotificationRead(item);
-                }}
+                onClick={() => setNotificationDialogOpen(false)}
+                aria-label="关闭"
               >
-                <div className="flex items-start gap-3">
-                  <span className={cn(
-                    "mt-1.5 size-2 rounded-full shadow-[0_0_14px_rgba(91,214,255,0.68)]",
-                    item.level === "warning" ? "bg-amber-300" : item.level === "success" ? "bg-emerald-300" : "bg-[var(--app-accent-cyan)]",
-                  )} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="break-words text-sm font-semibold text-[var(--app-text-primary)] [overflow-wrap:anywhere]">{item.title}</p>
-                      {!item.readAt ? (
-                        <span className="rounded-[var(--app-radius-pill)] border border-[var(--app-border)] px-2 py-0.5 text-[11px] font-semibold text-[var(--app-accent-cyan)]">
-                          未读
-                        </span>
-                      ) : null}
-                    </div>
-                    <p className="mt-2 text-xs text-[var(--app-text-muted)]">{formatNoticeTime(item.publishedAt || item.createdAt)}</p>
-                  </div>
-                </div>
+                ×
               </button>
-            ))}
+            </div>
+            <div className="notify-filter">
+              {[
+                { value: "all", label: "全部" },
+                { value: "info", label: "普通" },
+                { value: "success", label: "成功" },
+                { value: "warning", label: "重要" },
+              ].map((f) => (
+                <button
+                  key={f.value}
+                  type="button"
+                  className={notifyFilter === f.value ? "on" : ""}
+                  onClick={() => setNotifyFilter(f.value as typeof notifyFilter)}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            <div className="notify-list-wrap">
+              {notificationsLoading ? (
+                <div className="notify-empty">读取中</div>
+              ) : (() => {
+                const filtered = notifyFilter === "all"
+                  ? notifications
+                  : notifications.filter((n) => n.level === notifyFilter);
+                if (filtered.length === 0) {
+                  return <div className="notify-empty">暂无通知</div>;
+                }
+                return filtered.map((item) => {
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={cn(
+                        "notify-item",
+                        !item.readAt && "unread",
+                      )}
+                      onClick={() => {
+                        setDetailNotification(item);
+                        if (!item.readAt) void markNotificationRead(item);
+                      }}
+                    >
+                      <div className={`ni-dot ${levelToDotClass(item.level)}`} />
+                      <div className="ni-body">
+                        <div className="ni-title">{item.title}</div>
+                        <div className="ni-summary">{item.body}</div>
+                      </div>
+                      <div className="ni-right">
+                        <span className="ni-time">{formatRelativeTime(item.publishedAt || item.createdAt)}</span>
+                        {!item.readAt ? <span className="ni-unread" /> : null}
+                      </div>
+                    </button>
+                  );
+                });
+              })()}
+            </div>
+            {role === "admin" ? (
+              <div className="notify-modal-foot">
+                <a
+                  onClick={() => {
+                    setNotificationDialogOpen(false);
+                    navigate("/notifications");
+                  }}
+                >
+                  查看全部通知
+                </a>
+              </div>
+            ) : null}
           </div>
-          )}
-        </DialogContent>
-      </Dialog>
+        </div>,
+        document.body,
+      ) : null}
+
+      <AppModal
+        open={!!detailNotification}
+        onClose={() => setDetailNotification(null)}
+        title={detailNotification?.title || "通知详情"}
+        footer={
+          <button className="app-btn-primary" type="button" onClick={() => setDetailNotification(null)}>
+            <CheckCircle2 className="size-4" />
+            我知道了
+          </button>
+        }
+      >
+        {detailNotification ? (
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12, color: "var(--app-text-muted)" }}>
+              <span className={`app-badge ${detailNotification.level === "warning" ? "warn" : detailNotification.level === "success" ? "ok" : "run"}`}>
+                {detailNotification.level === "warning" ? "重要" : detailNotification.level === "success" ? "成功" : "普通"}
+              </span>
+              <span className={`app-badge ${detailNotification.readAt ? "off" : "ok"}`}>
+                {detailNotification.readAt ? "已读" : "未读"}
+              </span>
+              <span style={{ color: "var(--app-border-strong)" }}>·</span>
+              <span>{formatNoticeTime(detailNotification.publishedAt || detailNotification.createdAt)}</span>
+            </div>
+            <p style={{
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+              overflowWrap: "anywhere",
+              fontSize: 13.5,
+              lineHeight: 1.7,
+              color: "var(--app-text-secondary)",
+              margin: 0,
+            }}>
+              {detailNotification.body}
+            </p>
+          </div>
+        ) : null}
+      </AppModal>
+
       <Dialog open={infoDialog !== null} onOpenChange={(open) => !open && setInfoDialog(null)}>
         <DialogContent className="w-[min(92vw,520px)]">
           <DialogHeader>
@@ -796,34 +897,19 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
           </div>
         </DialogContent>
       </Dialog>
-      <Dialog
+      <AnnounceModal
         open={popupNotification !== null}
-        onOpenChange={(open) => {
-          if (!open && popupNotification) {
+        onClose={() => {
+          if (popupNotification) {
             void markNotificationRead(popupNotification);
           }
+          setPopupNotification(null);
         }}
-      >
-        <DialogContent className="w-[min(92vw,620px)]">
-          <DialogHeader>
-            <DialogTitle className="break-words pr-2 [overflow-wrap:anywhere]">{popupNotification?.title || "系统公告"}</DialogTitle>
-            <DialogDescription>
-              {formatNoticeTime(popupNotification?.publishedAt || popupNotification?.createdAt)}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[58vh] min-w-0 overflow-y-auto overflow-x-hidden rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] p-4">
-            <p className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--app-text-secondary)] [overflow-wrap:anywhere]">
-              {popupNotification?.body}
-            </p>
-          </div>
-          <div className="flex justify-end">
-            <Button type="button" onClick={() => popupNotification && void markNotificationRead(popupNotification)}>
-              <CheckCircle2 className="size-4" />
-              我知道了
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+        icon={popupNotification?.level === "warning" ? "⚠️" : "🔔"}
+        title={popupNotification?.title || "系统公告"}
+        body={popupNotification?.body || ""}
+      />
+      <AppToastStack items={toastItems} onDismiss={dismissToast} />
 
       <header className="border-b border-[var(--app-border)] bg-[var(--app-bg-rail)] px-3 py-3 shadow-[var(--app-shadow-floating)] backdrop-blur-2xl md:hidden">
         <div className="flex items-center gap-3">

@@ -5,7 +5,6 @@ import { Activity, LoaderCircle, RefreshCcw, RefreshCw, Save } from "lucide-reac
 import { toast } from "sonner";
 
 import { AdminHeader, AdminPage } from "@/components/admin-layout";
-import { Button } from "@/components/ui/button";
 import {
   fetchConfig,
   fetchDefaultConfig,
@@ -92,58 +91,27 @@ export default function AccountsPage() {
         <AdminHeader
           title="上游管理"
           description="管理图片生成上游、兼容服务和同步接入配置。"
+          icon={Activity}
           actions={
             <>
-              <Button
-                type="button"
-                variant="outline"
-                className="h-10 w-full justify-center px-3 text-[13px] sm:w-auto"
-                onClick={() => void loadConfig()}
-                disabled={isLoading || isSaving}
-              >
-                {isLoading ? (
-                  <LoaderCircle className="size-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="size-4" />
-                )}
+              <button className="app-btn" type="button" onClick={() => void loadConfig()} disabled={isLoading || isSaving}>
+                {isLoading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
                 重新读取
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="h-10 w-full justify-center px-3 text-[13px] sm:w-auto"
-                onClick={restoreDefaults}
-                disabled={isLoading || isSaving}
-              >
+              </button>
+              <button className="app-btn" type="button" onClick={restoreDefaults} disabled={isLoading || isSaving}>
                 <RefreshCcw className="size-4" />
                 恢复默认
-              </Button>
-              <Button
-                type="button"
-                className="h-10 w-full justify-center px-3 text-[13px] sm:w-auto"
-                onClick={() => void saveConfig()}
-                disabled={!isDirty || isLoading || isSaving}
-              >
-                {isSaving ? (
-                  <LoaderCircle className="size-4 animate-spin" />
-                ) : (
-                  <Save className="size-4" />
-                )}
+              </button>
+              <button className="app-btn-primary" type="button" onClick={() => void saveConfig()} disabled={!isDirty || isLoading || isSaving}>
+                {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}
                 保存配置
-              </Button>
+              </button>
             </>
           }
-        >
-          <div className="mb-3 inline-flex size-12 items-center justify-center rounded-[var(--app-radius-lg)] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)]">
-            <Activity className="size-5" />
-          </div>
-        </AdminHeader>
+        />
 
-        <div className="space-y-5">
-          <APIAccessSection />
-
-          <IntegrationSection config={config} setSection={setSection} />
-        </div>
+        <APIAccessSection />
+        <IntegrationSection config={config} setSection={setSection} />
     </AdminPage>
   );
 }

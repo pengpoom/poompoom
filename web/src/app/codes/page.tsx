@@ -1,31 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Copy, Eye, Gift, KeyRound, LoaderCircle, Pencil, Plus, RefreshCw, Search, Ticket, Trash2 } from "lucide-react";
+import { Copy, Eye, Gift, KeyRound, LoaderCircle, Pencil, RefreshCw, Ticket, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { AdminHeader, AdminPage, AdminPanel, AdminSectionTitle, AdminStatCard, AdminToolbar } from "@/components/admin-layout";
-import { adminInputClass, adminInputPillClass, adminTableBodyClass, adminTableClass, adminTableHeadClass, adminTableRowClass } from "@/components/admin-styles";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+import { AppDatePicker, AppModal, AppSelect } from "@/components/app-controls";
 import {
   createBusinessCode,
   deleteBusinessCode,
@@ -38,7 +18,6 @@ import {
   type BusinessCodeType,
   type BusinessCodeUsage,
 } from "@/lib/api";
-import { cn } from "@/lib/utils";
 
 type TypeFilter = "all" | BusinessCodeType;
 type StatusFilter = "all" | BusinessCodeStatus;
@@ -74,47 +53,37 @@ function statusLabel(value: string) {
   return statusOptions.find((item) => item.value === value)?.label || value;
 }
 
-function statusVariant(value: string): "success" | "secondary" | "warning" {
-  if (value === "active") {
-    return "success";
-  }
-  if (value === "expired") {
-    return "warning";
-  }
-  return "secondary";
+function typeBadgeClass(value: string) {
+  if (value === "redeem") return "warn";
+  if (value === "promo") return "ok";
+  return "run";
+}
+
+function statusBadgeClass(value: string) {
+  if (value === "active") return "ok";
+  if (value === "expired") return "warn";
+  return "off";
 }
 
 function formatTime(value?: string) {
-  if (!value) {
-    return "-";
-  }
+  if (!value) return "-";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
+  if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
 }
 
 function toDateTimeLocal(value?: string) {
-  if (!value) {
-    return "";
-  }
+  if (!value) return "";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
+  if (Number.isNaN(date.getTime())) return "";
   const offsetMs = date.getTimezoneOffset() * 60 * 1000;
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
 }
 
 function fromDateTimeLocal(value: string) {
-  if (!value) {
-    return "";
-  }
+  if (!value) return "";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
+  if (Number.isNaN(date.getTime())) return "";
   return date.toISOString();
 }
 
@@ -152,6 +121,7 @@ export default function CodesPage() {
   const [usageDialogCode, setUsageDialogCode] = useState<BusinessCode | null>(null);
   const [usageItems, setUsageItems] = useState<BusinessCodeUsage[]>([]);
   const [usageLoading, setUsageLoading] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<BusinessCode | null>(null);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -188,6 +158,7 @@ export default function CodesPage() {
       { total: 0, redeem: 0, promo: 0, invite: 0, used: 0 },
     );
   }, [items]);
+
   const dialogTypeOptions = view === "redeem"
     ? typeOptions.filter((item) => item.value === "redeem")
     : typeOptions.filter((item) => item.value !== "redeem");
@@ -236,6 +207,11 @@ export default function CodesPage() {
     setDialogOpen(true);
   };
 
+  const closeDialog = () => {
+    setDialogOpen(false);
+    resetForm();
+  };
+
   const saveCode = async () => {
     const normalizedCredits = Math.max(0, Math.floor(Number(credits) || 0));
     const normalizedMaxUses = Math.max(1, Math.floor(Number(maxUses) || 1));
@@ -280,12 +256,14 @@ export default function CodesPage() {
     }
   };
 
-  const removeCode = async (id: string) => {
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
     setSaving(true);
     try {
-      await deleteBusinessCode(id);
-      setItems((current) => current.filter((item) => item.id !== id));
+      await deleteBusinessCode(deleteTarget.id);
+      setItems((current) => current.filter((item) => item.id !== deleteTarget.id));
       toast.success("已删除");
+      setDeleteTarget(null);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "删除失败");
     } finally {
@@ -294,9 +272,7 @@ export default function CodesPage() {
   };
 
   const copyCode = async (code: string) => {
-    if (!code) {
-      return;
-    }
+    if (!code) return;
     await navigator.clipboard.writeText(code);
     toast.success("已复制");
   };
@@ -346,81 +322,52 @@ export default function CodesPage() {
       <AdminHeader
         title={view === "redeem" ? "兑换码管理" : "注册码管理"}
         description={view === "redeem" ? "管理用户在积分中心兑换余额的兑换码。" : "管理注册页可用的邀请码和优惠码。"}
+        icon={Ticket}
         actions={
           <>
-            <Button type="button" variant="outline" onClick={() => void loadItems()} disabled={loading || saving}>
+            <button className="app-btn" type="button" onClick={() => void loadItems()} disabled={loading || saving}>
               {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
               刷新
-            </Button>
-            <Button type="button" onClick={() => openCreateDialog(view === "redeem" ? "redeem" : "invite")}>
-              <Plus className="size-4" />
-              新建
-            </Button>
+            </button>
+            <button className="app-btn-primary" type="button" onClick={() => openCreateDialog(view === "redeem" ? "redeem" : "invite")}>
+              + 新建
+            </button>
           </>
         }
-      >
-        <div className="mb-3 inline-flex size-10 items-center justify-center rounded-[var(--app-radius-md)] border border-white/10 bg-white/[0.045] text-[var(--app-text-primary)]">
-          <Ticket className="size-5" />
-        </div>
-      </AdminHeader>
+      />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <AdminStatCard label="总数" value={stats.total.toLocaleString()} sub={`已使用 ${stats.used.toLocaleString()} 次`} icon={Ticket} color="text-[var(--app-accent-cyan)]" />
+      <section className="app-stats">
+        <AdminStatCard label="总数" value={stats.total.toLocaleString()} sub={`已使用 ${stats.used.toLocaleString()} 次`} icon={Ticket} color="text-cyan-300" />
         <AdminStatCard label="邀请码" value={stats.invite.toLocaleString()} sub="注册资格" icon={KeyRound} color="text-violet-300" />
         <AdminStatCard label="优惠码" value={stats.promo.toLocaleString()} sub="注册资格 + 赠点" icon={Gift} color="text-emerald-300" />
         <AdminStatCard label="兑换码" value={stats.redeem.toLocaleString()} sub="用户余额兑换" icon={Ticket} color="text-amber-300" />
-      </div>
+      </section>
 
-      <AdminToolbar className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            variant={view === "registration" ? "default" : "outline"}
-            className="h-9 px-3 text-[13px]"
-            onClick={() => switchView("registration")}
-          >
-            <KeyRound className="size-4" />
-            注册码
-          </Button>
-          <Button
-            type="button"
-            variant={view === "redeem" ? "default" : "outline"}
-            className="h-9 px-3 text-[13px]"
-            onClick={() => switchView("redeem")}
-          >
-            <Ticket className="size-4" />
-            兑换码
-          </Button>
-          <Select value={typeFilter} onValueChange={(value) => setTypeFilter(value as TypeFilter)}>
-            <SelectTrigger className={cn(adminInputPillClass, "w-[150px]")} disabled={view === "redeem"}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {(view === "redeem" ? filterTypeOptions.filter((item) => item.value === "redeem") : filterTypeOptions.filter((item) => item.value !== "redeem")).map((item) => (
-                <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as StatusFilter)}>
-            <SelectTrigger className={cn(adminInputPillClass, "w-[150px]")}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {filterStatusOptions.map((item) => (
-                <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+      <AdminToolbar>
+        <div className="app-seg">
+          <button type="button" className={view === "registration" ? "on" : ""} onClick={() => switchView("registration")}>注册码</button>
+          <button type="button" className={view === "redeem" ? "on" : ""} onClick={() => switchView("redeem")}>兑换码</button>
         </div>
-        <label className="relative min-w-0 flex-1 lg:max-w-sm">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[var(--app-text-muted)]" />
-          <Input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="搜索标题、备注或预览码"
-            className={cn(adminInputPillClass, "pl-9")}
+        {view !== "redeem" ? (
+          <AppSelect
+            value={typeFilter}
+            onChange={(v) => setTypeFilter(v as TypeFilter)}
+            options={filterTypeOptions.filter((item) => item.value !== "redeem")}
           />
-        </label>
+        ) : null}
+        <AppSelect
+          value={statusFilter}
+          onChange={(v) => setStatusFilter(v as StatusFilter)}
+          options={filterStatusOptions}
+        />
+        <input
+          className="app-input"
+          type="search"
+          placeholder="搜索标题、备注或预览码…"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          style={{ flex: 1, minWidth: 180 }}
+        />
       </AdminToolbar>
 
       <AdminPanel>
@@ -428,83 +375,110 @@ export default function CodesPage() {
           title="码列表"
           action={
             selectedIDs.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="secondary">已选 {selectedIDs.length}</Badge>
-                <Button type="button" size="sm" variant="outline" onClick={() => void batchUpdateStatus("active")} disabled={saving}>批量启用</Button>
-                <Button type="button" size="sm" variant="outline" onClick={() => void batchUpdateStatus("disabled")} disabled={saving}>批量停用</Button>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span className="panel-count">已选 {selectedIDs.length}</span>
+                <div className="app-act">
+                  <button type="button" onClick={() => void batchUpdateStatus("active")} disabled={saving}>批量启用</button>
+                  <button type="button" className="warn" onClick={() => void batchUpdateStatus("disabled")} disabled={saving}>批量停用</button>
+                </div>
               </div>
-            ) : null
+            ) : (
+              <span className="panel-count">{items.length}</span>
+            )
           }
         />
         {loading ? (
-          <div className="flex min-h-48 items-center justify-center gap-2 text-sm text-[var(--app-text-muted)]">
-            <LoaderCircle className="size-4 animate-spin" />
-            正在读取
+          <div style={{ padding: "48px 16px", textAlign: "center", fontSize: 13, color: "var(--app-text-muted)" }}>
+            <LoaderCircle className="size-5 animate-spin" style={{ display: "inline-block", marginBottom: 8 }} />
+            <div>读取中</div>
           </div>
         ) : items.length === 0 ? (
-          <div className="p-8 text-center text-sm text-[var(--app-text-muted)]">暂无记录</div>
+          <div style={{ padding: "48px 16px", textAlign: "center", fontSize: 13, color: "var(--app-text-muted)" }}>暂无记录</div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className={cn(adminTableClass, "w-full min-w-[1120px]")}>
-              <thead className={adminTableHeadClass}>
+          <div className="app-table-wrap">
+            <table className="app-table">
+              <thead>
                 <tr>
-                  <th className="w-10 px-4 py-3">
-                    <Checkbox checked={allSelected} onCheckedChange={toggleSelectAll} aria-label="全选码" />
+                  <th style={{ width: 40 }}>
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={toggleSelectAll}
+                      aria-label="全选码"
+                    />
                   </th>
-                  <th className="px-4 py-3">码</th>
-                  <th className="px-4 py-3">类型</th>
-                  <th className="px-4 py-3">点数</th>
-                  <th className="px-4 py-3">使用</th>
-                  <th className="px-4 py-3">有效期</th>
-                  <th className="px-4 py-3">备注</th>
-                  <th className="px-4 py-3 text-right">操作</th>
+                  <th>码</th>
+                  <th>类型</th>
+                  <th>点数</th>
+                  <th>使用</th>
+                  <th>有效期</th>
+                  <th>备注</th>
+                  <th style={{ textAlign: "right" }}>操作</th>
                 </tr>
               </thead>
-              <tbody className={adminTableBodyClass}>
+              <tbody>
                 {items.map((item) => {
                   const legacyPreview = isLegacyPreviewCode(item.codePreview);
                   return (
-                    <tr key={item.id} className={adminTableRowClass}>
-                      <td className="px-4 py-3">
-                        <Checkbox checked={selectedSet.has(item.id)} onCheckedChange={() => toggleSelected(item.id)} aria-label={`选择 ${item.title}`} />
+                    <tr key={item.id}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedSet.has(item.id)}
+                          onChange={() => toggleSelected(item.id)}
+                          aria-label={`选择 ${item.title}`}
+                        />
                       </td>
-                      <td className="min-w-[220px] px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <code className="max-w-[220px] truncate rounded-[var(--app-radius-sm)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] px-2 py-1 text-xs text-[var(--app-text-primary)]">
+                      <td>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <code style={{
+                            maxWidth: 220,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            padding: "3px 8px",
+                            borderRadius: 6,
+                            border: "1px solid var(--app-border)",
+                            background: "var(--app-bg-surface)",
+                            fontSize: 12,
+                            color: "var(--app-text-primary)",
+                          }}>
                             {item.codePreview}
                           </code>
-                          {legacyPreview ? <Badge variant="secondary">旧预览</Badge> : null}
-                          <Button type="button" size="icon" variant="ghost" onClick={() => void copyCode(item.codePreview)} disabled={legacyPreview} aria-label="复制码">
-                            <Copy className="size-4" />
-                          </Button>
+                          {legacyPreview ? <span className="app-badge off">旧预览</span> : null}
+                          <div className="app-act">
+                            <button type="button" onClick={() => void copyCode(item.codePreview)} disabled={legacyPreview} aria-label="复制码">
+                              <Copy className="size-3.5" />
+                            </button>
+                          </div>
                         </div>
                       </td>
-                      <td className="whitespace-nowrap px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <Badge variant={item.type === "redeem" ? "warning" : item.type === "promo" ? "success" : "info"}>{typeLabel(item.type)}</Badge>
-                          <Badge variant={statusVariant(item.status)}>{statusLabel(item.status)}</Badge>
+                      <td>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          <span className={`app-badge ${typeBadgeClass(item.type)}`}>{typeLabel(item.type)}</span>
+                          <span className={`app-badge ${statusBadgeClass(item.status)}`}>{statusLabel(item.status)}</span>
                         </div>
                       </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-[var(--app-text-secondary)]">{Number(item.credits || 0).toLocaleString()}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-[var(--app-text-secondary)]">
-                        {item.usedCount.toLocaleString()} / {item.maxUses.toLocaleString()}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-xs leading-5 text-[var(--app-text-muted)]">
+                      <td>{Number(item.credits || 0).toLocaleString()}</td>
+                      <td>{item.usedCount.toLocaleString()} / {item.maxUses.toLocaleString()}</td>
+                      <td style={{ fontSize: 12, color: "var(--app-text-muted)", lineHeight: 1.5 }}>
                         <div>{formatTime(item.startsAt)}</div>
                         <div>{formatTime(item.expiresAt)}</div>
                       </td>
-                      <td className="max-w-[180px] truncate px-4 py-3 text-[var(--app-text-muted)]" title={item.note || ""}>{item.note || "-"}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex justify-end gap-1.5">
-                          <Button type="button" size="icon" variant="ghost" onClick={() => void openUsageDialog(item)} aria-label="使用记录">
-                            <Eye className="size-4" />
-                          </Button>
-                          <Button type="button" size="icon" variant="ghost" onClick={() => openEditDialog(item)} aria-label="编辑">
-                            <Pencil className="size-4" />
-                          </Button>
-                          <Button type="button" size="icon" variant="ghost" onClick={() => void removeCode(item.id)} disabled={saving} aria-label="删除">
-                            <Trash2 className="size-4" />
-                          </Button>
+                      <td style={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", color: "var(--app-text-muted)" }} title={item.note || ""}>{item.note || "-"}</td>
+                      <td>
+                        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                          <div className="app-act">
+                            <button type="button" onClick={() => void openUsageDialog(item)} aria-label="使用记录">
+                              <Eye className="size-3.5" />
+                            </button>
+                            <button type="button" onClick={() => openEditDialog(item)} aria-label="编辑">
+                              <Pencil className="size-3.5" />
+                            </button>
+                            <button type="button" className="danger" onClick={() => setDeleteTarget(item)} disabled={saving} aria-label="删除">
+                              <Trash2 className="size-3.5" />
+                            </button>
+                          </div>
                         </div>
                       </td>
                     </tr>
@@ -516,164 +490,177 @@ export default function CodesPage() {
         )}
       </AdminPanel>
 
-      <Dialog open={dialogOpen} onOpenChange={(open) => {
-        setDialogOpen(open);
-        if (!open) resetForm();
-      }}>
-        <DialogContent className="max-h-[90vh] w-[min(92vw,720px)] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{editingItem ? "编辑码" : "新建码"}</DialogTitle>
-            <DialogDescription>
-              邀请码和优惠码用于注册页；兑换码用于用户积分中心。
-            </DialogDescription>
-          </DialogHeader>
-
-          {createdCode ? (
-            <div className="rounded-[var(--app-radius-md)] border border-emerald-400/25 bg-emerald-400/10 p-4">
-              <div className="text-sm font-semibold text-emerald-100">新码已创建</div>
-              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                <Input value={createdCode} readOnly className={adminInputClass} />
-                <Button type="button" onClick={() => void copyCode(createdCode)}>
-                  <Copy className="size-4" />
-                  复制
-                </Button>
-              </div>
+      <AppModal
+        open={dialogOpen}
+        onClose={closeDialog}
+        title={editingItem ? "编辑码" : "新建码"}
+        footer={
+          <>
+            <button className="app-btn" type="button" onClick={closeDialog}>关闭</button>
+            <button className="app-btn-primary" type="button" onClick={() => void saveCode()} disabled={saving}>
+              {saving ? <LoaderCircle className="size-4 animate-spin" /> : null}
+              保存
+            </button>
+          </>
+        }
+      >
+        {createdCode ? (
+          <div style={{
+            margin: "0 18px 16px",
+            padding: 14,
+            borderRadius: 12,
+            border: "1px solid rgba(110, 231, 183, 0.32)",
+            background: "rgba(110, 231, 183, 0.08)",
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#6ee7b7", marginBottom: 8 }}>新码已创建</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input className="app-input" value={createdCode} readOnly style={{ flex: 1 }} />
+              <button className="app-btn-primary" type="button" onClick={() => void copyCode(createdCode)}>
+                <Copy className="size-4" />
+                复制
+              </button>
             </div>
-          ) : null}
+          </div>
+        ) : null}
 
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">类型</div>
-              <Select value={codeType} onValueChange={(value) => {
-                const nextType = value as BusinessCodeType;
+        <div className="app-form-grid">
+          <div className="app-fld">
+            <span className="fl">类型</span>
+            <AppSelect
+              value={codeType}
+              onChange={(v) => {
+                const nextType = v as BusinessCodeType;
                 setCodeType(nextType);
                 if (nextType === "invite") setCredits("0");
                 if (nextType === "redeem" && Number(credits || 0) <= 0) setCredits("10");
-              }} disabled={Boolean(editingItem) || view === "redeem"}>
-                <SelectTrigger className={adminInputClass}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {dialogTypeOptions.map((item) => (
-                    <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <div className="text-xs leading-5 text-[var(--app-text-muted)]">
-                {typeOptions.find((item) => item.value === codeType)?.hint}
-              </div>
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">状态</div>
-              <Select value={status} onValueChange={(value) => setStatus(value as BusinessCodeStatus)}>
-                <SelectTrigger className={adminInputClass}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {statusOptions.map((item) => (
-                    <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">标题</div>
-              <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={typeLabel(codeType)} className={adminInputClass} />
-            </label>
-            {!editingItem ? (
-              <label className="space-y-2">
-                <div className="text-sm font-medium text-[var(--app-text-secondary)]">自定义码</div>
-                <Input value={rawCode} onChange={(event) => setRawCode(event.target.value)} placeholder="留空自动生成" className={adminInputClass} />
-              </label>
-            ) : null}
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">赠送/兑换点数</div>
-              <Input type="number" min="0" step="1" value={credits} onChange={(event) => setCredits(event.target.value)} disabled={codeType === "invite"} className={adminInputClass} />
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">最大使用次数</div>
-              <Input type="number" min="1" step="1" value={maxUses} onChange={(event) => setMaxUses(event.target.value)} className={adminInputClass} />
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">开始时间</div>
-              <Input type="datetime-local" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} className={adminInputClass} />
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">结束时间</div>
-              <Input type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} className={adminInputClass} />
-            </label>
-            <label className="space-y-2 md:col-span-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">备注</div>
-              <Textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} className={adminInputClass} />
-            </label>
+              }}
+              options={dialogTypeOptions.map((item) => ({ value: item.value, label: item.label }))}
+            />
+            <span className="fd">{typeOptions.find((item) => item.value === codeType)?.hint}</span>
           </div>
+          <div className="app-fld">
+            <span className="fl">状态</span>
+            <AppSelect value={status} onChange={(v) => setStatus(v as BusinessCodeStatus)} options={statusOptions} />
+          </div>
+          <div className="app-fld">
+            <span className="fl">标题</span>
+            <input className="app-input" value={title} onChange={(event) => setTitle(event.target.value)} placeholder={typeLabel(codeType)} />
+          </div>
+          {!editingItem ? (
+            <div className="app-fld">
+              <span className="fl">自定义码</span>
+              <input className="app-input" value={rawCode} onChange={(event) => setRawCode(event.target.value)} placeholder="留空自动生成" />
+            </div>
+          ) : null}
+          <div className="app-fld">
+            <span className="fl">赠送/兑换点数</span>
+            <input
+              className="app-input"
+              type="number"
+              min={0}
+              step={1}
+              value={credits}
+              onChange={(event) => setCredits(event.target.value)}
+              disabled={codeType === "invite"}
+            />
+          </div>
+          <div className="app-fld">
+            <span className="fl">最大使用次数</span>
+            <input className="app-input" type="number" min={1} step={1} value={maxUses} onChange={(event) => setMaxUses(event.target.value)} />
+          </div>
+          <div className="app-fld">
+            <span className="fl">开始时间</span>
+            <AppDatePicker value={startsAt} onChange={setStartsAt} placeholder="选择开始时间" withTime />
+          </div>
+          <div className="app-fld">
+            <span className="fl">结束时间</span>
+            <AppDatePicker value={expiresAt} onChange={setExpiresAt} placeholder="选择结束时间" withTime />
+          </div>
+          <div className="app-fld full">
+            <span className="fl">备注</span>
+            <textarea className="app-textarea" value={note} onChange={(event) => setNote(event.target.value)} rows={3} />
+          </div>
+        </div>
+      </AppModal>
 
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>关闭</Button>
-            <Button type="button" onClick={() => void saveCode()} disabled={saving}>
-              {saving ? <LoaderCircle className="size-4 animate-spin" /> : null}
-              保存
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={Boolean(usageDialogCode)} onOpenChange={(open) => {
-        if (!open) {
-          setUsageDialogCode(null);
-          setUsageItems([]);
+      <AppModal
+        open={!!usageDialogCode}
+        onClose={() => { setUsageDialogCode(null); setUsageItems([]); }}
+        title="使用记录"
+        footer={
+          <button className="app-btn" type="button" onClick={() => { setUsageDialogCode(null); setUsageItems([]); }}>关闭</button>
         }
-      }}>
-        <DialogContent className="max-h-[88vh] w-[min(94vw,900px)] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>使用记录</DialogTitle>
-            <DialogDescription>
-              {usageDialogCode?.title || "-"} · {usageDialogCode?.codePreview || "-"}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="overflow-x-auto">
-            <table className={cn(adminTableClass, "w-full min-w-[760px]")}>
-              <thead className={adminTableHeadClass}>
+      >
+        <div style={{ padding: "0 18px 8px", fontSize: 12.5, color: "var(--app-text-muted)" }}>
+          {usageDialogCode?.title || "-"} · {usageDialogCode?.codePreview || "-"}
+        </div>
+        <div className="app-table-wrap">
+          <table className="app-table">
+            <thead>
+              <tr>
+                <th>用户</th>
+                <th>场景</th>
+                <th>到账</th>
+                <th>使用时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              {usageLoading ? (
                 <tr>
-                  <th className="px-4 py-3">用户</th>
-                  <th className="px-4 py-3">场景</th>
-                  <th className="px-4 py-3">到账</th>
-                  <th className="px-4 py-3">使用时间</th>
+                  <td colSpan={4} style={{ padding: "40px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
+                    <LoaderCircle className="size-5 animate-spin" style={{ display: "inline-block", marginBottom: 8 }} />
+                    <div>读取中</div>
+                  </td>
                 </tr>
-              </thead>
-              <tbody className={adminTableBodyClass}>
-                {usageLoading ? (
-                  <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center text-[var(--app-text-muted)]">
-                      <LoaderCircle className="mx-auto mb-2 size-5 animate-spin" />
-                      读取中
+              ) : usageItems.length === 0 ? (
+                <tr>
+                  <td colSpan={4} style={{ padding: "40px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>暂无使用记录</td>
+                </tr>
+              ) : (
+                usageItems.map((item) => (
+                  <tr key={item.id}>
+                    <td>
+                      <div className="app-user">
+                        <div className="app-user-meta">
+                          <b>{item.username || "-"}</b>
+                          <small>UID {item.uid || "-"} · {item.email || item.userId}</small>
+                        </div>
+                      </div>
                     </td>
+                    <td>{contextLabel(item.context)}</td>
+                    <td style={{ color: "var(--app-text-primary)", fontWeight: 500 }}>{Number(item.creditsGranted || 0).toLocaleString()}</td>
+                    <td>{formatTime(item.createdAt)}</td>
                   </tr>
-                ) : usageItems.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="px-4 py-10 text-center text-[var(--app-text-muted)]">暂无使用记录</td>
-                  </tr>
-                ) : (
-                  usageItems.map((item) => (
-                    <tr key={item.id} className={adminTableRowClass}>
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-[var(--app-text-primary)]">{item.username || "-"}</div>
-                        <div className="mt-0.5 text-xs text-[var(--app-text-muted)]">UID {item.uid || "-"} · {item.email || item.userId}</div>
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-[var(--app-text-secondary)]">{contextLabel(item.context)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 font-medium text-[var(--app-text-primary)]">{Number(item.creditsGranted || 0).toLocaleString()}</td>
-                      <td className="whitespace-nowrap px-4 py-3 text-[var(--app-text-secondary)]">{formatTime(item.createdAt)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setUsageDialogCode(null)}>关闭</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </AppModal>
+
+      <AppModal
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="删除码"
+        footer={
+          <>
+            <button className="app-btn" type="button" onClick={() => setDeleteTarget(null)}>取消</button>
+            <button
+              className="app-btn-primary"
+              type="button"
+              onClick={() => void handleDelete()}
+              style={{ background: "linear-gradient(135deg, #ef4444, #dc2626)" }}
+              disabled={saving}
+            >
+              确认删除
+            </button>
+          </>
+        }
+      >
+        <div style={{ padding: "16px 18px", fontSize: 13.5, color: "var(--app-text-secondary)", lineHeight: 1.7 }}>
+          确认删除码 <b style={{ color: "var(--app-text-primary)" }}>「{deleteTarget?.title}」</b>（{deleteTarget?.codePreview}）吗？此操作不可恢复。
+        </div>
+      </AppModal>
     </AdminPage>
   );
 }

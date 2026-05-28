@@ -261,7 +261,7 @@ export function AuthCard({
 
   const submit = () => (mode === "register" ? handleRegister() : handleLogin());
   const inputClass =
-    "h-12 rounded-lg border-white/15 bg-[#182130] text-white shadow-none placeholder:text-[#7f8a9d] focus-visible:ring-[rgba(80,183,255,0.18)]";
+    "h-12 rounded-[10px] border-white/15 bg-[#182130] text-white shadow-none placeholder:text-[#7f8a9d] outline-none transition-[border-color,background,box-shadow] duration-[180ms] focus-visible:border-[rgba(80,183,255,0.6)] focus-visible:shadow-[0_0_0_4px_rgba(80,183,255,0.16)] focus-visible:ring-0";
 
   return (
     <section
@@ -377,7 +377,7 @@ export function AuthCard({
                 <Button
                   type="button"
                   variant="outline"
-                  className="h-12 min-w-[96px] shrink-0 rounded-lg border-white/15 bg-[#111823] text-[#e9eef7] shadow-none hover:bg-[#182130]"
+                  className="h-12 min-w-[96px] shrink-0 rounded-[10px] border-white/15 bg-[#111823] text-[#e9eef7] shadow-none transition-[background,border-color,transform] duration-[180ms] hover:-translate-y-px hover:bg-[#182130]"
                   onClick={() => void handleSendCode()}
                   disabled={!canSendCode || formDisabled}
                 >
@@ -431,7 +431,7 @@ export function AuthCard({
         )}
 
         <Button
-          className="mt-2 h-12 w-full rounded-lg border border-cyan-200/40 bg-[linear-gradient(135deg,rgba(255,255,255,0.18),rgba(255,255,255,0.05)),linear-gradient(135deg,rgba(63,105,255,0.9),rgba(31,220,255,0.78))] text-white shadow-[0_18px_40px_rgba(41,152,255,0.26)] hover:bg-[linear-gradient(135deg,rgba(255,255,255,0.22),rgba(255,255,255,0.08)),linear-gradient(135deg,rgba(63,105,255,0.95),rgba(31,220,255,0.82))]"
+          className="mt-2 h-12 w-full rounded-[10px] border border-[rgba(191,232,255,0.42)] bg-[linear-gradient(135deg,rgba(255,255,255,0.18),rgba(255,255,255,0.05)),linear-gradient(135deg,rgba(63,105,255,0.9),rgba(31,220,255,0.78))] text-white shadow-[0_18px_40px_rgba(41,152,255,0.26),inset_0_1px_0_rgba(255,255,255,0.42)] transition-[transform,box-shadow] duration-[200ms] [transition-timing-function:cubic-bezier(0.215,0.61,0.355,1)] hover:-translate-y-0.5 hover:bg-[linear-gradient(135deg,rgba(255,255,255,0.22),rgba(255,255,255,0.08)),linear-gradient(135deg,rgba(63,105,255,0.95),rgba(31,220,255,0.82))] hover:shadow-[0_22px_50px_rgba(41,152,255,0.42),inset_0_1px_0_rgba(255,255,255,0.5)]"
           onClick={() => void submit()}
           disabled={isSubmitting || (visibleTurnstileRequired && !turnstileToken)}
         >
@@ -537,7 +537,7 @@ export function AuthBrandMark({
   }
 
   return (
-    <span className={`inline-grid ${size} place-items-center rounded-lg bg-[linear-gradient(135deg,#2f6bff,#8b5cff_54%,#28d6ff)] shadow-[0_0_26px_rgba(40,214,255,0.35)]`}>
+    <span className={`inline-grid ${size} place-items-center rounded-lg bg-[radial-gradient(circle_at_30%_26%,#ffffff_0_8%,transparent_9%),linear-gradient(135deg,#2f6bff,#8b5cff_54%,#28d6ff)] shadow-[0_0_26px_rgba(40,214,255,0.35),inset_0_1px_0_rgba(255,255,255,0.42)]`}>
       <Sparkles className="size-4" />
     </span>
   );

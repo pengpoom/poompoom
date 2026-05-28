@@ -5,9 +5,6 @@ import { Coins, KeyRound, LoaderCircle, RefreshCw, ShieldCheck, Upload, UserRoun
 import { toast } from "sonner";
 
 import { AdminHeader, AdminPage, AdminPanel, AdminStatCard } from "@/components/admin-layout";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { changeBusinessMePassword, fetchBusinessMe, uploadBusinessMeAvatar, type BusinessMe } from "@/lib/api";
 import { setStoredAuthAvatarUrl } from "@/store/auth";
 
@@ -117,120 +114,147 @@ export default function ProfilePage() {
   };
 
   const summaryItems = [
-    { label: "角色", value: roleText(me?.user.role), icon: ShieldCheck, color: "text-[var(--app-text-primary)]" },
-    { label: "余额", value: numberText(me?.credit.balance), icon: Coins, color: "text-violet-600 dark:text-violet-300" },
-    { label: "已消耗", value: numberText(me?.credit.spent), icon: Coins, color: "text-amber-600 dark:text-amber-300" },
+    { label: "角色", value: roleText(me?.user.role), icon: ShieldCheck, color: "text-cyan-300" },
+    { label: "余额", value: numberText(me?.credit.balance), icon: Coins, color: "text-violet-300" },
+    { label: "已消耗", value: numberText(me?.credit.spent), icon: Coins, color: "text-amber-300" },
   ];
 
   return (
     <AdminPage>
-        <AdminHeader
-          title="账号信息"
-          description="查看当前账号、点数余额和安全设置。"
-          actions={
-            <Button type="button" variant="outline" className="h-10 w-full px-4 sm:w-auto" onClick={() => void loadMe()} disabled={loading || submitting}>
-              {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-              刷新
-            </Button>
-          }
-        >
-          <div className="mb-3 inline-flex size-12 items-center justify-center rounded-[var(--app-radius-lg)] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)]">
-            <UserRound className="size-5" />
+      <AdminHeader
+        title="账号信息"
+        description="查看当前账号、点数余额和安全设置。"
+        icon={UserRound}
+        actions={
+          <button className="app-btn" type="button" onClick={() => void loadMe()} disabled={loading || submitting}>
+            {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+            刷新
+          </button>
+        }
+      />
+
+      <section className="app-stats">
+        {summaryItems.map((item) => (
+          <AdminStatCard key={item.label} {...item} value={loading ? "-" : item.value} />
+        ))}
+      </section>
+
+      <div style={{ display: "grid", gap: 18, gridTemplateColumns: "minmax(0, 0.95fr) minmax(0, 1.05fr)" }}>
+        <AdminPanel>
+          <div className="panel-title">
+            <h3>基本信息</h3>
+            <span className={`app-badge ${me?.user.status === "active" ? "ok" : "warn"}`}>
+              {me?.user.status === "active" ? "启用" : "禁用"}
+            </span>
           </div>
-        </AdminHeader>
-
-        <section className="grid gap-3 sm:grid-cols-3">
-          {summaryItems.map((item) => {
-            return <AdminStatCard key={item.label} {...item} value={loading ? "-" : item.value} />;
-          })}
-        </section>
-
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-          <AdminPanel className="p-5">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold text-[var(--app-text-primary)]">基本信息</h2>
-              <Badge variant={me?.user.status === "active" ? "success" : "warning"}>{me?.user.status === "active" ? "启用" : "禁用"}</Badge>
+          {loading ? (
+            <div style={{ padding: "40px 0", textAlign: "center", color: "var(--app-text-muted)" }}>
+              <LoaderCircle className="size-5 animate-spin" style={{ display: "inline-block", marginBottom: 8 }} />
+              <div>读取中</div>
             </div>
-            {loading ? (
-              <div className="py-10 text-center text-[var(--app-text-muted)]">
-                <LoaderCircle className="mx-auto mb-2 size-5 animate-spin" />
-                读取中
-              </div>
-            ) : (
-              <div className="space-y-4 text-sm">
-                <div className="flex items-center gap-4 rounded-[var(--app-radius-lg)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] p-4">
-                  <div className="grid size-16 shrink-0 place-items-center overflow-hidden rounded-full border border-[var(--app-border-strong)] bg-[var(--app-bg-muted)] text-[var(--app-text-muted)]">
-                    {me?.user.avatarUrl ? (
-                      <img src={me.user.avatarUrl} alt="当前头像" className="size-full object-cover" />
-                    ) : (
-                      <UserRound className="size-7" />
-                    )}
+          ) : (
+            <div style={{ padding: 18, display: "grid", gap: 16, fontSize: 13 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 16,
+                  padding: 16,
+                  borderRadius: 12,
+                  border: "1px solid var(--app-border)",
+                  background: "var(--app-bg-surface)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "grid",
+                    placeItems: "center",
+                    width: 64,
+                    height: 64,
+                    flexShrink: 0,
+                    borderRadius: "50%",
+                    overflow: "hidden",
+                    border: "1px solid var(--app-border)",
+                    background: "var(--app-bg-surface)",
+                    color: "var(--app-text-muted)",
+                  }}
+                >
+                  {me?.user.avatarUrl ? (
+                    <img src={me.user.avatarUrl} alt="当前头像" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  ) : (
+                    <UserRound className="size-7" />
+                  )}
+                </div>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "var(--app-text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {me?.user.username || "-"}
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-semibold text-[var(--app-text-primary)]">{me?.user.username || "-"}</div>
-                    <div className="mt-1 truncate text-xs text-[var(--app-text-muted)]">{me?.user.email || "-"}</div>
+                  <div style={{ marginTop: 4, fontSize: 12, color: "var(--app-text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {me?.user.email || "-"}
                   </div>
-                  <input
-                    ref={avatarInputRef}
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp,image/gif"
-                    className="hidden"
-                    onChange={(event) => void handleAvatarChange(event)}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => avatarInputRef.current?.click()}
-                    disabled={avatarUploading}
-                  >
-                    {avatarUploading ? <LoaderCircle className="size-4 animate-spin" /> : <Upload className="size-4" />}
-                    上传
-                  </Button>
                 </div>
-                <div>
-                  <div className="text-xs text-[var(--app-text-muted)]">用户名</div>
-                  <div className="mt-1 font-medium text-[var(--app-text-primary)]">{me?.user.username || "-"}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-[var(--app-text-muted)]">UID</div>
-                  <div className="mt-1 font-mono text-sm text-[var(--app-text-secondary)]">{me?.user.uid || "-"}</div>
-                </div>
-                <div>
-                  <div className="text-xs text-[var(--app-text-muted)]">创建时间</div>
-                  <div className="mt-1 text-[var(--app-text-secondary)]">{formatDateTime(me?.user.created_at)}</div>
-                </div>
+                <input
+                  ref={avatarInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  style={{ display: "none" }}
+                  onChange={(event) => void handleAvatarChange(event)}
+                />
+                <button
+                  className="app-btn"
+                  type="button"
+                  onClick={() => avatarInputRef.current?.click()}
+                  disabled={avatarUploading}
+                >
+                  {avatarUploading ? <LoaderCircle className="size-4 animate-spin" /> : <Upload className="size-4" />}
+                  上传
+                </button>
               </div>
-            )}
-          </AdminPanel>
+              <div>
+                <div style={{ fontSize: 12, color: "var(--app-text-muted)" }}>用户名</div>
+                <div style={{ marginTop: 4, fontWeight: 500, color: "var(--app-text-primary)" }}>{me?.user.username || "-"}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: "var(--app-text-muted)" }}>UID</div>
+                <div style={{ marginTop: 4, fontFamily: "ui-monospace, monospace", fontSize: 13, color: "var(--app-text-secondary)" }}>{me?.user.uid || "-"}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: "var(--app-text-muted)" }}>创建时间</div>
+                <div style={{ marginTop: 4, color: "var(--app-text-secondary)" }}>{formatDateTime(me?.user.created_at)}</div>
+              </div>
+            </div>
+          )}
+        </AdminPanel>
 
-          <AdminPanel className="p-5">
-            <div className="mb-4 flex items-center gap-2">
-              <KeyRound className="size-4 text-[var(--app-text-muted)]" />
-              <h2 className="text-sm font-semibold text-[var(--app-text-primary)]">修改密码</h2>
+        <AdminPanel>
+          <div className="panel-title">
+            <h3>
+              <KeyRound className="size-4" style={{ display: "inline-block", verticalAlign: "-2px", marginRight: 6, color: "var(--app-text-muted)" }} />
+              修改密码
+            </h3>
+          </div>
+          <div className="app-form-grid">
+            <label className="app-fld full">
+              <span className="fl">当前密码</span>
+              <input className="app-input" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} disabled={submitting} autoComplete="current-password" />
+            </label>
+            <label className="app-fld full">
+              <span className="fl">新密码</span>
+              <input className="app-input" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} disabled={submitting} autoComplete="new-password" />
+            </label>
+            <label className="app-fld full">
+              <span className="fl">确认新密码</span>
+              <input className="app-input" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} disabled={submitting} autoComplete="new-password" />
+            </label>
+            <div className="full" style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
+              <button className="app-btn-primary" type="button" onClick={() => void handleChangePassword()} disabled={submitting || loading}>
+                {submitting ? <LoaderCircle className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
+                更新密码
+              </button>
             </div>
-            <div className="grid gap-4">
-              <label className="grid gap-1.5 text-sm">
-                <span className="text-[var(--app-text-secondary)]">当前密码</span>
-                <Input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} disabled={submitting} autoComplete="current-password" />
-              </label>
-              <label className="grid gap-1.5 text-sm">
-                <span className="text-[var(--app-text-secondary)]">新密码</span>
-                <Input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} disabled={submitting} autoComplete="new-password" />
-              </label>
-              <label className="grid gap-1.5 text-sm">
-                <span className="text-[var(--app-text-secondary)]">确认新密码</span>
-                <Input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} disabled={submitting} autoComplete="new-password" />
-              </label>
-              <div className="flex justify-end">
-                <Button type="button" onClick={() => void handleChangePassword()} disabled={submitting || loading}>
-                  {submitting ? <LoaderCircle className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
-                  更新密码
-                </Button>
-              </div>
-            </div>
-          </AdminPanel>
-        </div>
+          </div>
+        </AdminPanel>
+      </div>
     </AdminPage>
   );
 }

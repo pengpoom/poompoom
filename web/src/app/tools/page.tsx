@@ -17,12 +17,8 @@ export default function ToolsPage() {
         <AdminHeader
           title="工具"
           description="先放一个工具入口框架，后续可以加入 Skills、PPT 制作、批量资产处理等能力。"
-        >
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-[var(--app-bg-surface)] px-3 py-1.5 text-xs font-semibold text-[var(--app-text-secondary)]">
-            <Hammer className="size-4 text-[var(--app-accent-cyan)]" />
-            Tools workspace
-          </div>
-        </AdminHeader>
+          icon={Hammer}
+        />
 
         <section className="grid gap-4 md:grid-cols-3">
           {tools.map((tool) => {

@@ -1,30 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, CreditCard, Eye, LoaderCircle, Pencil, Plus, RefreshCw, RotateCcw, Save, Search, Trash2, WalletCards, XCircle } from "lucide-react";
+import { CheckCircle2, CreditCard, Eye, LoaderCircle, Pencil, RefreshCw, RotateCcw, Trash2, WalletCards, XCircle } from "lucide-react";
 import { toast } from "sonner";
 
 import { AdminHeader, AdminPage, AdminPanel, AdminSectionTitle, AdminStatCard } from "@/components/admin-layout";
-import { adminInputClass, adminSubPanelClass, adminTableBodyClass, adminTableClass, adminTableHeadClass, adminTableRowClass } from "@/components/admin-styles";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { AppModal, AppSelect } from "@/components/app-controls";
 import {
   completeAdminBusinessPaymentOrder,
   cancelAdminBusinessPaymentOrder,
@@ -49,7 +30,6 @@ import {
   type BusinessSubscription,
   type PaginationMeta,
 } from "@/lib/api";
-import { cn } from "@/lib/utils";
 
 type PaymentPackageType = "balance" | "subscription";
 type OrderAction = "complete" | "cancel" | "refund";
@@ -71,9 +51,7 @@ function defaultOrderPage(): PaginationMeta {
 }
 
 function paginationText(page: PaginationMeta) {
-  if (!page.total) {
-    return "0 / 0";
-  }
+  if (!page.total) return "0 / 0";
   const start = (page.page - 1) * page.pageSize + 1;
   const end = Math.min(page.page * page.pageSize, page.total);
   return `${start}-${end} / ${page.total}`;
@@ -87,9 +65,7 @@ function moneyText(amountCents?: number | null, currency = "CNY") {
 
 function formatDateTime(value?: string) {
   const date = new Date(value || "");
-  if (Number.isNaN(date.getTime())) {
-    return value || "-";
-  }
+  if (Number.isNaN(date.getTime())) return value || "-";
   return date.toLocaleString();
 }
 
@@ -104,11 +80,11 @@ function statusText(status: string) {
   return status || "-";
 }
 
-function statusVariant(status: string): "success" | "secondary" | "warning" | "danger" {
-  if (status === "completed") return "success";
-  if (status === "pending" || status === "paid") return "warning";
-  if (status === "failed" || status === "refunded") return "danger";
-  return "secondary";
+function statusBadgeClass(status: string) {
+  if (status === "completed") return "ok";
+  if (status === "pending" || status === "paid") return "warn";
+  if (status === "failed" || status === "refunded") return "fail";
+  return "off";
 }
 
 function subscriptionStatusText(status?: string) {
@@ -129,31 +105,36 @@ function subscriptionRowStatusText(item: BusinessSubscription) {
   return subscriptionStatusText(item.status);
 }
 
-function subscriptionRowStatusVariant(item: BusinessSubscription): "success" | "secondary" | "warning" | "danger" | "info" {
+function subscriptionStatusBadgeClass(status?: string) {
+  if (status === "active") return "ok";
+  if (status === "expired") return "warn";
+  if (status === "cancelled") return "off";
+  if (status === "upgraded") return "run";
+  return "off";
+}
+
+function subscriptionRowStatusBadgeClass(item: BusinessSubscription) {
   if (item.status === "active") {
     const startsAt = new Date(item.startsAt || "");
     if (!Number.isNaN(startsAt.getTime()) && startsAt.getTime() > Date.now()) {
-      return "warning";
+      return "warn";
     }
   }
-  return subscriptionStatusVariant(item.status);
+  return subscriptionStatusBadgeClass(item.status);
 }
 
 function subscriptionCoverageExpiresAt(item: BusinessSubscription) {
   return item.coverageExpiresAt || item.expiresAt;
 }
 
-function subscriptionStatusVariant(status?: string): "success" | "secondary" | "warning" | "danger" | "info" {
-  if (status === "active") return "success";
-  if (status === "expired") return "warning";
-  if (status === "cancelled") return "secondary";
-  if (status === "upgraded") return "info";
-  return "secondary";
-}
-
 function packageTypeText(type?: string) {
   if (type === "subscription" || type === "monthly") return "订阅";
   return "余额";
+}
+
+function packageTypeBadgeClass(type?: string) {
+  if (type === "subscription" || type === "monthly") return "run";
+  return "off";
 }
 
 function billingActionText(order: BusinessPaymentOrder) {
@@ -256,6 +237,8 @@ export default function PaymentsPage() {
   const [auditLogs, setAuditLogs] = useState<BusinessPaymentAuditLog[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
   const [confirmAction, setConfirmAction] = useState<{ order: BusinessPaymentOrder; action: OrderAction } | null>(null);
+  const [deletePackageTarget, setDeletePackageTarget] = useState<BusinessPaymentPackage | null>(null);
+  const [deleteProviderTarget, setDeleteProviderTarget] = useState<BusinessPaymentProvider | null>(null);
 
   const stats = useMemo(() => {
     return orders.reduce(
@@ -312,6 +295,7 @@ export default function PaymentsPage() {
 
   useEffect(() => {
     void loadData(1, 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderStatusFilter, orderKindFilter, subscriptionStatusFilter, subscriptionWindowFilter]);
 
   const openCreatePackage = () => {
@@ -402,15 +386,14 @@ export default function PaymentsPage() {
     }
   };
 
-  const removePackage = async (item: BusinessPaymentPackage) => {
-    if (!window.confirm(`确认删除套餐「${item.name}」？已有订单的套餐不能删除，可以改为停用。`)) {
-      return;
-    }
-    setDeletingPackageId(item.id);
+  const removePackage = async () => {
+    if (!deletePackageTarget) return;
+    setDeletingPackageId(deletePackageTarget.id);
     try {
-      await deleteAdminBusinessPaymentPackage(item.id);
+      await deleteAdminBusinessPaymentPackage(deletePackageTarget.id);
       await loadData();
       toast.success("套餐已删除");
+      setDeletePackageTarget(null);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "删除套餐失败");
     } finally {
@@ -421,11 +404,8 @@ export default function PaymentsPage() {
   const toggleProviderMethod = (method: string, checked: boolean) => {
     setProviderForm((current) => {
       const methods = new Set(current.methods);
-      if (checked) {
-        methods.add(method);
-      } else {
-        methods.delete(method);
-      }
+      if (checked) methods.add(method);
+      else methods.delete(method);
       return { ...current, methods: Array.from(methods) };
     });
   };
@@ -469,18 +449,14 @@ export default function PaymentsPage() {
     }
   };
 
-  const removeProvider = async (item: BusinessPaymentProvider) => {
-    if (item.id === "manual") {
-      return;
-    }
-    if (!window.confirm(`确认删除支付渠道「${item.name}」？待处理订单会阻止删除。`)) {
-      return;
-    }
-    setDeletingProviderId(item.id);
+  const removeProvider = async () => {
+    if (!deleteProviderTarget) return;
+    setDeletingProviderId(deleteProviderTarget.id);
     try {
-      await deleteAdminBusinessPaymentProvider(item.id);
+      await deleteAdminBusinessPaymentProvider(deleteProviderTarget.id);
       await loadData();
       toast.success("支付渠道已删除");
+      setDeleteProviderTarget(null);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "删除支付渠道失败");
     } finally {
@@ -518,75 +494,67 @@ export default function PaymentsPage() {
       <AdminHeader
         title="支付订单"
         description="管理充值套餐、人工确认订单和订单返利结算。"
+        icon={CreditCard}
         actions={
           <>
-            <Button type="button" variant="outline" onClick={() => void loadData()} disabled={loading || savingPackage}>
+            <button className="app-btn" type="button" onClick={() => void loadData()} disabled={loading || savingPackage}>
               {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
               刷新
-            </Button>
-            <Button type="button" onClick={openCreatePackage}>
-              <Plus className="size-4" />
-              新增套餐
-            </Button>
+            </button>
+            <button className="app-btn-primary" type="button" onClick={openCreatePackage}>
+              + 新增套餐
+            </button>
           </>
         }
-      >
-        <div className="mb-3 inline-flex size-10 items-center justify-center rounded-[var(--app-radius-md)] border border-white/10 bg-white/[0.045] text-[var(--app-text-primary)]">
-          <CreditCard className="size-5" />
-        </div>
-      </AdminHeader>
+      />
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <section className="app-stats">
         <AdminStatCard label="订单数" value={numberText(stats.total)} sub={`待确认 ${numberText(stats.pending)}`} icon={CreditCard} color="text-cyan-300" />
         <AdminStatCard label="已完成" value={numberText(stats.completed)} sub="人工确认到账" icon={CheckCircle2} color="text-emerald-300" />
         <AdminStatCard label="完成金额" value={moneyText(stats.amountCents)} sub="按订单金额统计" icon={CreditCard} color="text-amber-300" />
-        <AdminStatCard label="发放点数" value={numberText(stats.credits)} sub="含充值到账" icon={Plus} color="text-violet-300" />
-      </div>
+        <AdminStatCard label="发放点数" value={numberText(stats.credits)} sub="含充值到账" icon={CheckCircle2} color="text-violet-300" />
+      </section>
 
-      <AdminPanel className="overflow-hidden">
-        <AdminSectionTitle title="套餐列表" />
-        <div className="overflow-x-auto">
-          <table className={adminTableClass}>
-            <thead className={adminTableHeadClass}>
+      <AdminPanel>
+        <AdminSectionTitle title="套餐列表" action={<span className="panel-count">{packages.length}</span>} />
+        <div className="app-table-wrap">
+          <table className="app-table">
+            <thead>
               <tr>
-                <th className="px-4 py-3">套餐</th>
-                <th className="px-4 py-3">类型</th>
-                <th className="px-4 py-3">金额</th>
-                <th className="px-4 py-3">点数</th>
-                <th className="px-4 py-3">状态</th>
-                <th className="px-4 py-3 text-right">操作</th>
+                <th>套餐</th>
+                <th>类型</th>
+                <th>金额</th>
+                <th>点数</th>
+                <th>状态</th>
+                <th style={{ textAlign: "right" }}>操作</th>
               </tr>
             </thead>
-            <tbody className={adminTableBodyClass}>
+            <tbody>
               {packages.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-4 py-10 text-center text-[var(--app-text-muted)]">暂无套餐</td>
-                </tr>
+                <tr><td colSpan={6} style={{ padding: "40px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>暂无套餐</td></tr>
               ) : packages.map((item) => (
-                <tr key={item.id} className={adminTableRowClass}>
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-[var(--app-text-primary)]">{item.name}</div>
-                    <div className="mt-1 text-xs text-[var(--app-text-muted)]">
+                <tr key={item.id}>
+                  <td>
+                    <div style={{ fontWeight: 500, color: "var(--app-text-primary)" }}>{item.name}</div>
+                    <div style={{ marginTop: 2, fontSize: 11, color: "var(--app-text-muted)" }}>
                       {item.description || "-"}
                       {item.packageType === "subscription" || item.packageType === "monthly" ? ` · ${Number(item.durationDays || 30).toLocaleString()} 天` : ""}
                     </div>
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    <Badge variant={item.packageType === "subscription" || item.packageType === "monthly" ? "info" : "secondary"}>{packageTypeText(item.packageType)}</Badge>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3">{moneyText(item.amountCents, item.currency)}</td>
-                  <td className="whitespace-nowrap px-4 py-3">{numberText(item.credits)}{item.packageType === "subscription" || item.packageType === "monthly" ? " 订阅点" : ""}</td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    <Badge variant={item.enabled ? "success" : "secondary"}>{item.enabled ? "启用" : "停用"}</Badge>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    <div className="flex justify-end gap-1.5">
-                      <Button type="button" variant="ghost" size="icon" onClick={() => openEditPackage(item)} aria-label="编辑套餐">
-                        <Pencil className="size-4" />
-                      </Button>
-                      <Button type="button" variant="ghost" size="icon" onClick={() => void removePackage(item)} disabled={deletingPackageId === item.id} aria-label="删除套餐">
-                        {deletingPackageId === item.id ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-                      </Button>
+                  <td><span className={`app-badge ${packageTypeBadgeClass(item.packageType)}`}>{packageTypeText(item.packageType)}</span></td>
+                  <td>{moneyText(item.amountCents, item.currency)}</td>
+                  <td>{numberText(item.credits)}{item.packageType === "subscription" || item.packageType === "monthly" ? " 订阅点" : ""}</td>
+                  <td><span className={`app-badge ${item.enabled ? "ok" : "off"}`}>{item.enabled ? "启用" : "停用"}</span></td>
+                  <td>
+                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                      <div className="app-act">
+                        <button type="button" onClick={() => openEditPackage(item)} aria-label="编辑套餐">
+                          <Pencil className="size-3.5" />
+                        </button>
+                        <button type="button" className="danger" onClick={() => setDeletePackageTarget(item)} disabled={deletingPackageId === item.id} aria-label="删除套餐">
+                          {deletingPackageId === item.id ? <LoaderCircle className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                        </button>
+                      </div>
                     </div>
                   </td>
                 </tr>
@@ -596,54 +564,59 @@ export default function PaymentsPage() {
         </div>
       </AdminPanel>
 
-      <AdminPanel className="overflow-hidden">
-        <div className="flex items-center justify-between gap-3 border-b border-[var(--app-border)] px-5 py-4">
-          <div>
-            <h2 className="text-sm font-semibold text-[var(--app-text-primary)]">支付渠道</h2>
-            <p className="mt-1 text-xs text-[var(--app-text-muted)]">配置用户下单时可选的支付方式。</p>
-          </div>
-          <Button type="button" size="sm" onClick={openCreateProvider}>
-            <Plus className="size-4" />
-            新增渠道
-          </Button>
-        </div>
-        <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-3">
+      <AdminPanel>
+        <AdminSectionTitle
+          title="支付渠道"
+          action={
+            <button className="app-btn-primary" type="button" onClick={openCreateProvider} style={{ height: 30, padding: "0 12px", fontSize: 12 }}>
+              + 新增渠道
+            </button>
+          }
+        />
+        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", padding: 16 }}>
           {providers.length === 0 ? (
-            <div className={cn(adminSubPanelClass, "px-4 py-3 text-sm text-[var(--app-text-muted)]")}>暂无支付渠道</div>
+            <div style={{ padding: "12px 16px", fontSize: 13, color: "var(--app-text-muted)" }}>暂无支付渠道</div>
           ) : providers.map((item) => (
-            <div key={item.id} className={cn(adminSubPanelClass, "p-4")}>
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-[var(--app-text-primary)]">
-                    <WalletCards className="size-4 text-[var(--app-accent-cyan)]" />
+            <div key={item.id} style={{
+              padding: 16,
+              borderRadius: 12,
+              border: "1px solid var(--app-border)",
+              background: "var(--app-bg-surface)",
+            }}>
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: "var(--app-text-primary)" }}>
+                    <WalletCards className="size-4" style={{ color: "var(--app-accent-cyan)" }} />
                     {item.name}
                   </div>
-                  <div className="mt-1 text-xs text-[var(--app-text-muted)]">{item.providerKey}</div>
+                  <div style={{ marginTop: 4, fontSize: 11, color: "var(--app-text-muted)" }}>{item.providerKey}</div>
                 </div>
-                <Badge variant={item.enabled ? "success" : "secondary"}>{item.enabled ? "启用" : "停用"}</Badge>
+                <span className={`app-badge ${item.enabled ? "ok" : "off"}`}>{item.enabled ? "启用" : "停用"}</span>
               </div>
-              <div className="mt-3 flex flex-wrap gap-1.5">
+              <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {(item.supportedMethods || []).map((method) => (
-                  <Badge key={method} variant="secondary">{paymentMethodText(method)}</Badge>
+                  <span key={method} className="app-badge off">{paymentMethodText(method)}</span>
                 ))}
               </div>
               {item.providerKey === "easypay" ? (
-                <div className="mt-3 grid gap-1 text-xs leading-5 text-[var(--app-text-muted)]">
+                <div style={{ marginTop: 12, fontSize: 11, lineHeight: 1.6, color: "var(--app-text-muted)" }}>
                   <div>API：{item.config?.apiBase || "-"}</div>
                   <div>商户 ID：{item.config?.pid || "-"}</div>
                   <div>模式：{item.config?.paymentMode === "popup" ? "跳转收银台" : "二维码接口"}</div>
                 </div>
               ) : (
-                <div className="mt-3 text-xs leading-5 text-[var(--app-text-muted)]">内置人工确认渠道，不需要配置密钥。</div>
+                <div style={{ marginTop: 12, fontSize: 11, lineHeight: 1.6, color: "var(--app-text-muted)" }}>内置人工确认渠道，不需要配置密钥。</div>
               )}
               {item.id !== "manual" ? (
-                <div className="mt-4 flex justify-end gap-1.5">
-                  <Button type="button" variant="ghost" size="icon" onClick={() => openEditProvider(item)} aria-label="编辑渠道">
-                    <Pencil className="size-4" />
-                  </Button>
-                  <Button type="button" variant="ghost" size="icon" onClick={() => void removeProvider(item)} disabled={deletingProviderId === item.id} aria-label="删除渠道">
-                    {deletingProviderId === item.id ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-                  </Button>
+                <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end" }}>
+                  <div className="app-act">
+                    <button type="button" onClick={() => openEditProvider(item)} aria-label="编辑渠道">
+                      <Pencil className="size-3.5" />
+                    </button>
+                    <button type="button" className="danger" onClick={() => setDeleteProviderTarget(item)} disabled={deletingProviderId === item.id} aria-label="删除渠道">
+                      {deletingProviderId === item.id ? <LoaderCircle className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                    </button>
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -651,278 +624,227 @@ export default function PaymentsPage() {
         </div>
       </AdminPanel>
 
-      <AdminPanel className="overflow-hidden">
-        <div className="flex flex-col gap-4 border-b border-[var(--app-border)] px-5 py-4">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div>
-              <h2 className="text-sm font-semibold text-[var(--app-text-primary)]">订阅列表</h2>
-              <div className="mt-1 text-xs text-[var(--app-text-muted)]">
-                当前显示 {paginationText(subscriptionPage)}
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={loading || subscriptionPage.page <= 1}
-                onClick={() => void loadData(orderPage.page, Math.max(1, subscriptionPage.page - 1))}
-              >
-                上一页
-              </Button>
-              <div className="min-w-20 text-center text-xs text-[var(--app-text-muted)]">
-                {subscriptionPage.page} / {subscriptionTotalPages}
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={loading || subscriptionPage.page >= subscriptionTotalPages}
-                onClick={() => void loadData(orderPage.page, Math.min(subscriptionTotalPages, subscriptionPage.page + 1))}
-              >
-                下一页
-              </Button>
-            </div>
-          </div>
-          <div className="grid gap-3 xl:grid-cols-[160px_180px_minmax(220px,1fr)_auto]">
-            <Select value={subscriptionStatusFilter} onValueChange={(value) => setSubscriptionStatusFilter(value as SubscriptionStatusFilter)}>
-              <SelectTrigger className={adminInputClass}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部状态</SelectItem>
-                <SelectItem value="active">有效</SelectItem>
-                <SelectItem value="upgraded">已升级</SelectItem>
-                <SelectItem value="expired">已过期</SelectItem>
-                <SelectItem value="cancelled">已取消</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={subscriptionWindowFilter} onValueChange={(value) => setSubscriptionWindowFilter(value as SubscriptionWindowFilter)}>
-              <SelectTrigger className={adminInputClass}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部有效期</SelectItem>
-                <SelectItem value="current">当前可用</SelectItem>
-                <SelectItem value="future">未来生效</SelectItem>
-                <SelectItem value="history">历史记录</SelectItem>
-              </SelectContent>
-            </Select>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[var(--app-text-muted)]" />
-              <Input
-                value={subscriptionSearch}
-                onChange={(event) => setSubscriptionSearch(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    void loadData(orderPage.page, 1);
-                  }
-                }}
-                className={cn(adminInputClass, "pl-9")}
-                placeholder="搜索用户、邮箱、套餐或订单"
-              />
-            </div>
-            <Button type="button" variant="outline" onClick={() => void loadData(orderPage.page, 1)} disabled={loading}>
-              <Search className="size-4" />
-              筛选
-            </Button>
-          </div>
+      <AdminPanel>
+        <AdminSectionTitle
+          title="订阅列表"
+          action={<span className="panel-count">{paginationText(subscriptionPage)}</span>}
+        />
+        <div className="app-toolbar" style={{ border: 0, borderRadius: 0, boxShadow: "none", borderBottom: "1px solid var(--app-border)", backdropFilter: "none" }}>
+          <AppSelect
+            value={subscriptionStatusFilter}
+            onChange={(v) => setSubscriptionStatusFilter(v as SubscriptionStatusFilter)}
+            options={[
+              { value: "all", label: "全部状态" },
+              { value: "active", label: "有效" },
+              { value: "upgraded", label: "已升级" },
+              { value: "expired", label: "已过期" },
+              { value: "cancelled", label: "已取消" },
+            ]}
+          />
+          <AppSelect
+            value={subscriptionWindowFilter}
+            onChange={(v) => setSubscriptionWindowFilter(v as SubscriptionWindowFilter)}
+            options={[
+              { value: "all", label: "全部有效期" },
+              { value: "current", label: "当前可用" },
+              { value: "future", label: "未来生效" },
+              { value: "history", label: "历史记录" },
+            ]}
+          />
+          <input
+            className="app-input"
+            type="search"
+            value={subscriptionSearch}
+            onChange={(event) => setSubscriptionSearch(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter") void loadData(orderPage.page, 1); }}
+            placeholder="搜索用户、邮箱、套餐或订单"
+            style={{ flex: 1, minWidth: 200 }}
+          />
+          <button className="app-btn" type="button" onClick={() => void loadData(orderPage.page, 1)} disabled={loading}>
+            筛选
+          </button>
         </div>
-        <div className="overflow-x-auto">
-          <table className={cn(adminTableClass, "w-full min-w-[980px] table-fixed")}>
-            <thead className={adminTableHeadClass}>
+        <div className="app-table-wrap">
+          <table className="app-table">
+            <thead>
               <tr>
-                <th className="w-[20%] px-4 py-3">用户</th>
-                <th className="w-[20%] px-4 py-3">订阅</th>
-                <th className="w-[16%] px-4 py-3">额度</th>
-                <th className="w-[12%] px-4 py-3">状态</th>
-                <th className="w-[16%] px-4 py-3">有效期</th>
-                <th className="w-[16%] px-4 py-3">来源订单</th>
+                <th>用户</th>
+                <th>订阅</th>
+                <th>额度</th>
+                <th>状态</th>
+                <th>有效期</th>
+                <th>来源订单</th>
               </tr>
             </thead>
-            <tbody className={adminTableBodyClass}>
+            <tbody>
               {loading ? (
-                <tr><td colSpan={6} className="px-4 py-10 text-center text-[var(--app-text-muted)]"><LoaderCircle className="mx-auto mb-2 size-5 animate-spin" />读取中</td></tr>
+                <tr><td colSpan={6} style={{ padding: "40px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
+                  <LoaderCircle className="size-5 animate-spin" style={{ display: "inline-block", marginBottom: 8 }} />
+                  <div>读取中</div>
+                </td></tr>
               ) : subscriptions.length === 0 ? (
-                <tr><td colSpan={6} className="px-4 py-10 text-center text-[var(--app-text-muted)]">暂无匹配订阅</td></tr>
+                <tr><td colSpan={6} style={{ padding: "40px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>暂无匹配订阅</td></tr>
               ) : subscriptions.map((item) => (
-                <tr key={item.id} className={adminTableRowClass}>
-                  <td className="min-w-0 px-4 py-3">
-                    <div className="truncate font-medium text-[var(--app-text-primary)]">{item.username || "-"}</div>
-                    <div className="mt-1 truncate text-xs text-[var(--app-text-muted)]" title={item.userEmail || ""}>{item.userEmail || item.userId || "-"}</div>
+                <tr key={item.id}>
+                  <td style={{ whiteSpace: "normal" }}>
+                    <div style={{ fontWeight: 500, color: "var(--app-text-primary)" }}>{item.username || "-"}</div>
+                    <div style={{ marginTop: 2, fontSize: 11, color: "var(--app-text-muted)" }} title={item.userEmail || ""}>{item.userEmail || item.userId || "-"}</div>
                   </td>
-                  <td className="min-w-0 px-4 py-3">
-                    <div className="truncate font-medium text-[var(--app-text-primary)]">{item.packageName || "订阅"}</div>
-                    <div className="mt-1 text-xs text-[var(--app-text-muted)]">{numberText(item.durationDays || 0)} 天</div>
+                  <td style={{ whiteSpace: "normal" }}>
+                    <div style={{ fontWeight: 500, color: "var(--app-text-primary)" }}>{item.packageName || "订阅"}</div>
+                    <div style={{ marginTop: 2, fontSize: 11, color: "var(--app-text-muted)" }}>{numberText(item.durationDays || 0)} 天</div>
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    <div className="font-semibold text-[var(--app-text-primary)]">{numberText(item.creditsLeft)} / {numberText(item.creditsTotal)}</div>
-                    <div className="mt-1 text-xs text-[var(--app-text-muted)]">已用 {numberText(item.creditsUsed)}</div>
+                  <td>
+                    <div style={{ fontWeight: 600, color: "var(--app-text-primary)" }}>{numberText(item.creditsLeft)} / {numberText(item.creditsTotal)}</div>
+                    <div style={{ marginTop: 2, fontSize: 11, color: "var(--app-text-muted)" }}>已用 {numberText(item.creditsUsed)}</div>
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    <Badge variant={subscriptionRowStatusVariant(item)}>{subscriptionRowStatusText(item)}</Badge>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-[var(--app-text-secondary)]">
+                  <td><span className={`app-badge ${subscriptionRowStatusBadgeClass(item)}`}>{subscriptionRowStatusText(item)}</span></td>
+                  <td>
                     <div>{formatDateTime(item.startsAt)}</div>
-                    <div className="mt-1 text-xs text-[var(--app-text-muted)]">本周期至 {formatDateTime(item.expiresAt)}</div>
+                    <div style={{ marginTop: 2, fontSize: 11, color: "var(--app-text-muted)" }}>本周期至 {formatDateTime(item.expiresAt)}</div>
                     {item.coverageExpiresAt && item.coverageExpiresAt !== item.expiresAt ? (
-                      <div className="mt-1 text-xs text-[var(--app-text-muted)]">续订至 {formatDateTime(subscriptionCoverageExpiresAt(item))}</div>
+                      <div style={{ marginTop: 2, fontSize: 11, color: "var(--app-text-muted)" }}>续订至 {formatDateTime(subscriptionCoverageExpiresAt(item))}</div>
                     ) : null}
                   </td>
-                  <td className="min-w-0 px-4 py-3">
-                    <div className="truncate text-xs text-[var(--app-text-secondary)]" title={item.orderId || ""}>{item.orderId || "-"}</div>
-                  </td>
+                  <td style={{ fontSize: 11, color: "var(--app-text-secondary)", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }} title={item.orderId || ""}>{item.orderId || "-"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </AdminPanel>
-
-      <AdminPanel className="overflow-hidden">
-        <div className="flex flex-col gap-4 border-b border-[var(--app-border)] px-5 py-4">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div>
-              <h2 className="text-sm font-semibold text-[var(--app-text-primary)]">订单列表</h2>
-              <div className="mt-1 text-xs text-[var(--app-text-muted)]">
-                当前显示 {paginationText(orderPage)}
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="flex items-center gap-2 text-xs text-[var(--app-text-muted)]">
-                订单返利比例
-                <input type="number" min="0" max="10000" value={commissionRateBps} onChange={(event) => setCommissionRateBps(event.target.value)} className={cn(adminInputClass, "h-9 w-24 rounded-md px-3")} />
-                bps
-              </label>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={loading || orderPage.page <= 1}
-                onClick={() => void loadData(Math.max(1, orderPage.page - 1), subscriptionPage.page)}
-              >
-                上一页
-              </Button>
-              <div className="min-w-20 text-center text-xs text-[var(--app-text-muted)]">
-                {orderPage.page} / {orderTotalPages}
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={loading || orderPage.page >= orderTotalPages}
-                onClick={() => void loadData(Math.min(orderTotalPages, orderPage.page + 1), subscriptionPage.page)}
-              >
-                下一页
-              </Button>
-            </div>
-          </div>
-          <div className="grid gap-3 xl:grid-cols-[160px_180px_minmax(220px,1fr)_auto]">
-            <Select value={orderStatusFilter} onValueChange={(value) => setOrderStatusFilter(value as OrderStatusFilter)}>
-              <SelectTrigger className={adminInputClass}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部状态</SelectItem>
-                <SelectItem value="pending">待确认</SelectItem>
-                <SelectItem value="paid">已支付</SelectItem>
-                <SelectItem value="completed">已到账</SelectItem>
-                <SelectItem value="cancelled">已取消</SelectItem>
-                <SelectItem value="refunded">已退款</SelectItem>
-                <SelectItem value="expired">已过期</SelectItem>
-                <SelectItem value="failed">失败</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={orderKindFilter} onValueChange={(value) => setOrderKindFilter(value as OrderKindFilter)}>
-              <SelectTrigger className={adminInputClass}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">全部类型</SelectItem>
-                <SelectItem value="balance">余额充值</SelectItem>
-                <SelectItem value="subscription">开通订阅</SelectItem>
-                <SelectItem value="renewal">续订</SelectItem>
-                <SelectItem value="upgrade">升级补差价</SelectItem>
-              </SelectContent>
-            </Select>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[var(--app-text-muted)]" />
-              <Input
-                value={orderSearch}
-                onChange={(event) => setOrderSearch(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    void loadData(1, subscriptionPage.page);
-                  }
-                }}
-                className={cn(adminInputClass, "pl-9")}
-                placeholder="搜索用户、邮箱、订单号"
-              />
-            </div>
-            <Button type="button" variant="outline" onClick={() => void loadData(1, subscriptionPage.page)} disabled={loading}>
-              <Search className="size-4" />
-              筛选
-            </Button>
+        <div className="app-pager">
+          <span className="info">第 {subscriptionPage.page} / {subscriptionTotalPages} 页</span>
+          <div className="pages">
+            <button type="button" disabled={loading || subscriptionPage.page <= 1} onClick={() => void loadData(orderPage.page, Math.max(1, subscriptionPage.page - 1))}>上一页</button>
+            <button type="button" disabled={loading || subscriptionPage.page >= subscriptionTotalPages} onClick={() => void loadData(orderPage.page, Math.min(subscriptionTotalPages, subscriptionPage.page + 1))}>下一页</button>
           </div>
         </div>
-        <div className="overflow-x-auto">
-          <table className={cn(adminTableClass, "w-full min-w-[980px] table-fixed")}>
-            <thead className={adminTableHeadClass}>
+      </AdminPanel>
+
+      <AdminPanel>
+        <AdminSectionTitle
+          title="订单列表"
+          action={
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--app-text-muted)" }}>
+                订单返利比例
+                <input
+                  className="app-input"
+                  type="number"
+                  min={0}
+                  max={10000}
+                  value={commissionRateBps}
+                  onChange={(event) => setCommissionRateBps(event.target.value)}
+                  style={{ width: 80, height: 28, padding: "0 8px", fontSize: 12 }}
+                />
+                bps
+              </label>
+              <span className="panel-count">{paginationText(orderPage)}</span>
+            </div>
+          }
+        />
+        <div className="app-toolbar" style={{ border: 0, borderRadius: 0, boxShadow: "none", borderBottom: "1px solid var(--app-border)", backdropFilter: "none" }}>
+          <AppSelect
+            value={orderStatusFilter}
+            onChange={(v) => setOrderStatusFilter(v as OrderStatusFilter)}
+            options={[
+              { value: "all", label: "全部状态" },
+              { value: "pending", label: "待确认" },
+              { value: "paid", label: "已支付" },
+              { value: "completed", label: "已到账" },
+              { value: "cancelled", label: "已取消" },
+              { value: "refunded", label: "已退款" },
+              { value: "expired", label: "已过期" },
+              { value: "failed", label: "失败" },
+            ]}
+          />
+          <AppSelect
+            value={orderKindFilter}
+            onChange={(v) => setOrderKindFilter(v as OrderKindFilter)}
+            options={[
+              { value: "all", label: "全部类型" },
+              { value: "balance", label: "余额充值" },
+              { value: "subscription", label: "开通订阅" },
+              { value: "renewal", label: "续订" },
+              { value: "upgrade", label: "升级补差价" },
+            ]}
+          />
+          <input
+            className="app-input"
+            type="search"
+            value={orderSearch}
+            onChange={(event) => setOrderSearch(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter") void loadData(1, subscriptionPage.page); }}
+            placeholder="搜索用户、邮箱、订单号"
+            style={{ flex: 1, minWidth: 200 }}
+          />
+          <button className="app-btn" type="button" onClick={() => void loadData(1, subscriptionPage.page)} disabled={loading}>
+            筛选
+          </button>
+        </div>
+        <div className="app-table-wrap">
+          <table className="app-table">
+            <thead>
               <tr>
-                <th className="w-[26%] px-4 py-3">订单</th>
-                <th className="w-[17%] px-4 py-3">用户</th>
-                <th className="w-[9%] px-4 py-3">金额</th>
-                <th className="w-[8%] px-4 py-3">点数</th>
-                <th className="w-[9%] px-4 py-3">状态</th>
-                <th className="w-[14%] px-4 py-3">时间</th>
-                <th className="w-[17%] px-4 py-3">操作</th>
+                <th>订单</th>
+                <th>用户</th>
+                <th>金额</th>
+                <th>点数</th>
+                <th>状态</th>
+                <th>时间</th>
+                <th style={{ textAlign: "right" }}>操作</th>
               </tr>
             </thead>
-            <tbody className={adminTableBodyClass}>
+            <tbody>
               {loading ? (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-[var(--app-text-muted)]"><LoaderCircle className="mx-auto mb-2 size-5 animate-spin" />读取中</td></tr>
+                <tr><td colSpan={7} style={{ padding: "40px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
+                  <LoaderCircle className="size-5 animate-spin" style={{ display: "inline-block", marginBottom: 8 }} />
+                  <div>读取中</div>
+                </td></tr>
               ) : orders.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-10 text-center text-[var(--app-text-muted)]">暂无匹配订单</td></tr>
+                <tr><td colSpan={7} style={{ padding: "40px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>暂无匹配订单</td></tr>
               ) : orders.map((item) => {
                 const acting = actingOrderId === item.id;
                 return (
-                  <tr key={item.id} className={adminTableRowClass}>
-                    <td className="min-w-0 px-4 py-3">
-                      <div className="truncate font-medium text-[var(--app-text-primary)]" title={item.outTradeNo}>{item.outTradeNo}</div>
-                      <div className="mt-1 text-xs text-[var(--app-text-muted)]">{item.id}</div>
-                      <div className="mt-1 text-xs text-[var(--app-text-muted)]">{billingActionText(item)}</div>
+                  <tr key={item.id}>
+                    <td style={{ whiteSpace: "normal" }}>
+                      <div style={{ fontWeight: 500, color: "var(--app-text-primary)", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis" }} title={item.outTradeNo}>{item.outTradeNo}</div>
+                      <div style={{ marginTop: 2, fontSize: 11, color: "var(--app-text-muted)" }}>{item.id}</div>
+                      <div style={{ marginTop: 2, fontSize: 11, color: "var(--app-text-muted)" }}>{billingActionText(item)}</div>
                     </td>
-                    <td className="min-w-0 px-4 py-3">
-                      <div className="truncate font-medium text-[var(--app-text-primary)]">{item.username || "-"}</div>
-                      <div className="mt-1 truncate text-xs text-[var(--app-text-muted)]" title={item.userEmail || ""}>{item.userEmail || "-"}</div>
+                    <td style={{ whiteSpace: "normal" }}>
+                      <div style={{ fontWeight: 500, color: "var(--app-text-primary)" }}>{item.username || "-"}</div>
+                      <div style={{ marginTop: 2, fontSize: 11, color: "var(--app-text-muted)" }} title={item.userEmail || ""}>{item.userEmail || "-"}</div>
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3">
+                    <td>
                       <div>{moneyText(item.amountCents, item.currency)}</div>
                       {item.billingAction === "upgrade" && Number(item.upgradeCreditCents || 0) > 0 ? (
-                        <div className="mt-1 text-xs text-[var(--app-text-muted)]">已抵扣 {moneyText(item.upgradeCreditCents, item.currency)}</div>
+                        <div style={{ marginTop: 2, fontSize: 11, color: "var(--app-text-muted)" }}>已抵扣 {moneyText(item.upgradeCreditCents, item.currency)}</div>
                       ) : null}
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3">{numberText(item.credits)}</td>
-                    <td className="whitespace-nowrap px-4 py-3"><Badge variant={statusVariant(item.status)}>{statusText(item.status)}</Badge></td>
-                    <td className="whitespace-nowrap px-4 py-3 text-[var(--app-text-secondary)]">{formatDateTime(item.createdAt)}</td>
-                    <td className="min-w-0 px-4 py-3">
-                      <div className="flex flex-wrap gap-2">
-                        <Button type="button" size="sm" variant="outline" onClick={() => void openOrderDetail(item)}>
-                          <Eye className="size-4" />
-                          详情
-                        </Button>
-                        <Button type="button" size="sm" disabled={acting || (item.status !== "pending" && item.status !== "paid")} onClick={() => setConfirmAction({ order: item, action: "complete" })}>
-                          {acting ? <LoaderCircle className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-                          确认
-                        </Button>
-                        <Button type="button" size="sm" variant="outline" disabled={acting || item.status !== "pending"} onClick={() => setConfirmAction({ order: item, action: "cancel" })}>
-                          <XCircle className="size-4" />
-                          取消
-                        </Button>
-                        <Button type="button" size="sm" variant="outline" disabled={acting || item.status !== "completed"} onClick={() => setConfirmAction({ order: item, action: "refund" })}>
-                          <RotateCcw className="size-4" />
-                          退款
-                        </Button>
+                    <td>{numberText(item.credits)}</td>
+                    <td><span className={`app-badge ${statusBadgeClass(item.status)}`}>{statusText(item.status)}</span></td>
+                    <td style={{ fontSize: 12 }}>{formatDateTime(item.createdAt)}</td>
+                    <td>
+                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                        <div className="app-act">
+                          <button type="button" onClick={() => void openOrderDetail(item)} aria-label="详情">
+                            <Eye className="size-3.5" />
+                            详情
+                          </button>
+                          <button type="button" disabled={acting || (item.status !== "pending" && item.status !== "paid")} onClick={() => setConfirmAction({ order: item, action: "complete" })}>
+                            {acting ? <LoaderCircle className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+                            确认
+                          </button>
+                          <button type="button" className="warn" disabled={acting || item.status !== "pending"} onClick={() => setConfirmAction({ order: item, action: "cancel" })}>
+                            <XCircle className="size-3.5" />
+                            取消
+                          </button>
+                          <button type="button" className="danger" disabled={acting || item.status !== "completed"} onClick={() => setConfirmAction({ order: item, action: "refund" })}>
+                            <RotateCcw className="size-3.5" />
+                            退款
+                          </button>
+                        </div>
                       </div>
                     </td>
                   </tr>
@@ -931,369 +853,429 @@ export default function PaymentsPage() {
             </tbody>
           </table>
         </div>
+        <div className="app-pager">
+          <span className="info">第 {orderPage.page} / {orderTotalPages} 页</span>
+          <div className="pages">
+            <button type="button" disabled={loading || orderPage.page <= 1} onClick={() => void loadData(Math.max(1, orderPage.page - 1), subscriptionPage.page)}>上一页</button>
+            <button type="button" disabled={loading || orderPage.page >= orderTotalPages} onClick={() => void loadData(Math.min(orderTotalPages, orderPage.page + 1), subscriptionPage.page)}>下一页</button>
+          </div>
+        </div>
       </AdminPanel>
 
-      <Dialog open={packageDialogOpen} onOpenChange={(open) => {
-        setPackageDialogOpen(open);
-        if (!open) setPackageForm(emptyPackageForm);
-      }}>
-        <DialogContent className="max-h-[90vh] w-[min(92vw,720px)] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{packageForm.id ? "编辑套餐" : "新增套餐"}</DialogTitle>
-          </DialogHeader>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">套餐类型</div>
-              <Select value={packageForm.packageType} onValueChange={(value) => setPackageForm((current) => ({ ...current, packageType: value as PaymentPackageType }))}>
-                <SelectTrigger className={adminInputClass}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="balance">余额</SelectItem>
-                  <SelectItem value="subscription">订阅</SelectItem>
-                </SelectContent>
-              </Select>
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">名称</div>
-              <Input
-                value={packageForm.name}
-                onChange={(event) => setPackageForm((current) => ({ ...current, name: event.target.value }))}
-                className={adminInputClass}
-                placeholder={packageForm.packageType === "subscription" ? "例如 月度会员" : "例如 100 点"}
-              />
-            </label>
-            <label className="space-y-2 md:col-span-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">说明</div>
-              <Input
-                value={packageForm.description}
-                onChange={(event) => setPackageForm((current) => ({ ...current, description: event.target.value }))}
-                className={adminInputClass}
-                placeholder={packageForm.packageType === "subscription" ? "订阅套餐，人工确认后生效" : "人工确认后到账"}
-              />
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">金额（分）</div>
-              <Input
-                type="number"
-                min="1"
-                value={packageForm.amountCents}
-                onChange={(event) => setPackageForm((current) => ({ ...current, amountCents: event.target.value }))}
-                className={adminInputClass}
-              />
-            </label>
-            {packageForm.packageType === "subscription" ? (
-              <label className="space-y-2">
-                <div className="text-sm font-medium text-[var(--app-text-secondary)]">订阅天数</div>
-                <Input
-                  type="number"
-                  min="1"
-                  value={packageForm.durationDays}
-                  onChange={(event) => setPackageForm((current) => ({ ...current, durationDays: event.target.value }))}
-                  className={adminInputClass}
-                />
-              </label>
-            ) : null}
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">点数</div>
-              <Input
-                type="number"
-                min="1"
-                value={packageForm.credits}
-                onChange={(event) => setPackageForm((current) => ({ ...current, credits: event.target.value }))}
-                className={adminInputClass}
-              />
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">币种</div>
-              <Input
-                value={packageForm.currency}
-                onChange={(event) => setPackageForm((current) => ({ ...current, currency: event.target.value }))}
-                className={adminInputClass}
-              />
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">排序</div>
-              <Input
-                type="number"
-                value={packageForm.sortOrder}
-                onChange={(event) => setPackageForm((current) => ({ ...current, sortOrder: event.target.value }))}
-                className={adminInputClass}
-              />
-            </label>
-            <label className={cn(adminSubPanelClass, "flex items-center justify-between gap-3 px-4 py-3 text-sm text-[var(--app-text-secondary)] md:col-span-2")}>
-              <span>启用套餐</span>
-              <input type="checkbox" checked={packageForm.enabled} onChange={(event) => setPackageForm((current) => ({ ...current, enabled: event.target.checked }))} />
-            </label>
-          </div>
-
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setPackageDialogOpen(false)}>取消</Button>
-            <Button type="button" onClick={() => void savePackage()} disabled={savingPackage}>
-              {savingPackage ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}
+      <AppModal
+        open={packageDialogOpen}
+        onClose={() => { setPackageDialogOpen(false); setPackageForm(emptyPackageForm); }}
+        title={packageForm.id ? "编辑套餐" : "新增套餐"}
+        footer={
+          <>
+            <button className="app-btn" type="button" onClick={() => setPackageDialogOpen(false)}>取消</button>
+            <button className="app-btn-primary" type="button" onClick={() => void savePackage()} disabled={savingPackage}>
+              {savingPackage ? <LoaderCircle className="size-4 animate-spin" /> : null}
               保存
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={providerDialogOpen} onOpenChange={(open) => {
-        if (!open && !savingProvider) {
-          setProviderDialogOpen(false);
-          setProviderForm(emptyProviderForm);
+            </button>
+          </>
         }
-      }}>
-        <DialogContent className="max-h-[90vh] w-[min(92vw,760px)] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{providerForm.id ? "编辑支付渠道" : "新增支付渠道"}</DialogTitle>
-            <DialogDescription>当前先支持 EasyPay。密钥保存后不会明文回显，编辑时留空表示不修改。</DialogDescription>
-          </DialogHeader>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">渠道类型</div>
-              <Select value={providerForm.providerKey} disabled={Boolean(providerForm.id)} onValueChange={(value) => setProviderForm((current) => ({ ...current, providerKey: value }))}>
-                <SelectTrigger className={adminInputClass}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="easypay">EasyPay</SelectItem>
-                </SelectContent>
-              </Select>
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">名称</div>
-              <Input
-                value={providerForm.name}
-                onChange={(event) => setProviderForm((current) => ({ ...current, name: event.target.value }))}
-                className={adminInputClass}
-                placeholder="例如 易支付"
-              />
-            </label>
-            <label className="space-y-2 md:col-span-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">API 地址</div>
-              <Input
-                value={providerForm.apiBase}
-                onChange={(event) => setProviderForm((current) => ({ ...current, apiBase: event.target.value }))}
-                className={adminInputClass}
-                placeholder="https://pay.example.com"
-              />
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">商户 ID</div>
-              <Input
-                value={providerForm.pid}
-                onChange={(event) => setProviderForm((current) => ({ ...current, pid: event.target.value }))}
-                className={adminInputClass}
-                placeholder="pid"
-              />
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">商户密钥</div>
-              <Input
-                value={providerForm.pkey}
-                onChange={(event) => setProviderForm((current) => ({ ...current, pkey: event.target.value }))}
-                className={adminInputClass}
-                placeholder={providerForm.id ? "留空保持不变" : "pkey"}
-              />
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">支付模式</div>
-              <Select value={providerForm.paymentMode} onValueChange={(value) => setProviderForm((current) => ({ ...current, paymentMode: value }))}>
-                <SelectTrigger className={adminInputClass}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="qrcode">二维码接口</SelectItem>
-                  <SelectItem value="popup">跳转收银台</SelectItem>
-                </SelectContent>
-              </Select>
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">排序</div>
-              <Input
+      >
+        <div className="app-form-grid">
+          <div className="app-fld">
+            <span className="fl">套餐类型</span>
+            <AppSelect
+              value={packageForm.packageType}
+              onChange={(v) => setPackageForm((current) => ({ ...current, packageType: v as PaymentPackageType }))}
+              options={[{ value: "balance", label: "余额" }, { value: "subscription", label: "订阅" }]}
+            />
+          </div>
+          <div className="app-fld">
+            <span className="fl">名称</span>
+            <input
+              className="app-input"
+              value={packageForm.name}
+              onChange={(event) => setPackageForm((current) => ({ ...current, name: event.target.value }))}
+              placeholder={packageForm.packageType === "subscription" ? "例如 月度会员" : "例如 100 点"}
+            />
+          </div>
+          <div className="app-fld full">
+            <span className="fl">说明</span>
+            <input
+              className="app-input"
+              value={packageForm.description}
+              onChange={(event) => setPackageForm((current) => ({ ...current, description: event.target.value }))}
+              placeholder={packageForm.packageType === "subscription" ? "订阅套餐，人工确认后生效" : "人工确认后到账"}
+            />
+          </div>
+          <div className="app-fld">
+            <span className="fl">金额（分）</span>
+            <input
+              className="app-input"
+              type="number"
+              min={1}
+              value={packageForm.amountCents}
+              onChange={(event) => setPackageForm((current) => ({ ...current, amountCents: event.target.value }))}
+            />
+          </div>
+          {packageForm.packageType === "subscription" ? (
+            <div className="app-fld">
+              <span className="fl">订阅天数</span>
+              <input
+                className="app-input"
                 type="number"
-                value={providerForm.sortOrder}
-                onChange={(event) => setProviderForm((current) => ({ ...current, sortOrder: event.target.value }))}
-                className={adminInputClass}
+                min={1}
+                value={packageForm.durationDays}
+                onChange={(event) => setPackageForm((current) => ({ ...current, durationDays: event.target.value }))}
               />
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">支付宝通道 ID</div>
-              <Input
-                value={providerForm.cidAlipay}
-                onChange={(event) => setProviderForm((current) => ({ ...current, cidAlipay: event.target.value }))}
-                className={adminInputClass}
-                placeholder="可选"
-              />
-            </label>
-            <label className="space-y-2">
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">微信通道 ID</div>
-              <Input
-                value={providerForm.cidWxpay}
-                onChange={(event) => setProviderForm((current) => ({ ...current, cidWxpay: event.target.value }))}
-                className={adminInputClass}
-                placeholder="可选"
-              />
-            </label>
-            <div className={cn(adminSubPanelClass, "grid gap-3 p-4 md:col-span-2")}>
-              <div className="text-sm font-medium text-[var(--app-text-secondary)]">可用支付方式</div>
-              <div className="flex flex-wrap gap-4">
-                {[
-                  { key: "alipay", label: "支付宝" },
-                  { key: "wxpay", label: "微信支付" },
-                ].map((item) => (
-                  <label key={item.key} className="flex items-center gap-2 text-sm text-[var(--app-text-secondary)]">
-                    <Checkbox
-                      checked={providerForm.methods.includes(item.key)}
-                      onCheckedChange={(checked) => toggleProviderMethod(item.key, Boolean(checked))}
-                    />
-                    {item.label}
-                  </label>
+            </div>
+          ) : null}
+          <div className="app-fld">
+            <span className="fl">点数</span>
+            <input
+              className="app-input"
+              type="number"
+              min={1}
+              value={packageForm.credits}
+              onChange={(event) => setPackageForm((current) => ({ ...current, credits: event.target.value }))}
+            />
+          </div>
+          <div className="app-fld">
+            <span className="fl">币种</span>
+            <input
+              className="app-input"
+              value={packageForm.currency}
+              onChange={(event) => setPackageForm((current) => ({ ...current, currency: event.target.value }))}
+            />
+          </div>
+          <div className="app-fld">
+            <span className="fl">排序</span>
+            <input
+              className="app-input"
+              type="number"
+              value={packageForm.sortOrder}
+              onChange={(event) => setPackageForm((current) => ({ ...current, sortOrder: event.target.value }))}
+            />
+          </div>
+          <div className="app-fld full switch-row">
+            <div className="fl-wrap">
+              <span className="fl">启用套餐</span>
+              <span className="fd">关闭后用户不可见</span>
+            </div>
+            <button
+              type="button"
+              className={`app-switch ${packageForm.enabled ? "on" : ""}`}
+              aria-label="启用套餐"
+              onClick={() => setPackageForm((current) => ({ ...current, enabled: !current.enabled }))}
+            />
+          </div>
+        </div>
+      </AppModal>
+
+      <AppModal
+        open={providerDialogOpen}
+        onClose={() => { if (!savingProvider) { setProviderDialogOpen(false); setProviderForm(emptyProviderForm); } }}
+        title={providerForm.id ? "编辑支付渠道" : "新增支付渠道"}
+        footer={
+          <>
+            <button className="app-btn" type="button" onClick={() => setProviderDialogOpen(false)} disabled={savingProvider}>取消</button>
+            <button className="app-btn-primary" type="button" onClick={() => void saveProvider()} disabled={savingProvider}>
+              {savingProvider ? <LoaderCircle className="size-4 animate-spin" /> : null}
+              保存
+            </button>
+          </>
+        }
+      >
+        <div style={{ padding: "0 18px 12px", fontSize: 12, color: "var(--app-text-muted)" }}>
+          当前先支持 EasyPay。密钥保存后不会明文回显，编辑时留空表示不修改。
+        </div>
+        <div className="app-form-grid">
+          <div className="app-fld">
+            <span className="fl">渠道类型</span>
+            <AppSelect
+              value={providerForm.providerKey}
+              onChange={(v) => setProviderForm((current) => ({ ...current, providerKey: v }))}
+              options={[{ value: "easypay", label: "EasyPay" }]}
+            />
+          </div>
+          <div className="app-fld">
+            <span className="fl">名称</span>
+            <input className="app-input" value={providerForm.name} onChange={(event) => setProviderForm((current) => ({ ...current, name: event.target.value }))} placeholder="例如 易支付" />
+          </div>
+          <div className="app-fld full">
+            <span className="fl">API 地址</span>
+            <input className="app-input" value={providerForm.apiBase} onChange={(event) => setProviderForm((current) => ({ ...current, apiBase: event.target.value }))} placeholder="https://pay.example.com" />
+          </div>
+          <div className="app-fld">
+            <span className="fl">商户 ID</span>
+            <input className="app-input" value={providerForm.pid} onChange={(event) => setProviderForm((current) => ({ ...current, pid: event.target.value }))} placeholder="pid" />
+          </div>
+          <div className="app-fld">
+            <span className="fl">商户密钥</span>
+            <input className="app-input" value={providerForm.pkey} onChange={(event) => setProviderForm((current) => ({ ...current, pkey: event.target.value }))} placeholder={providerForm.id ? "留空保持不变" : "pkey"} />
+          </div>
+          <div className="app-fld">
+            <span className="fl">支付模式</span>
+            <AppSelect
+              value={providerForm.paymentMode}
+              onChange={(v) => setProviderForm((current) => ({ ...current, paymentMode: v }))}
+              options={[{ value: "qrcode", label: "二维码接口" }, { value: "popup", label: "跳转收银台" }]}
+            />
+          </div>
+          <div className="app-fld">
+            <span className="fl">排序</span>
+            <input className="app-input" type="number" value={providerForm.sortOrder} onChange={(event) => setProviderForm((current) => ({ ...current, sortOrder: event.target.value }))} />
+          </div>
+          <div className="app-fld">
+            <span className="fl">支付宝通道 ID</span>
+            <input className="app-input" value={providerForm.cidAlipay} onChange={(event) => setProviderForm((current) => ({ ...current, cidAlipay: event.target.value }))} placeholder="可选" />
+          </div>
+          <div className="app-fld">
+            <span className="fl">微信通道 ID</span>
+            <input className="app-input" value={providerForm.cidWxpay} onChange={(event) => setProviderForm((current) => ({ ...current, cidWxpay: event.target.value }))} placeholder="可选" />
+          </div>
+          <div className="app-fld full">
+            <span className="fl">可用支付方式</span>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+              {[
+                { key: "alipay", label: "支付宝" },
+                { key: "wxpay", label: "微信支付" },
+              ].map((item) => (
+                <label key={item.key} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--app-text-secondary)", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={providerForm.methods.includes(item.key)}
+                    onChange={(event) => toggleProviderMethod(item.key, event.target.checked)}
+                  />
+                  {item.label}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="app-fld full switch-row">
+            <div className="fl-wrap">
+              <span className="fl">启用渠道</span>
+              <span className="fd">关闭后不再用于新订单</span>
+            </div>
+            <button
+              type="button"
+              className={`app-switch ${providerForm.enabled ? "on" : ""}`}
+              aria-label="启用渠道"
+              onClick={() => setProviderForm((current) => ({ ...current, enabled: !current.enabled }))}
+            />
+          </div>
+        </div>
+      </AppModal>
+
+      <AppModal
+        open={!!selectedOrder}
+        onClose={() => { setSelectedOrder(null); setAuditLogs([]); }}
+        title="订单详情"
+        footer={
+          <button className="app-btn" type="button" onClick={() => { setSelectedOrder(null); setAuditLogs([]); }}>关闭</button>
+        }
+      >
+        {selectedOrder ? (
+          <div style={{ padding: "0 18px 16px", display: "grid", gap: 14 }}>
+            <div style={{ fontSize: 12, color: "var(--app-text-muted)" }}>
+              {billingActionText(selectedOrder)} · {statusText(selectedOrder.status)}
+            </div>
+
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" }}>
+              <div className="app-stat" style={{ padding: 14 }}>
+                <div>
+                  <small>订单</small>
+                  <b style={{ fontSize: 13, wordBreak: "break-all", display: "block", marginTop: 4 }}>{selectedOrder.outTradeNo}</b>
+                  <small style={{ display: "block", marginTop: 2, wordBreak: "break-all" }}>{selectedOrder.id}</small>
+                </div>
+              </div>
+              <div className="app-stat" style={{ padding: 14 }}>
+                <div>
+                  <small>用户</small>
+                  <b style={{ fontSize: 13, display: "block", marginTop: 4 }}>{selectedOrder.username || "-"}</b>
+                  <small style={{ display: "block", marginTop: 2, wordBreak: "break-all" }}>{selectedOrder.userEmail || selectedOrder.userId || "-"}</small>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr 1fr" }}>
+              <div className="app-stat" style={{ padding: 14 }}>
+                <div>
+                  <small>套餐原价</small>
+                  <b style={{ fontSize: 16 }}>{moneyText(selectedOrder.originalAmountCents || selectedOrder.amountCents, selectedOrder.currency)}</b>
+                </div>
+              </div>
+              <div className="app-stat" style={{ padding: 14 }}>
+                <div>
+                  <small>升级抵扣</small>
+                  <b style={{ fontSize: 16, color: "#6ee7b7" }}>{moneyText(selectedOrder.upgradeCreditCents || 0, selectedOrder.currency)}</b>
+                </div>
+              </div>
+              <div className="app-stat" style={{ padding: 14 }}>
+                <div>
+                  <small>实付金额</small>
+                  <b style={{ fontSize: 16, color: "var(--app-accent-cyan)" }}>{moneyText(selectedOrder.amountCents, selectedOrder.currency)}</b>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr 1fr" }}>
+              <div className="app-stat" style={{ padding: 14 }}>
+                <div>
+                  <small>点数</small>
+                  <b style={{ fontSize: 13 }}>{numberText(selectedOrder.credits)}{selectedOrder.packageType === "subscription" ? " 订阅点" : ""}</b>
+                </div>
+              </div>
+              <div className="app-stat" style={{ padding: 14 }}>
+                <div>
+                  <small>订阅天数</small>
+                  <b style={{ fontSize: 13 }}>{selectedOrder.packageType === "subscription" ? `${numberText(selectedOrder.durationDays || 0)} 天` : "-"}</b>
+                </div>
+              </div>
+              <div className="app-stat" style={{ padding: 14 }}>
+                <div>
+                  <small>状态</small>
+                  <b style={{ display: "block", marginTop: 4 }}>
+                    <span className={`app-badge ${statusBadgeClass(selectedOrder.status)}`}>{statusText(selectedOrder.status)}</span>
+                  </b>
+                </div>
+              </div>
+            </div>
+
+            <div style={{
+              padding: 14,
+              borderRadius: 10,
+              border: "1px solid var(--app-border)",
+              background: "var(--app-bg-surface)",
+              display: "grid",
+              gap: 6,
+              gridTemplateColumns: "1fr 1fr",
+              fontSize: 11.5,
+              color: "var(--app-text-muted)",
+            }}>
+              <div>创建时间：{formatDateTime(selectedOrder.createdAt)}</div>
+              <div>过期时间：{formatDateTime(selectedOrder.expiresAt)}</div>
+              <div>支付时间：{formatDateTime(selectedOrder.paidAt)}</div>
+              <div>到账时间：{formatDateTime(selectedOrder.completedAt)}</div>
+              <div>退款时间：{formatDateTime(selectedOrder.refundedAt)}</div>
+              <div>渠道流水：{selectedOrder.providerTradeNo || "-"}</div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--app-text-primary)", marginBottom: 8 }}>审计日志</div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {auditLoading ? (
+                  <div style={{ padding: "12px 14px", borderRadius: 10, border: "1px solid var(--app-border)", background: "var(--app-bg-surface)", fontSize: 13, color: "var(--app-text-muted)" }}>
+                    <LoaderCircle className="size-4 animate-spin" style={{ display: "inline-block", verticalAlign: "middle", marginRight: 6 }} />
+                    读取中
+                  </div>
+                ) : auditLogs.length === 0 ? (
+                  <div style={{ padding: "12px 14px", borderRadius: 10, border: "1px solid var(--app-border)", background: "var(--app-bg-surface)", fontSize: 13, color: "var(--app-text-muted)" }}>暂无日志</div>
+                ) : auditLogs.map((item) => (
+                  <div key={item.id} style={{ padding: "10px 14px", borderRadius: 10, border: "1px solid var(--app-border)", background: "var(--app-bg-surface)", display: "grid", gap: 4, fontSize: 13 }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <span style={{ fontWeight: 500, color: "var(--app-text-primary)" }}>{auditActionText(item.action)}</span>
+                      <span style={{ fontSize: 11, color: "var(--app-text-muted)" }}>{formatDateTime(item.createdAt)}</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--app-text-muted)" }}>操作人：{item.operator || "-"}</div>
+                    {detailText(item.detail) ? (
+                      <div style={{ fontSize: 11, color: "var(--app-text-muted)", wordBreak: "break-all" }}>{detailText(item.detail)}</div>
+                    ) : null}
+                  </div>
                 ))}
               </div>
             </div>
-            <label className={cn(adminSubPanelClass, "flex items-center justify-between gap-3 px-4 py-3 text-sm text-[var(--app-text-secondary)] md:col-span-2")}>
-              <span>启用渠道</span>
-              <Checkbox checked={providerForm.enabled} onCheckedChange={(checked) => setProviderForm((current) => ({ ...current, enabled: Boolean(checked) }))} />
-            </label>
           </div>
+        ) : null}
+      </AppModal>
 
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setProviderDialogOpen(false)} disabled={savingProvider}>取消</Button>
-            <Button type="button" onClick={() => void saveProvider()} disabled={savingProvider}>
-              {savingProvider ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}
-              保存
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={Boolean(selectedOrder)} onOpenChange={(open) => {
-        if (!open) {
-          setSelectedOrder(null);
-          setAuditLogs([]);
+      <AppModal
+        open={!!confirmAction}
+        onClose={() => setConfirmAction(null)}
+        title={confirmAction ? actionText(confirmAction.action) : "确认操作"}
+        footer={
+          <>
+            <button className="app-btn" type="button" onClick={() => setConfirmAction(null)}>取消</button>
+            <button
+              className="app-btn-primary"
+              type="button"
+              onClick={() => confirmAction && void actOrder(confirmAction.order, confirmAction.action)}
+              disabled={!confirmAction || actingOrderId === confirmAction?.order.id}
+              style={confirmAction?.action === "refund" ? { background: "linear-gradient(135deg, #ef4444, #dc2626)" } : undefined}
+            >
+              {confirmAction && actingOrderId === confirmAction.order.id ? <LoaderCircle className="size-4 animate-spin" /> : null}
+              确认
+            </button>
+          </>
         }
-      }}>
-        <DialogContent className="w-[min(94vw,860px)] max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>订单详情</DialogTitle>
-            <DialogDescription>{selectedOrder ? `${billingActionText(selectedOrder)} · ${statusText(selectedOrder.status)}` : ""}</DialogDescription>
-          </DialogHeader>
-
-          {selectedOrder ? (
-            <div className="grid gap-4">
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className={cn(adminSubPanelClass, "p-4")}>
-                  <div className="text-xs text-[var(--app-text-muted)]">订单</div>
-                  <div className="mt-2 break-all text-sm font-semibold text-[var(--app-text-primary)]">{selectedOrder.outTradeNo}</div>
-                  <div className="mt-1 break-all text-xs text-[var(--app-text-muted)]">{selectedOrder.id}</div>
-                </div>
-                <div className={cn(adminSubPanelClass, "p-4")}>
-                  <div className="text-xs text-[var(--app-text-muted)]">用户</div>
-                  <div className="mt-2 text-sm font-semibold text-[var(--app-text-primary)]">{selectedOrder.username || "-"}</div>
-                  <div className="mt-1 break-all text-xs text-[var(--app-text-muted)]">{selectedOrder.userEmail || selectedOrder.userId || "-"}</div>
-                </div>
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-3">
-                <div className={cn(adminSubPanelClass, "p-4")}>
-                  <div className="text-xs text-[var(--app-text-muted)]">套餐原价</div>
-                  <div className="mt-2 text-lg font-semibold text-[var(--app-text-primary)]">{moneyText(selectedOrder.originalAmountCents || selectedOrder.amountCents, selectedOrder.currency)}</div>
-                </div>
-                <div className={cn(adminSubPanelClass, "p-4")}>
-                  <div className="text-xs text-[var(--app-text-muted)]">升级抵扣</div>
-                  <div className="mt-2 text-lg font-semibold text-emerald-500 dark:text-emerald-300">{moneyText(selectedOrder.upgradeCreditCents || 0, selectedOrder.currency)}</div>
-                </div>
-                <div className={cn(adminSubPanelClass, "p-4")}>
-                  <div className="text-xs text-[var(--app-text-muted)]">实付金额</div>
-                  <div className="mt-2 text-lg font-semibold text-[var(--app-accent-cyan)]">{moneyText(selectedOrder.amountCents, selectedOrder.currency)}</div>
-                </div>
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-3">
-                <div className={cn(adminSubPanelClass, "p-4")}>
-                  <div className="text-xs text-[var(--app-text-muted)]">点数</div>
-                  <div className="mt-2 text-sm font-semibold text-[var(--app-text-primary)]">{numberText(selectedOrder.credits)}{selectedOrder.packageType === "subscription" ? " 订阅点" : ""}</div>
-                </div>
-                <div className={cn(adminSubPanelClass, "p-4")}>
-                  <div className="text-xs text-[var(--app-text-muted)]">订阅天数</div>
-                  <div className="mt-2 text-sm font-semibold text-[var(--app-text-primary)]">{selectedOrder.packageType === "subscription" ? `${numberText(selectedOrder.durationDays || 0)} 天` : "-"}</div>
-                </div>
-                <div className={cn(adminSubPanelClass, "p-4")}>
-                  <div className="text-xs text-[var(--app-text-muted)]">状态</div>
-                  <div className="mt-2"><Badge variant={statusVariant(selectedOrder.status)}>{statusText(selectedOrder.status)}</Badge></div>
-                </div>
-              </div>
-
-              <div className={cn(adminSubPanelClass, "grid gap-2 p-4 text-xs text-[var(--app-text-muted)] md:grid-cols-2")}>
-                <div>创建时间：{formatDateTime(selectedOrder.createdAt)}</div>
-                <div>过期时间：{formatDateTime(selectedOrder.expiresAt)}</div>
-                <div>支付时间：{formatDateTime(selectedOrder.paidAt)}</div>
-                <div>到账时间：{formatDateTime(selectedOrder.completedAt)}</div>
-                <div>退款时间：{formatDateTime(selectedOrder.refundedAt)}</div>
-                <div>渠道流水：{selectedOrder.providerTradeNo || "-"}</div>
-              </div>
-
-              <div>
-                <div className="mb-2 text-sm font-semibold text-[var(--app-text-primary)]">审计日志</div>
-                <div className="grid gap-2">
-                  {auditLoading ? (
-                    <div className={cn(adminSubPanelClass, "px-4 py-3 text-sm text-[var(--app-text-muted)]")}><LoaderCircle className="mr-2 inline size-4 animate-spin" />读取中</div>
-                  ) : auditLogs.length === 0 ? (
-                    <div className={cn(adminSubPanelClass, "px-4 py-3 text-sm text-[var(--app-text-muted)]")}>暂无日志</div>
-                  ) : auditLogs.map((item) => (
-                    <div key={item.id} className={cn(adminSubPanelClass, "grid gap-1 px-4 py-3 text-sm")}>
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-medium text-[var(--app-text-primary)]">{auditActionText(item.action)}</span>
-                        <span className="text-xs text-[var(--app-text-muted)]">{formatDateTime(item.createdAt)}</span>
-                      </div>
-                      <div className="text-xs text-[var(--app-text-muted)]">操作人：{item.operator || "-"}</div>
-                      {detailText(item.detail) ? (
-                        <div className="break-all text-xs text-[var(--app-text-muted)]">{detailText(item.detail)}</div>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : null}
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={Boolean(confirmAction)} onOpenChange={(open) => {
-        if (!open) setConfirmAction(null);
-      }}>
-        <DialogContent className="w-[min(92vw,520px)]">
-          <DialogHeader>
-            <DialogTitle>{confirmAction ? actionText(confirmAction.action) : "确认操作"}</DialogTitle>
-            <DialogDescription>
-              {confirmAction ? `订单 ${confirmAction.order.outTradeNo}` : ""}
-            </DialogDescription>
-          </DialogHeader>
-          {confirmAction ? (
-            <div className={cn(adminSubPanelClass, "grid gap-2 p-4 text-sm text-[var(--app-text-secondary)]")}>
+      >
+        {confirmAction ? (
+          <div style={{ padding: "12px 18px 18px", display: "grid", gap: 8, fontSize: 13, color: "var(--app-text-secondary)" }}>
+            <div style={{ fontSize: 12, color: "var(--app-text-muted)" }}>订单 {confirmAction.order.outTradeNo}</div>
+            <div style={{
+              padding: 14,
+              borderRadius: 10,
+              border: "1px solid var(--app-border)",
+              background: "var(--app-bg-surface)",
+              display: "grid",
+              gap: 6,
+            }}>
               <div>类型：{billingActionText(confirmAction.order)}</div>
               <div>用户：{confirmAction.order.username || confirmAction.order.userEmail || "-"}</div>
               <div>实付金额：{moneyText(confirmAction.order.amountCents, confirmAction.order.currency)}</div>
               {confirmAction.order.billingAction === "upgrade" && confirmAction.action === "complete" ? (
-                <div className="text-amber-400">确认后会结束当前订阅，并从现在开始新订阅周期。</div>
+                <div style={{ color: "#fcd34d" }}>确认后会结束当前订阅，并从现在开始新订阅周期。</div>
               ) : null}
               {confirmAction.action === "refund" ? (
-                <div className="text-amber-400">退款会回滚对应余额或订阅状态；升级订单的复杂回滚规则后续单独处理。</div>
+                <div style={{ color: "#fcd34d" }}>退款会回滚对应余额或订阅状态；升级订单的复杂回滚规则后续单独处理。</div>
               ) : null}
             </div>
-          ) : null}
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setConfirmAction(null)}>取消</Button>
-            <Button type="button" onClick={() => confirmAction && void actOrder(confirmAction.order, confirmAction.action)} disabled={!confirmAction || actingOrderId === confirmAction.order.id}>
-              {confirmAction && actingOrderId === confirmAction.order.id ? <LoaderCircle className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-              确认
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </div>
+        ) : null}
+      </AppModal>
+
+      <AppModal
+        open={!!deletePackageTarget}
+        onClose={() => setDeletePackageTarget(null)}
+        title="删除套餐"
+        footer={
+          <>
+            <button className="app-btn" type="button" onClick={() => setDeletePackageTarget(null)}>取消</button>
+            <button
+              className="app-btn-primary"
+              type="button"
+              onClick={() => void removePackage()}
+              style={{ background: "linear-gradient(135deg, #ef4444, #dc2626)" }}
+              disabled={!!deletingPackageId}
+            >
+              确认删除
+            </button>
+          </>
+        }
+      >
+        <div style={{ padding: "16px 18px", fontSize: 13.5, color: "var(--app-text-secondary)", lineHeight: 1.7 }}>
+          确认删除套餐 <b style={{ color: "var(--app-text-primary)" }}>「{deletePackageTarget?.name}」</b> 吗？已有订单的套餐不能删除，可改为停用。
+        </div>
+      </AppModal>
+
+      <AppModal
+        open={!!deleteProviderTarget}
+        onClose={() => setDeleteProviderTarget(null)}
+        title="删除支付渠道"
+        footer={
+          <>
+            <button className="app-btn" type="button" onClick={() => setDeleteProviderTarget(null)}>取消</button>
+            <button
+              className="app-btn-primary"
+              type="button"
+              onClick={() => void removeProvider()}
+              style={{ background: "linear-gradient(135deg, #ef4444, #dc2626)" }}
+              disabled={!!deletingProviderId}
+            >
+              确认删除
+            </button>
+          </>
+        }
+      >
+        <div style={{ padding: "16px 18px", fontSize: 13.5, color: "var(--app-text-secondary)", lineHeight: 1.7 }}>
+          确认删除支付渠道 <b style={{ color: "var(--app-text-primary)" }}>「{deleteProviderTarget?.name}」</b> 吗？待处理订单会阻止删除。
+        </div>
+      </AppModal>
     </AdminPage>
   );
 }

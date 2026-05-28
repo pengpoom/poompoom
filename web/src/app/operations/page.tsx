@@ -24,19 +24,17 @@ import {
   AdminHeader,
   AdminPage,
   AdminPanel,
-  AdminToolbar,
   AdminSectionTitle,
   AdminStatCard,
 } from "@/components/admin-layout";
 import {
-  adminInputPillClass,
   adminSubPanelClass,
   adminTableBodyClass,
   adminTableClass,
   adminTableHeadClass,
   adminTableRowClass,
 } from "@/components/admin-styles";
-import { TimeRangeFilter } from "@/components/time-range-filter";
+import { AppSelect, AppTimeSeg } from "@/components/app-controls";
 import { timeRangeQuery, type TimeRangeValue } from "@/components/time-range-utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -326,8 +324,8 @@ function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-const jobFilterSelectClass = cn(adminInputPillClass, "w-full px-4 text-sm outline-none");
 const jobTableColumnCount = 10;
+
 
 export default function OperationsPage() {
   const [runtime, setRuntime] = useState<RuntimeStatusResponse | null>(null);
@@ -339,7 +337,7 @@ export default function OperationsPage() {
   const [jobStatus, setJobStatus] = useState("");
   const [jobUserId, setJobUserId] = useState("");
   const [jobPlatform, setJobPlatform] = useState("");
-  const [jobTimeRange, setJobTimeRange] = useState<TimeRangeValue>({ preset: "last24h", from: "", to: "" });
+  const [jobTimeRange, setJobTimeRange] = useState<TimeRangeValue>({ preset: "last7", from: "", to: "" });
   const [loading, setLoading] = useState(true);
   const [jobsLoading, setJobsLoading] = useState(true);
   const [maintenance, setMaintenance] = useState<MaintenanceStatus | null>(null);
@@ -447,26 +445,29 @@ export default function OperationsPage() {
           description="查看准入并发、上游配置健康摘要、tracker 成功率和最近错误。"
           actions={
             <>
-              <Button
+              <button
+                className={maintenance?.enabled ? "app-btn-primary" : "app-btn"}
                 type="button"
-                variant={maintenance?.enabled ? "secondary" : "outline"}
                 onClick={() => void handleToggleMaintenance()}
                 disabled={loading || maintenanceSaving}
+                style={maintenance?.enabled ? { background: "linear-gradient(135deg, #f59e0b, #d97706)" } : undefined}
               >
                 {maintenanceSaving ? <LoaderCircle className="size-4 animate-spin" /> : <AlertTriangle className="size-4" />}
                 {maintenance?.enabled ? "关闭维护模式" : "开启维护模式"}
-              </Button>
-              <Button type="button" variant="outline" onClick={() => void loadStatus()} disabled={loading}>
+              </button>
+              <button className="app-btn" type="button" onClick={() => void loadStatus()} disabled={loading}>
                 {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
                 刷新
-              </Button>
+              </button>
             </>
           }
         >
-            <div className="flex items-center gap-2">
-              <Badge variant={statusVariant(runtime, providers, tracker)}>{statusText(runtime, providers, tracker)}</Badge>
-              {maintenance?.enabled ? <Badge variant="warning">维护模式</Badge> : null}
-            </div>
+          {(() => {
+            const variant = statusVariant(runtime, providers, tracker);
+            const cls = variant === "success" ? "ok" : variant === "danger" ? "fail" : "warn";
+            return <span className={`app-badge ${cls}`}>{statusText(runtime, providers, tracker)}</span>;
+          })()}
+          {maintenance?.enabled ? <span className="app-badge warn">维护模式</span> : null}
         </AdminHeader>
 
         {maintenance?.enabled ? (
@@ -715,46 +716,49 @@ export default function OperationsPage() {
         </section>
 
         <AdminPanel className="order-3 overflow-visible">
-          <SectionTitle
-            title="Job 明细"
-            action={
-              <Button type="button" variant="outline" size="sm" onClick={() => void loadJobs(jobsPage.page)} disabled={jobsLoading}>
+          <SectionTitle title="Job 明细" />
+          <div className="space-y-4 p-4">
+            <div className="app-toolbar">
+              <AppTimeSeg value={jobTimeRange} onChange={setJobTimeRange} />
+              <AppSelect
+                value={jobStatus}
+                onChange={setJobStatus}
+                options={[
+                  { value: "", label: "全部状态" },
+                  { value: "queued", label: "排队中" },
+                  { value: "running", label: "运行中" },
+                  { value: "cancel_requested", label: "取消中" },
+                  { value: "cancelled", label: "已取消" },
+                  { value: "succeeded", label: "成功" },
+                  { value: "failed", label: "失败" },
+                ]}
+                placeholder="全部状态"
+              />
+              <AppSelect
+                value={jobUserId}
+                onChange={setJobUserId}
+                options={[
+                  { value: "", label: "全部用户" },
+                  ...users.map((user) => ({ value: user.id, label: user.username })),
+                ]}
+                placeholder="全部用户"
+              />
+              <AppSelect
+                value={jobPlatform}
+                onChange={setJobPlatform}
+                options={[
+                  { value: "", label: "全部平台" },
+                  { value: "gpt-image", label: "gpt-image" },
+                  { value: "gemini-banana", label: "gemini-banana" },
+                ]}
+                placeholder="全部平台"
+              />
+              <span className="spacer" />
+              <button className="app-btn" type="button" onClick={() => void loadJobs(jobsPage.page)} disabled={jobsLoading}>
                 {jobsLoading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
                 刷新
-              </Button>
-            }
-          />
-          <div className="space-y-4 p-4">
-            <AdminToolbar className="grid gap-3 lg:grid-cols-[minmax(160px,1fr)_minmax(160px,1fr)_minmax(160px,1fr)_minmax(220px,1.2fr)]">
-              <select name="job_status" value={jobStatus} onChange={(event) => setJobStatus(event.target.value)} className={jobFilterSelectClass}>
-                <option value="">全部状态</option>
-                <option value="queued">排队中</option>
-                <option value="running">运行中</option>
-                <option value="cancel_requested">取消中</option>
-                <option value="cancelled">已取消</option>
-                <option value="succeeded">成功</option>
-                <option value="failed">失败</option>
-              </select>
-              <select name="job_user_id" value={jobUserId} onChange={(event) => setJobUserId(event.target.value)} className={jobFilterSelectClass}>
-                <option value="">全部用户</option>
-                {users.map((user) => (
-                  <option key={user.id} value={user.id}>
-                    {user.username}
-                  </option>
-                ))}
-              </select>
-              <select name="job_platform" value={jobPlatform} onChange={(event) => setJobPlatform(event.target.value)} className={jobFilterSelectClass}>
-                <option value="">全部平台</option>
-                <option value="gpt-image">gpt-image</option>
-                <option value="gemini-banana">gemini-banana</option>
-              </select>
-              <TimeRangeFilter
-                value={jobTimeRange}
-                onApply={setJobTimeRange}
-                panelAlign="end"
-                panelClassName="w-[min(calc(100vw-2rem),460px)]"
-              />
-            </AdminToolbar>
+              </button>
+            </div>
 
             <div className="overflow-x-auto rounded-[var(--app-radius-lg)] border border-[var(--app-border)]">
               <table className={cn(adminTableClass, "min-w-[1480px] text-left")}>
@@ -849,29 +853,11 @@ export default function OperationsPage() {
               </table>
             </div>
 
-            <div className="flex flex-col gap-3 text-sm text-[var(--app-text-muted)] sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                共 {numberText(jobsPage.total)} 条，当前第 {numberText(jobsPage.page)} 页
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={jobsLoading || jobsPage.page <= 1}
-                  onClick={() => void loadJobs(Math.max(1, jobsPage.page - 1))}
-                >
-                  上一页
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={jobsLoading || jobsPage.page * jobsPage.pageSize >= jobsPage.total}
-                  onClick={() => void loadJobs(jobsPage.page + 1)}
-                >
-                  下一页
-                </Button>
+            <div className="app-pager">
+              <span className="info">共 {numberText(jobsPage.total)} 条 · 每页 {jobsPage.pageSize} 条</span>
+              <div className="pages">
+                <button type="button" disabled={jobsLoading || jobsPage.page <= 1} onClick={() => void loadJobs(Math.max(1, jobsPage.page - 1))}>上一页</button>
+                <button type="button" disabled={jobsLoading || jobsPage.page * jobsPage.pageSize >= jobsPage.total} onClick={() => void loadJobs(jobsPage.page + 1)}>下一页</button>
               </div>
             </div>
           </div>

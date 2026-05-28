@@ -1,29 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { ArrowRight, CalendarDays, CheckCircle2, Coins, Copy, CreditCard, Gift, LoaderCircle, RefreshCw, Send, Sparkles, TicketCheck, UsersRound } from "lucide-react";
 import { toast } from "sonner";
 
 import { AdminHeader, AdminPage, AdminPanel } from "@/components/admin-layout";
-import { adminInputClass, adminSubPanelClass, adminTableBodyClass, adminTableClass, adminTableHeadClass, adminTableRowClass } from "@/components/admin-styles";
+import { AppModal, AppSelect } from "@/components/app-controls";
 import { BUSINESS_CREDIT_CHANGED_EVENT } from "@/components/app-shell-nav";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   fetchBusinessAffiliateSummary,
   fetchBusinessCredit,
@@ -43,7 +26,13 @@ import {
   type BusinessSubscription,
   type PaginationMeta,
 } from "@/lib/api";
-import { cn } from "@/lib/utils";
+
+const subPanelStyle: CSSProperties = {
+  padding: "12px 16px",
+  borderRadius: 10,
+  border: "1px solid var(--app-border)",
+  background: "var(--app-bg-surface)",
+};
 
 function numberText(value?: number | null) {
   return Number(value || 0).toLocaleString();
@@ -137,11 +126,6 @@ function orderBillingText(order: BusinessPaymentOrder) {
   if (order.billingAction === "renewal") return "续订";
   if (isSubscriptionPackage(order)) return "开通订阅";
   return "余额充值";
-}
-
-function packageTypeText(type?: string) {
-  if (type === "subscription" || type === "monthly") return "订阅";
-  return "余额";
 }
 
 function subscriptionStatusText(subscription?: BusinessSubscription | null) {
@@ -349,100 +333,109 @@ export default function CreditsPage() {
       <AdminHeader
         title="积分中心"
         description="查看当前余额，使用兑换码，并管理邀请入口。"
+        icon={Coins}
         actions={
-          <Button type="button" variant="outline" onClick={() => void loadData()} disabled={loading || redeeming}>
+          <button className="app-btn" type="button" onClick={() => void loadData()} disabled={loading || redeeming}>
             {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
             刷新
-          </Button>
+          </button>
         }
-      >
-        <div className="mb-3 inline-flex size-12 items-center justify-center rounded-[var(--app-radius-lg)] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)]">
-          <Coins className="size-5" />
-        </div>
-      </AdminHeader>
+      />
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(340px,0.75fr)_minmax(0,1.25fr)]">
-        <div className="grid content-start gap-5">
-          <AdminPanel className="p-5">
-            <div className="flex items-start gap-4">
-              <div className="grid size-12 shrink-0 place-items-center rounded-[16px] bg-[linear-gradient(135deg,rgba(255,214,92,0.28),rgba(40,214,255,0.16))] text-amber-200">
-                <Sparkles className="size-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <h2 className="text-lg font-bold text-[var(--app-text-primary)]">账户概览</h2>
-                    <p className="mt-1 text-sm text-[var(--app-text-muted)]">生成图片会优先使用订阅点数，不足部分再使用普通余额。</p>
-                  </div>
-                  {subscription?.active ? (
-                    <Button type="button" size="sm" onClick={requestRenewSubscription} disabled={!primaryRenewPackage || creatingOrderId === primaryRenewPackage?.id}>
-                      {creatingOrderId === primaryRenewPackage?.id ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
-                      续订
-                    </Button>
-                  ) : null}
-                </div>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                  <div className={cn(adminSubPanelClass, "px-4 py-3")}>
-                    <div className="text-xs text-[var(--app-text-muted)]">普通余额</div>
-                    <div className="mt-2 text-4xl font-semibold text-[var(--app-accent-cyan)]">
-                      {loading ? "-" : numberText(credit?.balance)}
-                    </div>
-                  </div>
-                  <div className={cn(adminSubPanelClass, "px-4 py-3")}>
-                    <div className="text-xs text-[var(--app-text-muted)]">订阅点数</div>
-                    <div className="mt-2 text-3xl font-semibold text-emerald-500 dark:text-emerald-300">
-                      {loading ? "-" : numberText(subscription?.active ? subscription.creditsLeft : 0)}
-                    </div>
-                    <div className="mt-1 text-xs text-[var(--app-text-muted)]">
-                      {subscription?.active ? `当前周期可用 ${numberText(subscription.creditsLeft)} 点` : "未订阅"}
-                    </div>
-                  </div>
-                  <div className={cn(adminSubPanelClass, "px-4 py-3")}>
-                    <div className="text-xs text-[var(--app-text-muted)]">累计消耗</div>
-                    <div className="mt-2 text-2xl font-semibold text-[var(--app-text-primary)]">
-                      {loading ? "-" : numberText(credit?.spent)}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </AdminPanel>
-
-          <AdminPanel className="p-5">
-            <div className="mb-4 flex items-center gap-2">
-              <TicketCheck className="size-4 text-emerald-300" />
-              <h2 className="text-sm font-semibold text-[var(--app-text-primary)]">订阅状态</h2>
-            </div>
-            <div className={cn(adminSubPanelClass, "p-4")}>
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-base font-semibold text-[var(--app-text-primary)]">{subscription?.packageName || "未订阅"}</div>
-                  <div className="mt-1 text-xs text-[var(--app-text-muted)]">
-                    {subscription?.active ? `到期后未用订阅点数自动失效` : "订阅套餐会获得独立订阅点数，不会混入普通余额。"}
-                  </div>
-                </div>
-                <span className={cn("inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold", subscription?.active ? "bg-emerald-400/10 text-emerald-300" : "bg-[var(--app-bg-surface)] text-[var(--app-text-muted)]")}>
-                  <CheckCircle2 className="size-3.5" />
-                  {subscriptionStatusText(subscription)}
+      <div style={{ display: "grid", gap: 18, gridTemplateColumns: "minmax(340px, 0.75fr) minmax(0, 1.25fr)" }}>
+        <div style={{ display: "grid", gap: 18, alignContent: "start" }}>
+          <AdminPanel>
+            <div style={{ padding: 18 }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 14 }}>
+                <span
+                  className="app-stat-ic amber"
+                  style={{ width: 44, height: 44, flexShrink: 0 }}
+                >
+                  <Sparkles className="size-5" />
                 </span>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-start", justifyContent: "space-between" }}>
+                    <div>
+                      <h2 style={{ fontSize: 16, fontWeight: 700, color: "var(--app-text-primary)" }}>账户概览</h2>
+                      <p style={{ marginTop: 4, fontSize: 12.5, color: "var(--app-text-muted)" }}>生成图片会优先使用订阅点数，不足部分再使用普通余额。</p>
+                    </div>
+                    {subscription?.active ? (
+                      <button className="app-btn-primary" type="button" onClick={requestRenewSubscription} disabled={!primaryRenewPackage || creatingOrderId === primaryRenewPackage?.id}>
+                        {creatingOrderId === primaryRenewPackage?.id ? <LoaderCircle className="size-4 animate-spin" /> : <ArrowRight className="size-4" />}
+                        续订
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
               </div>
-              <div className="mt-4 grid gap-2 text-xs leading-5 text-[var(--app-text-muted)]">
-                <div>生效时间：{subscription?.active ? formatDateTime(subscription.startsAt) : "-"}</div>
-                <div>当前周期到期：{subscription?.active ? formatDateTime(subscription.expiresAt) : "-"}</div>
-                <div>订阅至：{subscription?.active ? formatDateTime(subscriptionCoverageExpiresAt(subscription)) : "-"}</div>
-                <div>当前周期点数：剩余 {numberText(subscription?.active ? subscription.creditsLeft : 0)} / {numberText(subscription?.active ? subscription.creditsTotal : 0)}</div>
-                <div>扣点顺序：先用订阅点数，再用普通余额。</div>
+              <div style={{ display: "grid", gap: 10 }}>
+                <div style={subPanelStyle}>
+                  <div style={{ fontSize: 12, color: "var(--app-text-muted)" }}>普通余额</div>
+                  <div style={{ marginTop: 8, fontSize: 32, fontWeight: 600, color: "#22d3ee" }}>
+                    {loading ? "-" : numberText(credit?.balance)}
+                  </div>
+                </div>
+                <div style={subPanelStyle}>
+                  <div style={{ fontSize: 12, color: "var(--app-text-muted)" }}>订阅点数</div>
+                  <div style={{ marginTop: 8, fontSize: 26, fontWeight: 600, color: "#34d399" }}>
+                    {loading ? "-" : numberText(subscription?.active ? subscription.creditsLeft : 0)}
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 11, color: "var(--app-text-muted)" }}>
+                    {subscription?.active ? `当前周期可用 ${numberText(subscription.creditsLeft)} 点` : "未订阅"}
+                  </div>
+                </div>
+                <div style={subPanelStyle}>
+                  <div style={{ fontSize: 12, color: "var(--app-text-muted)" }}>累计消耗</div>
+                  <div style={{ marginTop: 8, fontSize: 22, fontWeight: 600, color: "var(--app-text-primary)" }}>
+                    {loading ? "-" : numberText(credit?.spent)}
+                  </div>
+                </div>
               </div>
             </div>
           </AdminPanel>
 
-          <AdminPanel className="p-5">
-            <div className="mb-4 flex items-center gap-2">
-              <Gift className="size-4 text-[var(--app-accent-cyan)]" />
-              <h2 className="text-sm font-semibold text-[var(--app-text-primary)]">兑换码</h2>
+          <AdminPanel>
+            <div className="panel-title">
+              <h3>
+                <TicketCheck className="size-4" style={{ display: "inline-block", verticalAlign: "-2px", marginRight: 6, color: "#34d399" }} />
+                订阅状态
+              </h3>
             </div>
-            <div className="flex flex-col gap-3">
-              <Input
+            <div style={{ padding: 18 }}>
+              <div style={subPanelStyle}>
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 15, fontWeight: 600, color: "var(--app-text-primary)" }}>{subscription?.packageName || "未订阅"}</div>
+                    <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--app-text-muted)" }}>
+                      {subscription?.active ? `到期后未用订阅点数自动失效` : "订阅套餐会获得独立订阅点数，不会混入普通余额。"}
+                    </div>
+                  </div>
+                  <span className={`app-badge ${subscription?.active ? "ok" : "off"}`}>
+                    <CheckCircle2 className="size-3" />
+                    {subscriptionStatusText(subscription)}
+                  </span>
+                </div>
+                <div style={{ marginTop: 14, display: "grid", gap: 6, fontSize: 11.5, lineHeight: 1.6, color: "var(--app-text-muted)" }}>
+                  <div>生效时间：{subscription?.active ? formatDateTime(subscription.startsAt) : "-"}</div>
+                  <div>当前周期到期：{subscription?.active ? formatDateTime(subscription.expiresAt) : "-"}</div>
+                  <div>订阅至：{subscription?.active ? formatDateTime(subscriptionCoverageExpiresAt(subscription)) : "-"}</div>
+                  <div>当前周期点数：剩余 {numberText(subscription?.active ? subscription.creditsLeft : 0)} / {numberText(subscription?.active ? subscription.creditsTotal : 0)}</div>
+                  <div>扣点顺序：先用订阅点数，再用普通余额。</div>
+                </div>
+              </div>
+            </div>
+          </AdminPanel>
+
+          <AdminPanel>
+            <div className="panel-title">
+              <h3>
+                <Gift className="size-4" style={{ display: "inline-block", verticalAlign: "-2px", marginRight: 6, color: "#22d3ee" }} />
+                兑换码
+              </h3>
+            </div>
+            <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 10 }}>
+              <input
+                className="app-input"
                 value={redeemCode}
                 onChange={(event) => setRedeemCode(event.target.value)}
                 onKeyDown={(event) => {
@@ -451,210 +444,225 @@ export default function CreditsPage() {
                   }
                 }}
                 placeholder="输入兑换码"
-                className={adminInputClass}
               />
-              <Button type="button" onClick={requestRedeem} disabled={redeeming}>
+              <button className="app-btn-primary" type="button" onClick={requestRedeem} disabled={redeeming}>
                 {redeeming ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}
                 兑换
-              </Button>
+              </button>
             </div>
           </AdminPanel>
         </div>
 
-        <div className="grid gap-5">
-          <AdminPanel className="p-5">
-            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-2">
-                <CreditCard className="size-4 text-emerald-300" />
-                <h2 className="text-sm font-semibold text-[var(--app-text-primary)]">充值与订阅</h2>
-              </div>
+        <div style={{ display: "grid", gap: 18, alignContent: "start" }}>
+          <AdminPanel>
+            <div className="panel-title">
+              <h3>
+                <CreditCard className="size-4" style={{ display: "inline-block", verticalAlign: "-2px", marginRight: 6, color: "#34d399" }} />
+                充值与订阅
+              </h3>
               {subscription?.active ? (
-                <span className="rounded-full bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-300">
-                  订阅至 {formatDateTime(subscriptionCoverageExpiresAt(subscription))}
-                </span>
+                <span className="app-badge ok">订阅至 {formatDateTime(subscriptionCoverageExpiresAt(subscription))}</span>
               ) : null}
             </div>
-            {packages.length === 0 ? (
-              <div className={cn(adminSubPanelClass, "px-4 py-3 text-sm text-[var(--app-text-muted)]")}>暂无可用套餐</div>
-            ) : (
-              <div className="grid gap-4">
-                {subscriptionPackages.length > 0 ? (
-                  <div>
-                    <div className="mb-2 text-xs font-medium text-[var(--app-text-muted)]">订阅套餐</div>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      {subscriptionPackages.map((item) => {
-                        const action = packageActionText(item, currentSubscriptionPackage, subscription);
-                        return (
-                          <div key={item.id} className={cn(adminSubPanelClass, "p-4")}>
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="truncate text-sm font-semibold text-[var(--app-text-primary)]">{item.name}</div>
-                                <div className="mt-1 text-xs text-[var(--app-text-muted)]">{item.description || "人工确认后生效"} · {numberText(item.durationDays || 30)} 天</div>
+            <div style={{ padding: 18 }}>
+              {packages.length === 0 ? (
+                <div style={{ ...subPanelStyle, fontSize: 13, color: "var(--app-text-muted)" }}>暂无可用套餐</div>
+              ) : (
+                <div style={{ display: "grid", gap: 14 }}>
+                  {subscriptionPackages.length > 0 ? (
+                    <div>
+                      <div style={{ marginBottom: 8, fontSize: 11.5, fontWeight: 500, color: "var(--app-text-muted)" }}>订阅套餐</div>
+                      <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                        {subscriptionPackages.map((item) => {
+                          const action = packageActionText(item, currentSubscriptionPackage, subscription);
+                          return (
+                            <div key={item.id} style={subPanelStyle}>
+                              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--app-text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
+                                  <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--app-text-muted)" }}>{item.description || "人工确认后生效"} · {numberText(item.durationDays || 30)} 天</div>
+                                </div>
+                                <div style={{ flexShrink: 0, textAlign: "right" }}>
+                                  <div style={{ fontSize: 13, fontWeight: 600, color: "#34d399" }}>{numberText(item.credits)} 订阅点</div>
+                                  <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--app-text-muted)" }}>{moneyText(item.amountCents, item.currency)}</div>
+                                </div>
                               </div>
-                              <div className="shrink-0 text-right">
-                                <div className="text-sm font-semibold text-emerald-500 dark:text-emerald-300">{numberText(item.credits)} 订阅点</div>
-                                <div className="mt-1 text-xs text-[var(--app-text-muted)]">{moneyText(item.amountCents, item.currency)}</div>
+                              <div style={{ marginTop: 10, minHeight: 18, fontSize: 11.5, color: "var(--app-text-muted)" }}>{action.hint}</div>
+                              <button
+                                className="app-btn-primary"
+                                type="button"
+                                style={{ marginTop: 10, width: "100%", justifyContent: "center" }}
+                                onClick={() => requestCreateOrder(item, action.label)}
+                                disabled={action.disabled || creatingOrderId === item.id}
+                              >
+                                {creatingOrderId === item.id ? <LoaderCircle className="size-4 animate-spin" /> : <CreditCard className="size-4" />}
+                                {action.label}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                  {balancePackages.length > 0 ? (
+                    <div>
+                      <div style={{ marginBottom: 8, fontSize: 11.5, fontWeight: 500, color: "var(--app-text-muted)" }}>余额充值</div>
+                      <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                        {balancePackages.map((item) => (
+                          <div key={item.id} style={subPanelStyle}>
+                            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontSize: 13.5, fontWeight: 600, color: "var(--app-text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
+                                <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--app-text-muted)" }}>{item.description || "人工确认后到账"}</div>
+                              </div>
+                              <div style={{ flexShrink: 0, textAlign: "right" }}>
+                                <div style={{ fontSize: 13, fontWeight: 600, color: "#22d3ee" }}>+{numberText(item.credits)}</div>
+                                <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--app-text-muted)" }}>{moneyText(item.amountCents, item.currency)}</div>
                               </div>
                             </div>
-                            <div className="mt-3 min-h-5 text-xs text-[var(--app-text-muted)]">{action.hint}</div>
-                            <Button type="button" className="mt-3 w-full" onClick={() => requestCreateOrder(item, action.label)} disabled={action.disabled || creatingOrderId === item.id}>
+                            <button
+                              className="app-btn-primary"
+                              type="button"
+                              style={{ marginTop: 12, width: "100%", justifyContent: "center" }}
+                              onClick={() => requestCreateOrder(item)}
+                              disabled={creatingOrderId === item.id}
+                            >
                               {creatingOrderId === item.id ? <LoaderCircle className="size-4 animate-spin" /> : <CreditCard className="size-4" />}
-                              {action.label}
-                            </Button>
+                              创建订单
+                            </button>
                           </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ) : null}
-                {balancePackages.length > 0 ? (
-                  <div>
-                    <div className="mb-2 text-xs font-medium text-[var(--app-text-muted)]">余额充值</div>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      {balancePackages.map((item) => (
-                        <div key={item.id} className={cn(adminSubPanelClass, "p-4")}>
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="truncate text-sm font-semibold text-[var(--app-text-primary)]">{item.name}</div>
-                              <div className="mt-1 text-xs text-[var(--app-text-muted)]">{item.description || "人工确认后到账"}</div>
-                            </div>
-                            <div className="shrink-0 text-right">
-                              <div className="text-sm font-semibold text-[var(--app-accent-cyan)]">+{numberText(item.credits)}</div>
-                              <div className="mt-1 text-xs text-[var(--app-text-muted)]">{moneyText(item.amountCents, item.currency)}</div>
-                            </div>
-                          </div>
-                          <Button type="button" className="mt-4 w-full" onClick={() => requestCreateOrder(item)} disabled={creatingOrderId === item.id}>
-                            {creatingOrderId === item.id ? <LoaderCircle className="size-4 animate-spin" /> : <CreditCard className="size-4" />}
-                            创建订单
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            )}
-            <div className="mt-4 border-t border-[var(--app-border)] pt-4">
-              <div className="mb-3 text-xs font-medium text-[var(--app-text-muted)]">最近订单</div>
-              <div className="grid gap-2">
-                {orders.length === 0 ? (
-                  <div className={cn(adminSubPanelClass, "px-4 py-3 text-sm text-[var(--app-text-muted)]")}>暂无充值订单</div>
-                ) : (
-                  orders.map((item) => (
-                    <div key={item.id} className={cn(adminSubPanelClass, "flex items-center justify-between gap-3 px-4 py-3")}>
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium text-[var(--app-text-primary)]">{item.outTradeNo}</div>
-                        <div className="mt-1 text-xs text-[var(--app-text-muted)]">{formatDateTime(item.createdAt)}</div>
-                        <div className="mt-1 text-xs text-[var(--app-text-muted)]">{orderBillingText(item)}</div>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <div className="text-sm font-semibold text-[var(--app-text-primary)]">
-                          {isSubscriptionPackage(item) ? numberText(item.credits) : `+${numberText(item.credits)}`}
-                        </div>
-                        <div className="mt-1 text-xs text-[var(--app-text-muted)]">{moneyText(item.amountCents, item.currency)} · {orderStatusText(item.status)}</div>
+                        ))}
                       </div>
                     </div>
-                  ))
-                )}
-              </div>
-            </div>
-          </AdminPanel>
-
-          {affiliate?.enabled ? (
-            <AdminPanel className="p-5">
-              <div className="mb-4 flex items-center gap-2">
-                <UsersRound className="size-4 text-emerald-300" />
-                <h2 className="text-sm font-semibold text-[var(--app-text-primary)]">邀请返利</h2>
-              </div>
-              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-                <div className={cn(adminSubPanelClass, "px-4 py-3")}>
-                  <div className="text-xs text-[var(--app-text-muted)]">我的邀请码</div>
-                  <div className="mt-1 break-all text-lg font-semibold text-[var(--app-text-primary)]">
-                    {affiliate.profile?.codePreview || "-"}
-                  </div>
-                  <div className="mt-2 text-xs text-[var(--app-text-muted)]">
-                    已邀请 {numberText(affiliate.referralCount)} 人。
-                    {affiliate.registrationRewardEnabled && affiliate.registrationRewardCredits > 0
-                      ? `每成功邀请 1 人注册奖励 ${numberText(affiliate.registrationRewardCredits)} 点。`
-                      : "当前未开启邀请注册奖励。"}
-                  </div>
+                  ) : null}
                 </div>
-                <Button type="button" variant="outline" onClick={() => void copyAffiliateLink()}>
-                  <Copy className="size-4" />
-                  复制链接
-                </Button>
-              </div>
-              <div className="mt-4 border-t border-[var(--app-border)] pt-4">
-                <div className="mb-3 text-xs font-medium text-[var(--app-text-muted)]">最近邀请</div>
-                <div className="grid gap-2">
-                  {(affiliate.recentReferrals || []).length === 0 ? (
-                    <div className={cn(adminSubPanelClass, "px-4 py-3 text-sm text-[var(--app-text-muted)]")}>暂无邀请记录</div>
+              )}
+              <div style={{ marginTop: 16, borderTop: "1px solid var(--app-border)", paddingTop: 14 }}>
+                <div style={{ marginBottom: 10, fontSize: 11.5, fontWeight: 500, color: "var(--app-text-muted)" }}>最近订单</div>
+                <div style={{ display: "grid", gap: 8 }}>
+                  {orders.length === 0 ? (
+                    <div style={{ ...subPanelStyle, fontSize: 13, color: "var(--app-text-muted)" }}>暂无充值订单</div>
                   ) : (
-                    (affiliate.recentReferrals || []).map((item) => (
-                      <div key={item.id} className={cn(adminSubPanelClass, "flex items-center justify-between gap-3 px-4 py-3")}>
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium text-[var(--app-text-primary)]">
-                            {maskedUserText(item.referredUsername, item.referredEmail, item.referredUid)}
-                          </div>
-                          <div className="mt-1 text-xs text-[var(--app-text-muted)]">{formatDateTime(item.createdAt)}</div>
+                    orders.map((item) => (
+                      <div key={item.id} style={{ ...subPanelStyle, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 500, color: "var(--app-text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.outTradeNo}</div>
+                          <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--app-text-muted)" }}>{formatDateTime(item.createdAt)}</div>
+                          <div style={{ marginTop: 2, fontSize: 11.5, color: "var(--app-text-muted)" }}>{orderBillingText(item)}</div>
                         </div>
-                        <div className={cn("shrink-0 text-sm font-semibold", item.rewardCredits > 0 ? "text-emerald-600 dark:text-emerald-300" : "text-[var(--app-text-muted)]")}>
-                          {item.rewardCredits > 0 ? `+${numberText(item.rewardCredits)}` : "未奖励"}
+                        <div style={{ flexShrink: 0, textAlign: "right" }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--app-text-primary)" }}>
+                            {isSubscriptionPackage(item) ? numberText(item.credits) : `+${numberText(item.credits)}`}
+                          </div>
+                          <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--app-text-muted)" }}>{moneyText(item.amountCents, item.currency)} · {orderStatusText(item.status)}</div>
                         </div>
                       </div>
                     ))
                   )}
                 </div>
               </div>
+            </div>
+          </AdminPanel>
+
+          {affiliate?.enabled ? (
+            <AdminPanel>
+              <div className="panel-title">
+                <h3>
+                  <UsersRound className="size-4" style={{ display: "inline-block", verticalAlign: "-2px", marginRight: 6, color: "#34d399" }} />
+                  邀请返利
+                </h3>
+              </div>
+              <div style={{ padding: 18 }}>
+                <div style={{ display: "grid", gap: 10, gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "center" }}>
+                  <div style={subPanelStyle}>
+                    <div style={{ fontSize: 11.5, color: "var(--app-text-muted)" }}>我的邀请码</div>
+                    <div style={{ marginTop: 4, fontSize: 17, fontWeight: 600, color: "var(--app-text-primary)", wordBreak: "break-all" }}>
+                      {affiliate.profile?.codePreview || "-"}
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 11.5, color: "var(--app-text-muted)" }}>
+                      已邀请 {numberText(affiliate.referralCount)} 人。
+                      {affiliate.registrationRewardEnabled && affiliate.registrationRewardCredits > 0
+                        ? `每成功邀请 1 人注册奖励 ${numberText(affiliate.registrationRewardCredits)} 点。`
+                        : "当前未开启邀请注册奖励。"}
+                    </div>
+                  </div>
+                  <button className="app-btn" type="button" onClick={() => void copyAffiliateLink()}>
+                    <Copy className="size-4" />
+                    复制链接
+                  </button>
+                </div>
+                <div style={{ marginTop: 16, borderTop: "1px solid var(--app-border)", paddingTop: 14 }}>
+                  <div style={{ marginBottom: 10, fontSize: 11.5, fontWeight: 500, color: "var(--app-text-muted)" }}>最近邀请</div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {(affiliate.recentReferrals || []).length === 0 ? (
+                      <div style={{ ...subPanelStyle, fontSize: 13, color: "var(--app-text-muted)" }}>暂无邀请记录</div>
+                    ) : (
+                      (affiliate.recentReferrals || []).map((item) => (
+                        <div key={item.id} style={{ ...subPanelStyle, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 500, color: "var(--app-text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {maskedUserText(item.referredUsername, item.referredEmail, item.referredUid)}
+                            </div>
+                            <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--app-text-muted)" }}>{formatDateTime(item.createdAt)}</div>
+                          </div>
+                          <div style={{ flexShrink: 0, fontSize: 13, fontWeight: 600, color: item.rewardCredits > 0 ? "#34d399" : "var(--app-text-muted)" }}>
+                            {item.rewardCredits > 0 ? `+${numberText(item.rewardCredits)}` : "未奖励"}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
             </AdminPanel>
           ) : null}
 
-          <AdminPanel className="p-5">
-            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-2">
-                <CalendarDays className="size-4 text-[var(--app-text-muted)]" />
-                <h2 className="text-sm font-semibold text-[var(--app-text-primary)]">积分明细</h2>
-              </div>
-              <div className="flex items-center gap-2 text-xs text-[var(--app-text-muted)]">
+          <AdminPanel>
+            <div className="panel-title">
+              <h3>
+                <CalendarDays className="size-4" style={{ display: "inline-block", verticalAlign: "-2px", marginRight: 6, color: "var(--app-text-muted)" }} />
+                积分明细
+              </h3>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--app-text-muted)" }}>
                 <span>{paginationText(ledgerPage)}</span>
-                <Button type="button" variant="outline" size="sm" disabled={loading || ledgerPage.page <= 1} onClick={() => void loadData(ledgerPage.page - 1)}>上一页</Button>
-                <Button type="button" variant="outline" size="sm" disabled={loading || ledgerPage.page * ledgerPage.pageSize >= ledgerPage.total} onClick={() => void loadData(ledgerPage.page + 1)}>下一页</Button>
+                <button className="app-btn" type="button" style={{ height: 28, padding: "0 10px", fontSize: 11.5 }} disabled={loading || ledgerPage.page <= 1} onClick={() => void loadData(ledgerPage.page - 1)}>上一页</button>
+                <button className="app-btn" type="button" style={{ height: 28, padding: "0 10px", fontSize: 11.5 }} disabled={loading || ledgerPage.page * ledgerPage.pageSize >= ledgerPage.total} onClick={() => void loadData(ledgerPage.page + 1)}>下一页</button>
               </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className={adminTableClass}>
-                <thead className={adminTableHeadClass}>
+            <div className="app-table-wrap">
+              <table className="app-table">
+                <thead>
                   <tr>
-                    <th className="px-4 py-3">时间</th>
-                    <th className="px-4 py-3">账户</th>
-                    <th className="px-4 py-3">类型</th>
-                    <th className="px-4 py-3">变化</th>
-                    <th className="px-4 py-3">剩余</th>
+                    <th>时间</th>
+                    <th>账户</th>
+                    <th>类型</th>
+                    <th>变化</th>
+                    <th>剩余</th>
                   </tr>
                 </thead>
-                <tbody className={adminTableBodyClass}>
+                <tbody>
                   {loading ? (
                     <tr>
-                      <td colSpan={5} className="px-4 py-10 text-center text-[var(--app-text-muted)]">
-                        <LoaderCircle className="mx-auto mb-2 size-5 animate-spin" />
-                        读取中
+                      <td colSpan={5} style={{ padding: "40px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
+                        <LoaderCircle className="size-5 animate-spin" style={{ display: "inline-block", marginBottom: 8 }} />
+                        <div>读取中</div>
                       </td>
                     </tr>
                   ) : ledgerItems.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="px-4 py-10 text-center text-[var(--app-text-muted)]">暂无积分明细</td>
+                      <td colSpan={5} style={{ padding: "40px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>暂无积分明细</td>
                     </tr>
                   ) : (
                     ledgerItems.map((item) => (
-                      <tr key={item.id} className={adminTableRowClass}>
-                        <td className="whitespace-nowrap px-4 py-3 text-[var(--app-text-secondary)]">{formatDateTime(item.created_at)}</td>
-                        <td className="whitespace-nowrap px-4 py-3 text-[var(--app-text-secondary)]">{ledgerAccountText(item)}</td>
-                        <td className="whitespace-nowrap px-4 py-3 text-[var(--app-text-primary)]">{ledgerReasonText(item.reason)}</td>
-                        <td className={cn("whitespace-nowrap px-4 py-3 font-semibold", item.delta >= 0 ? "text-emerald-600 dark:text-emerald-300" : "text-rose-600 dark:text-rose-300")}>
+                      <tr key={item.id}>
+                        <td style={{ whiteSpace: "nowrap" }}>{formatDateTime(item.created_at)}</td>
+                        <td style={{ whiteSpace: "nowrap" }}>{ledgerAccountText(item)}</td>
+                        <td style={{ whiteSpace: "nowrap", color: "var(--app-text-primary)" }}>{ledgerReasonText(item.reason)}</td>
+                        <td style={{ whiteSpace: "nowrap", fontWeight: 600, color: item.delta >= 0 ? "#34d399" : "#fb7185" }}>
                           {item.delta >= 0 ? "+" : ""}
                           {numberText(item.delta)}
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3 text-[var(--app-text-secondary)]">{ledgerBalanceLabel(item)} {numberText(item.balance_after)}</td>
+                        <td style={{ whiteSpace: "nowrap" }}>{ledgerBalanceLabel(item)} {numberText(item.balance_after)}</td>
                       </tr>
                     ))
                   )}
@@ -664,40 +672,39 @@ export default function CreditsPage() {
           </AdminPanel>
         </div>
       </div>
-      <Dialog open={Boolean(confirmAction)} onOpenChange={(open) => {
-        if (!open && !confirming) {
-          setConfirmAction(null);
-        }
-      }}>
-        <DialogContent className="w-[min(92vw,460px)]">
-          <DialogHeader>
-            <DialogTitle>{confirmAction?.title || "确认操作"}</DialogTitle>
-            <DialogDescription>{confirmAction?.description || "确认继续执行该操作？"}</DialogDescription>
-          </DialogHeader>
-          {confirmAction?.payment ? (
-            <div className="grid gap-2">
-              <div className="text-sm font-medium text-[var(--app-text-primary)]">支付方式</div>
-              <Select value={selectedPaymentMethod} onValueChange={setSelectedPaymentMethod}>
-                <SelectTrigger className={adminInputClass}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {paymentMethods.map((item) => (
-                    <SelectItem key={item.key} value={item.key}>{item.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : null}
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setConfirmAction(null)} disabled={confirming}>取消</Button>
-            <Button type="button" onClick={() => void runConfirmedAction()} disabled={confirming}>
+
+      <AppModal
+        open={Boolean(confirmAction)}
+        onClose={() => {
+          if (!confirming) setConfirmAction(null);
+        }}
+        title={confirmAction?.title || "确认操作"}
+        footer={
+          <>
+            <button className="app-btn" type="button" onClick={() => setConfirmAction(null)} disabled={confirming}>取消</button>
+            <button className="app-btn-primary" type="button" onClick={() => void runConfirmedAction()} disabled={confirming}>
               {confirming ? <LoaderCircle className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
               {confirmAction?.confirmText || "确认"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            </button>
+          </>
+        }
+      >
+        <div style={{ display: "grid", gap: 14 }}>
+          <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--app-text-secondary)", margin: 0 }}>
+            {confirmAction?.description || "确认继续执行该操作？"}
+          </p>
+          {confirmAction?.payment ? (
+            <label className="app-fld">
+              <span className="fl">支付方式</span>
+              <AppSelect
+                value={selectedPaymentMethod}
+                onChange={setSelectedPaymentMethod}
+                options={paymentMethods.map((item) => ({ value: item.key, label: item.label }))}
+              />
+            </label>
+          ) : null}
+        </div>
+      </AppModal>
     </AdminPage>
   );
 }

@@ -1,30 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Archive, Bell, CheckCircle2, Eye, LoaderCircle, Pencil, Plus, RefreshCw, Search, Send, Trash2 } from "lucide-react";
+import { Archive, Bell, Eye, LoaderCircle, RefreshCw, Send } from "lucide-react";
 import { toast } from "sonner";
 
 import { AdminHeader, AdminPage, AdminPanel, AdminSectionTitle, AdminStatCard, AdminToolbar } from "@/components/admin-layout";
-import { adminInputClass, adminInputPillClass, adminSubPanelClass } from "@/components/admin-styles";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+import { AppDatePicker, AppModal, AppSelect } from "@/components/app-controls";
 import {
   createBusinessNotification,
   deleteBusinessNotification,
@@ -36,7 +17,7 @@ import {
   type BusinessNotificationStatus,
   type BusinessNotificationTargeting,
 } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import "./notifications.css";
 
 type StatusFilter = "all" | BusinessNotificationStatus;
 type TargetMode = NonNullable<BusinessNotificationTargeting>["mode"];
@@ -89,108 +70,82 @@ function notifyModeLabel(value?: string) {
   return notifyModeOptions.find((item) => item.value === value)?.label || "静默";
 }
 
-function levelVariant(value: string): "info" | "success" | "warning" {
-  if (value === "success") {
-    return "success";
-  }
-  if (value === "warning") {
-    return "warning";
-  }
-  return "info";
+function levelBadgeClass(value: string) {
+  if (value === "success") return "ok";
+  if (value === "warning") return "warn";
+  return "run";
 }
 
-function statusVariant(value: string): "success" | "secondary" | "warning" {
-  if (value === "published") {
-    return "success";
-  }
-  if (value === "archived") {
-    return "warning";
-  }
-  return "secondary";
+function statusBadgeClass(value: string) {
+  if (value === "published") return "ok";
+  if (value === "archived") return "warn";
+  return "off";
 }
 
 function formatTime(value?: string) {
-  if (!value) {
-    return "-";
-  }
+  if (!value) return "-";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
+  if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
 }
 
 function readPercent(item: BusinessNotification) {
   const total = Number(item.audienceCount || 0);
-  if (total <= 0) {
-    return 0;
-  }
+  if (total <= 0) return 0;
   return Math.min(100, Math.round((Number(item.readCount || 0) / total) * 100));
 }
 
 function readSummary(item: BusinessNotification) {
   const read = Number(item.readCount || 0);
   const total = Number(item.audienceCount || 0);
-  return `已读 ${read.toLocaleString()} / 目标用户 ${total.toLocaleString()} (${readPercent(item)}%)`;
+  return `${read.toLocaleString()} / ${total.toLocaleString()} (${readPercent(item)}%)`;
 }
 
 function toDateTimeLocal(value?: string) {
-  if (!value) {
-    return "";
-  }
+  if (!value) return "";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
+  if (Number.isNaN(date.getTime())) return "";
   const offsetMs = date.getTimezoneOffset() * 60 * 1000;
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
 }
 
 function fromDateTimeLocal(value: string) {
-  if (!value) {
-    return "";
-  }
+  if (!value) return "";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
+  if (Number.isNaN(date.getTime())) return "";
   return date.toISOString();
 }
 
 function windowSummary(item: BusinessNotification) {
   const starts = item.startsAt ? formatTime(item.startsAt) : "立即";
   const ends = item.endsAt ? formatTime(item.endsAt) : "长期";
-  return `${starts} 至 ${ends}`;
+  return `${starts} ~ ${ends}`;
 }
 
 function windowState(item: BusinessNotification) {
-  if (item.status !== "published") {
-    return statusLabel(item.status);
-  }
+  if (item.status !== "published") return statusLabel(item.status);
   const now = Date.now();
   const starts = item.startsAt ? new Date(item.startsAt).getTime() : 0;
   const ends = item.endsAt ? new Date(item.endsAt).getTime() : 0;
-  if (starts && !Number.isNaN(starts) && starts > now) {
-    return "未开始";
-  }
-  if (ends && !Number.isNaN(ends) && ends <= now) {
-    return "已结束";
-  }
+  if (starts && !Number.isNaN(starts) && starts > now) return "未开始";
+  if (ends && !Number.isNaN(ends) && ends <= now) return "已结束";
   return "展示中";
+}
+
+function windowStateBadgeClass(state: string) {
+  if (state === "展示中") return "ok";
+  if (state === "未开始") return "run";
+  return "off";
 }
 
 function targetSummary(item: BusinessNotification) {
   const targeting = item.targeting;
-  if (!targeting || targeting.mode !== "balance" || !targeting.balance) {
-    return "全体用户";
-  }
+  if (!targeting || targeting.mode !== "balance" || !targeting.balance) return "全体用户";
   return `余额 ${targeting.balance.operator} ${Number(targeting.balance.value || 0).toLocaleString()}`;
 }
 
 function buildTargeting(mode: TargetMode, operator: BalanceOperator, value: string): BusinessNotificationTargeting {
-  if (mode !== "balance") {
-    return { mode: "all" };
-  }
+  if (mode !== "balance") return { mode: "all" };
   const threshold = Number(value);
   return {
     mode: "balance",
@@ -209,6 +164,7 @@ export default function NotificationsPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<BusinessNotification | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<BusinessNotification | null>(null);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [level, setLevel] = useState<BusinessNotificationLevel>("info");
@@ -281,6 +237,11 @@ export default function NotificationsPage() {
     setDialogOpen(true);
   };
 
+  const closeDialog = () => {
+    setDialogOpen(false);
+    resetForm();
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -304,8 +265,7 @@ export default function NotificationsPage() {
         setItems((current) => [response.item, ...current]);
         toast.success(status === "published" ? "公告已生效" : "公告已保存");
       }
-      setDialogOpen(false);
-      resetForm();
+      closeDialog();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "保存公告失败");
     } finally {
@@ -313,14 +273,13 @@ export default function NotificationsPage() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm("确定删除这条公告吗？")) {
-      return;
-    }
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
     try {
-      await deleteBusinessNotification(id);
-      setItems((current) => current.filter((item) => item.id !== id));
+      await deleteBusinessNotification(deleteTarget.id);
+      setItems((current) => current.filter((item) => item.id !== deleteTarget.id));
       toast.success("公告已删除");
+      setDeleteTarget(null);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "删除公告失败");
     }
@@ -331,273 +290,198 @@ export default function NotificationsPage() {
       <AdminHeader
         title="通知公告"
         description="创建公告并投放给全体用户，用户会在左侧消息通知里查看。"
+        icon={Bell}
         actions={
           <>
-            <Button type="button" variant="outline" onClick={() => void loadItems()} disabled={loading || saving}>
+            <button className="app-btn" type="button" onClick={() => void loadItems()} disabled={loading || saving}>
               {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
               刷新
-            </Button>
-            <Button type="button" onClick={openCreateDialog}>
-              <Plus className="size-4" />
-              创建公告
-            </Button>
+            </button>
+            <button className="app-btn-primary" type="button" onClick={openCreateDialog}>
+              + 创建公告
+            </button>
           </>
         }
-      >
-        <div className="mb-3 inline-flex size-12 items-center justify-center rounded-[var(--app-radius-lg)] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)]">
-          <Bell className="size-5" />
-        </div>
-      </AdminHeader>
+      />
 
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <AdminStatCard label="公告总数" value={items.length.toLocaleString()} icon={Bell} color="text-[var(--app-text-primary)]" />
+      <section className="app-stats">
+        <AdminStatCard label="公告总数" value={items.length.toLocaleString()} icon={Bell} color="text-cyan-300" />
         <AdminStatCard label="已发布" value={publishedCount.toLocaleString()} icon={Send} color="text-emerald-300" />
         <AdminStatCard label="展示中" value={activeWindowCount.toLocaleString()} icon={Eye} color="text-sky-300" />
         <AdminStatCard label="已归档" value={archivedCount.toLocaleString()} icon={Archive} color="text-amber-300" />
       </section>
 
       <AdminToolbar>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-          <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[var(--app-text-muted)]" />
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索标题或内容"
-              className={cn(adminInputPillClass, "pl-9")}
-            />
-          </div>
-          <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as StatusFilter)}>
-            <SelectTrigger className={cn(adminInputPillClass, "w-full lg:w-40")}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {statusFilterOptions.map((item) => (
-                <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <AppSelect
+          value={statusFilter}
+          onChange={(value) => setStatusFilter(value as StatusFilter)}
+          options={statusFilterOptions}
+        />
+        <input
+          className="app-input"
+          type="search"
+          placeholder="搜索标题或内容…"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          style={{ flex: 1 }}
+        />
       </AdminToolbar>
 
       <AdminPanel>
-        <AdminSectionTitle title="公告列表" action={<Badge variant="secondary">{items.length}</Badge>} />
+        <AdminSectionTitle title="公告列表" action={<span className="panel-count">{items.length}</span>} />
         {loading ? (
-          <div className="px-4 py-12 text-center text-sm text-[var(--app-text-muted)]">
-            <LoaderCircle className="mx-auto mb-2 size-5 animate-spin" />
-            读取中
+          <div style={{ padding: "48px 16px", textAlign: "center", fontSize: 13, color: "var(--app-text-muted)" }}>
+            <LoaderCircle className="size-5 animate-spin" style={{ display: "inline-block", marginBottom: 8 }} />
+            <div>读取中</div>
           </div>
         ) : items.length === 0 ? (
-          <div className="px-4 py-12 text-center text-sm text-[var(--app-text-muted)]">暂无公告</div>
+          <div style={{ padding: "48px 16px", textAlign: "center", fontSize: 13, color: "var(--app-text-muted)" }}>暂无公告</div>
         ) : (
-          <div className="divide-y divide-[var(--app-border)]">
+          <div className="notify-list">
             {items.map((item) => {
               const percent = readPercent(item);
+              const state = windowState(item);
               return (
-                <article key={item.id} className="grid min-w-0 gap-3 px-4 py-4 sm:px-5">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant={statusVariant(item.status)}>{statusLabel(item.status)}</Badge>
-                        <Badge variant={levelVariant(item.level)}>{levelLabel(item.level)}</Badge>
-                        <Badge variant={item.notifyMode === "popup" ? "warning" : "outline"}>{notifyModeLabel(item.notifyMode)}</Badge>
-                        <Badge variant={windowState(item) === "展示中" ? "success" : "outline"}>{windowState(item)}</Badge>
-                        <h2 className="min-w-0 break-words text-base font-semibold text-[var(--app-text-primary)] [overflow-wrap:anywhere]">{item.title}</h2>
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--app-text-muted)]">
-                        <span>发布时间：{formatTime(item.publishedAt || item.createdAt)}</span>
-                        <span className="text-[var(--app-border-strong)]">/</span>
-                        <span>窗口：{windowSummary(item)}</span>
-                        <span className="text-[var(--app-border-strong)]">/</span>
-                        <span>条件：{targetSummary(item)}</span>
-                        <span className="text-[var(--app-border-strong)]">/</span>
-                        <span className="inline-flex items-center gap-1">
-                          <Eye className="size-3.5" />
-                          {readSummary(item)}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 flex-wrap items-center gap-2">
-                      <Button type="button" size="sm" variant="outline" onClick={() => openEditDialog(item)}>
-                        <Pencil className="size-4" />
-                        编辑
-                      </Button>
-                      <Button type="button" size="sm" variant="outline" onClick={() => void handleDelete(item.id)}>
-                        <Trash2 className="size-4" />
-                        删除
-                      </Button>
+                <div key={item.id} className="notify-card">
+                  <div className="notify-top">
+                    <span className="badges">
+                      <span className={`app-badge ${statusBadgeClass(item.status)}`}>{statusLabel(item.status)}</span>
+                      <span className={`app-badge ${levelBadgeClass(item.level)}`}>{levelLabel(item.level)}</span>
+                      <span className={`app-badge ${item.notifyMode === "popup" ? "warn" : "off"}`}>{notifyModeLabel(item.notifyMode)}</span>
+                      <span className={`app-badge ${windowStateBadgeClass(state)}`}>{state}</span>
+                    </span>
+                    <span className="title">{item.title}</span>
+                    <div className="app-act">
+                      <button type="button" onClick={() => openEditDialog(item)}>编辑</button>
+                      <button type="button" className="danger" onClick={() => setDeleteTarget(item)}>删除</button>
                     </div>
                   </div>
-                  <div className="grid gap-2">
-                    <div className="h-1.5 overflow-hidden rounded-full bg-[var(--app-bg-surface-hover)]">
-                      <div className="h-full rounded-full bg-[var(--app-accent-cyan)]" style={{ width: `${percent}%` }} />
-                    </div>
-                    <p className={cn(adminSubPanelClass, "max-h-32 min-w-0 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words px-3 py-2 text-sm leading-6 text-[var(--app-text-secondary)] [overflow-wrap:anywhere]")}>{item.body}</p>
+                  <div className="notify-meta">
+                    <span>发布 <b>{formatTime(item.publishedAt || item.createdAt)}</b></span>
+                    <span>窗口 <b>{windowSummary(item)}</b></span>
+                    <span>条件 <b>{targetSummary(item)}</b></span>
+                    <span>已读 <b>{readSummary(item)}</b></span>
                   </div>
-                </article>
+                  <div className="notify-progress"><i style={{ width: `${percent}%` }} /></div>
+                  <div className="notify-preview">{item.body}</div>
+                </div>
               );
             })}
           </div>
         )}
       </AdminPanel>
 
-      <Dialog
+      <AppModal
         open={dialogOpen}
-        onOpenChange={(open) => {
-          setDialogOpen(open);
-          if (!open) {
-            resetForm();
-          }
-        }}
-      >
-        <DialogContent className="max-h-[90vh] w-[min(92vw,760px)] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{editingItem ? "编辑公告" : "创建公告"}</DialogTitle>
-            <DialogDescription>草稿不会出现在用户消息里；生效时间和展示条件会同时过滤。</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4">
-            <div>
-              <label className="mb-2 block text-sm font-medium text-[var(--app-text-secondary)]">标题</label>
-              <Input
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                placeholder="公告标题"
-                maxLength={80}
-                className={cn(adminInputClass, "rounded-[var(--app-radius-md)]")}
-              />
-            </div>
-            <div>
-              <label className="mb-2 block text-sm font-medium text-[var(--app-text-secondary)]">内容</label>
-              <Textarea
-                value={body}
-                onChange={(event) => setBody(event.target.value)}
-                placeholder="公告内容"
-                maxLength={1200}
-                className={cn(adminInputClass, "min-h-44 resize-y rounded-[var(--app-radius-md)] whitespace-pre-wrap break-words [overflow-wrap:anywhere]")}
-              />
-              <div className="mt-1 text-right text-xs text-[var(--app-text-muted)]">{body.length}/1200</div>
-            </div>
-            <div className="grid gap-3 md:grid-cols-3">
-              <div>
-                <label className="mb-2 block text-sm font-medium text-[var(--app-text-secondary)]">类型</label>
-                <Select value={level} onValueChange={(value) => setLevel(value as BusinessNotificationLevel)}>
-                  <SelectTrigger className="h-11 rounded-[var(--app-radius-md)]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {levelOptions.map((item) => (
-                      <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-[var(--app-text-secondary)]">状态</label>
-                <Select value={status} onValueChange={(value) => setStatus(value as BusinessNotificationStatus)}>
-                  <SelectTrigger className="h-11 rounded-[var(--app-radius-md)]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {statusOptions.map((item) => (
-                      <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-[var(--app-text-secondary)]">通知方式</label>
-                <Select value={notifyMode} onValueChange={(value) => setNotifyMode(value as BusinessNotificationNotifyMode)}>
-                  <SelectTrigger className="h-11 rounded-[var(--app-radius-md)]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {notifyModeOptions.map((item) => (
-                      <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <div>
-                <label className="mb-2 block text-sm font-medium text-[var(--app-text-secondary)]">开始时间</label>
-                <Input
-                  type="datetime-local"
-                  value={startsAt}
-                  onChange={(event) => setStartsAt(event.target.value)}
-                  className={cn(adminInputClass, "rounded-[var(--app-radius-md)]")}
-                />
-                <p className="mt-1 text-xs text-[var(--app-text-muted)]">留空表示立即生效。</p>
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-[var(--app-text-secondary)]">结束时间</label>
-                <Input
-                  type="datetime-local"
-                  value={endsAt}
-                  onChange={(event) => setEndsAt(event.target.value)}
-                  className={cn(adminInputClass, "rounded-[var(--app-radius-md)]")}
-                />
-                <p className="mt-1 text-xs text-[var(--app-text-muted)]">留空表示长期有效。</p>
-              </div>
-            </div>
-            <div className="grid gap-3 md:grid-cols-3">
-              <div>
-                <label className="mb-2 block text-sm font-medium text-[var(--app-text-secondary)]">展示条件</label>
-                <Select value={targetMode} onValueChange={(value) => setTargetMode(value as TargetMode)}>
-                  <SelectTrigger className="h-11 rounded-[var(--app-radius-md)]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {targetModeOptions.map((item) => (
-                      <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              {targetMode === "balance" ? (
-                <>
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-[var(--app-text-secondary)]">余额关系</label>
-                    <Select value={balanceOperator} onValueChange={(value) => setBalanceOperator(value as BalanceOperator)}>
-                      <SelectTrigger className="h-11 rounded-[var(--app-radius-md)]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {balanceOperatorOptions.map((item) => (
-                          <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <label className="mb-2 block text-sm font-medium text-[var(--app-text-secondary)]">余额阈值</label>
-                    <Input
-                      type="number"
-                      min={0}
-                      step={1}
-                      value={balanceValue}
-                      onChange={(event) => setBalanceValue(event.target.value)}
-                      className={cn(adminInputClass, "rounded-[var(--app-radius-md)]")}
-                    />
-                  </div>
-                </>
-              ) : null}
-              <div className="md:col-span-3">
-                <p className="text-xs text-[var(--app-text-muted)]">
-                  当前支持全体用户或按余额阈值筛选，后续可以在同一结构里继续扩展更多条件。
-                </p>
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>取消</Button>
-            <Button type="button" onClick={() => void handleSave()} disabled={saving || !title.trim() || !body.trim()}>
-              {saving ? <LoaderCircle className="size-4 animate-spin" /> : editingItem ? <CheckCircle2 className="size-4" /> : <Send className="size-4" />}
+        onClose={closeDialog}
+        title={editingItem ? "编辑公告" : "创建公告"}
+        footer={
+          <>
+            <button className="app-btn" type="button" onClick={closeDialog}>取消</button>
+            <button
+              className="app-btn-primary"
+              type="button"
+              onClick={() => void handleSave()}
+              disabled={saving || !title.trim() || !body.trim()}
+            >
+              {saving ? <LoaderCircle className="size-4 animate-spin" /> : null}
               {editingItem ? "保存" : "创建"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            </button>
+          </>
+        }
+      >
+        <div className="app-form-grid">
+          <div className="app-fld full">
+            <span className="fl">公告标题</span>
+            <input
+              className="app-input"
+              placeholder="公告标题"
+              maxLength={80}
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+            />
+          </div>
+          <div className="app-fld full">
+            <span className="fl">公告内容</span>
+            <textarea
+              className="app-textarea"
+              placeholder="公告内容"
+              maxLength={1200}
+              value={body}
+              onChange={(event) => setBody(event.target.value)}
+            />
+            <span className="fd" style={{ textAlign: "right" }}>{body.length}/1200</span>
+          </div>
+          <div className="app-fld">
+            <span className="fl">级别</span>
+            <AppSelect value={level} onChange={(v) => setLevel(v as BusinessNotificationLevel)} options={levelOptions} />
+          </div>
+          <div className="app-fld">
+            <span className="fl">状态</span>
+            <AppSelect value={status} onChange={(v) => setStatus(v as BusinessNotificationStatus)} options={statusOptions} />
+          </div>
+          <div className="app-fld">
+            <span className="fl">通知方式</span>
+            <AppSelect value={notifyMode} onChange={(v) => setNotifyMode(v as BusinessNotificationNotifyMode)} options={notifyModeOptions} />
+          </div>
+          <div className="app-fld">
+            <span className="fl">展示条件</span>
+            <AppSelect value={targetMode} onChange={(v) => setTargetMode(v as TargetMode)} options={targetModeOptions} />
+          </div>
+          {targetMode === "balance" ? (
+            <>
+              <div className="app-fld">
+                <span className="fl">余额关系</span>
+                <AppSelect value={balanceOperator} onChange={(v) => setBalanceOperator(v as BalanceOperator)} options={balanceOperatorOptions} />
+              </div>
+              <div className="app-fld">
+                <span className="fl">余额阈值</span>
+                <input
+                  className="app-input"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={balanceValue}
+                  onChange={(event) => setBalanceValue(event.target.value)}
+                />
+              </div>
+            </>
+          ) : null}
+          <div className="app-fld">
+            <span className="fl">开始时间</span>
+            <AppDatePicker value={startsAt} onChange={setStartsAt} placeholder="选择开始时间" withTime />
+            <span className="fd">留空表示立即生效</span>
+          </div>
+          <div className="app-fld">
+            <span className="fl">结束时间</span>
+            <AppDatePicker value={endsAt} onChange={setEndsAt} placeholder="选择结束时间" withTime />
+            <span className="fd">留空表示长期有效</span>
+          </div>
+        </div>
+      </AppModal>
+
+      <AppModal
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="删除公告"
+        footer={
+          <>
+            <button className="app-btn" type="button" onClick={() => setDeleteTarget(null)}>取消</button>
+            <button
+              className="app-btn-primary"
+              type="button"
+              onClick={() => void handleDelete()}
+              style={{ background: "linear-gradient(135deg, #ef4444, #dc2626)" }}
+            >
+              确认删除
+            </button>
+          </>
+        }
+      >
+        <div style={{ padding: "16px 18px", fontSize: 13.5, color: "var(--app-text-secondary)", lineHeight: 1.7 }}>
+          确认删除公告 <b style={{ color: "var(--app-text-primary)" }}>「{deleteTarget?.title}」</b> 吗？此操作不可恢复。
+        </div>
+      </AppModal>
     </AdminPage>
   );
 }
