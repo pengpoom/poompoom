@@ -1,10 +1,8 @@
 "use client";
 
-import { Input } from "@/components/ui/input";
 import type { ConfigPayload } from "@/lib/api";
 
 import { ConfigSection, Field, ToggleField, TooltipDetails, type SetConfigSection } from "./shared";
-import { settingsInputClass } from "./styles";
 
 type RuntimeSectionProps = {
   config: ConfigPayload;
@@ -33,7 +31,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
         }
         fullWidth
       >
-        <Input value={config.app.version} readOnly className={settingsInputClass} />
+        <input className="app-input" value={config.app.version} readOnly />
       </Field>
       <Field
         label="监听地址"
@@ -57,10 +55,10 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
           />
         }
       >
-        <Input
+        <input className="app-input"
           value={config.server.host}
           onChange={(event) => setSection("server", { ...config.server, host: event.target.value })}
-          className={settingsInputClass}
+         
         />
       </Field>
       <Field
@@ -89,7 +87,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
           />
         }
       >
-        <Input
+        <input className="app-input"
           type="number"
           value={String(config.server.port)}
           onChange={(event) =>
@@ -98,14 +96,14 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
               port: Number(event.target.value || 0),
             })
           }
-          className={settingsInputClass}
+         
         />
       </Field>
       <Field
         label="图片并发上限"
         hint="同时允许多少个图片生成/编辑请求进入执行。"
       >
-        <Input
+        <input className="app-input"
           type="number"
           value={String(config.server.maxImageConcurrency)}
           onChange={(event) =>
@@ -114,14 +112,14 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
               maxImageConcurrency: Number(event.target.value || 0),
             })
           }
-          className={settingsInputClass}
+         
         />
       </Field>
       <Field
         label="图片排队上限"
         hint="超出并发上限后，最多允许多少个请求继续排队等待。"
       >
-        <Input
+        <input className="app-input"
           type="number"
           value={String(config.server.imageQueueLimit)}
           onChange={(event) =>
@@ -130,14 +128,14 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
               imageQueueLimit: Number(event.target.value || 0),
             })
           }
-          className={settingsInputClass}
+         
         />
       </Field>
       <Field
         label="图片准入排队超时（秒）"
         hint="超出并发上限后，在 admission 队列里等待超过这个时间，请求会直接返回超时。"
       >
-        <Input
+        <input className="app-input"
           type="number"
           value={String(config.server.imageQueueTimeoutSeconds)}
           onChange={(event) =>
@@ -146,7 +144,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
               imageQueueTimeoutSeconds: Number(event.target.value || 0),
             })
           }
-          className={settingsInputClass}
+         
         />
       </Field>
       <Field
@@ -171,11 +169,11 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
           />
         }
       >
-        <Input
+        <input className="app-input"
           type="password"
           value={config.app.authKey}
           onChange={(event) => setSection("app", { ...config.app, authKey: event.target.value })}
-          className={settingsInputClass}
+         
         />
       </Field>
       <Field
@@ -200,10 +198,10 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
           />
         }
       >
-        <Input
+        <input className="app-input"
           value={config.app.apiKey}
           onChange={(event) => setSection("app", { ...config.app, apiKey: event.target.value })}
-          className={settingsInputClass}
+         
         />
       </Field>
       <Field
@@ -232,10 +230,10 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
           />
         }
       >
-        <Input
+        <input className="app-input"
           value={config.app.imageFormat}
           onChange={(event) => setSection("app", { ...config.app, imageFormat: event.target.value })}
-          className={settingsInputClass}
+         
         />
       </Field>
       <Field
@@ -260,7 +258,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
           />
         }
       >
-        <Input
+        <input className="app-input"
           type="number"
           value={String(config.app.maxUploadSizeMB)}
           onChange={(event) =>
@@ -269,7 +267,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
               maxUploadSizeMB: Number(event.target.value || 0),
             })
           }
-          className={settingsInputClass}
+         
         />
       </Field>
       <Field
@@ -294,7 +292,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
           />
         }
       >
-        <Input
+        <input className="app-input"
           type="number"
           value={String(config.chatgpt.requestTimeout)}
           onChange={(event) =>
@@ -303,7 +301,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
               requestTimeout: Number(event.target.value || 0),
             })
           }
-          className={settingsInputClass}
+         
         />
       </Field>
       <Field
@@ -328,7 +326,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
           />
         }
       >
-        <Input
+        <input className="app-input"
           type="number"
           value={String(config.chatgpt.sseTimeout)}
           onChange={(event) =>
@@ -337,7 +335,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
               sseTimeout: Number(event.target.value || 0),
             })
           }
-          className={settingsInputClass}
+         
         />
       </Field>
       <Field
@@ -362,7 +360,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
           />
         }
       >
-        <Input
+        <input className="app-input"
           type="number"
           value={String(config.chatgpt.pollInterval)}
           onChange={(event) =>
@@ -371,7 +369,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
               pollInterval: Number(event.target.value || 0),
             })
           }
-          className={settingsInputClass}
+         
         />
       </Field>
       <Field
@@ -396,7 +394,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
           />
         }
       >
-        <Input
+        <input className="app-input"
           type="number"
           value={String(config.chatgpt.pollMaxWait)}
           onChange={(event) =>
@@ -405,7 +403,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
               pollMaxWait: Number(event.target.value || 0),
             })
           }
-          className={settingsInputClass}
+         
         />
       </Field>
       <Field
@@ -430,7 +428,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
           />
         }
       >
-        <Input
+        <input className="app-input"
           type="number"
           value={String(config.accounts.defaultQuota)}
           onChange={(event) =>
@@ -439,7 +437,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
               defaultQuota: Number(event.target.value || 0),
             })
           }
-          className={settingsInputClass}
+         
         />
       </Field>
       <Field
@@ -464,7 +462,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
           />
         }
       >
-        <Input
+        <input className="app-input"
           type="number"
           value={String(config.accounts.refreshWorkers)}
           onChange={(event) =>
@@ -473,14 +471,14 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
               refreshWorkers: Number(event.target.value || 0),
             })
           }
-          className={settingsInputClass}
+         
         />
       </Field>
       <Field
         label="额度刷新 TTL（秒）"
         hint="账号刚刷新过额度时，在这个时间窗口内优先复用结果，减少重复打上游。"
       >
-        <Input
+        <input className="app-input"
           type="number"
           value={String(config.accounts.imageQuotaRefreshTTLSeconds)}
           onChange={(event) =>
@@ -489,7 +487,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
               imageQuotaRefreshTTLSeconds: Number(event.target.value || 0),
             })
           }
-          className={settingsInputClass}
+         
         />
       </Field>
       <ToggleField

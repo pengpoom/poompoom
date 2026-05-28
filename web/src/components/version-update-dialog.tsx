@@ -4,14 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ExternalLink, Loader2, RefreshCw, RotateCw, ServerCrash } from "lucide-react";
 import { toast } from "sonner";
 
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { AppModal } from "@/components/app-controls";
 import {
   fetchSystemUpdateStatus,
   fetchVersionInfo,
@@ -19,7 +12,6 @@ import {
   type SystemUpdateJob,
   type SystemUpdateStatus,
 } from "@/lib/api";
-import { cn } from "@/lib/utils";
 
 const updateStateKey = "image-studio:update:pending";
 const repositoryUrl = "https://github.com/your-org/image-studio";
@@ -276,125 +268,119 @@ export function VersionUpdateDialog({
     }
   }
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[min(92vw,420px)] rounded-[20px] p-0" showCloseButton={stage !== "restarting"}>
-        <DialogHeader className="border-b border-stone-200 px-5 py-4 dark:border-[var(--studio-border)]">
-          <DialogTitle className="text-base">当前版本</DialogTitle>
-          <DialogDescription>查看并管理 Docker Compose 更新</DialogDescription>
-        </DialogHeader>
+  const statusBadge = (stage === "failed" || unavailableReason)
+    ? "fail"
+    : stage === "complete"
+      ? "ok"
+      : versionWarning || hasUpdate
+        ? "warn"
+        : "run";
 
-        <div className="space-y-4 px-5 pb-5 pt-3">
-          <div className="text-center">
-            <div className="inline-flex items-center gap-2">
-              <span className="text-3xl font-semibold tracking-normal text-stone-950 dark:text-[var(--studio-text-strong)]">
-                {versionLabel}
-              </span>
-              {(!versionWarning && hasUpdate === false) || stage === "complete" ? (
-                <span className="inline-flex size-6 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
-                  <Check className="size-3.5" />
-                </span>
-              ) : null}
-            </div>
-            <p className="mt-1 text-sm text-stone-500 dark:text-[var(--studio-text-muted)]">
-              {subtitle}
+  return (
+    <AppModal
+      open={open}
+      onClose={() => stage !== "restarting" && onOpenChange?.(false)}
+      title="当前版本"
+    >
+      <p style={{ marginTop: -4, marginBottom: 16, fontSize: 12, color: "var(--app-text-muted)" }}>
+        查看并管理 Docker Compose 更新
+      </p>
+
+      <div style={{ textAlign: "center", marginBottom: 16 }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 28, fontWeight: 600, color: "var(--app-text-primary)" }}>
+            {versionLabel}
+          </span>
+          {(!versionWarning && hasUpdate === false) || stage === "complete" ? (
+            <span style={{ display: "inline-flex", width: 24, height: 24, alignItems: "center", justifyContent: "center", borderRadius: "50%", background: "rgba(110,231,183,0.18)", color: "#6ee7b7" }}>
+              <Check className="size-3.5" />
+            </span>
+          ) : null}
+        </div>
+        <p style={{ marginTop: 6, fontSize: 13, color: "var(--app-text-muted)" }}>{subtitle}</p>
+      </div>
+
+      {stage === "failed" || unavailableReason ? (
+        <div className="app-badge fail" style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: 12, borderRadius: 10, marginBottom: 14, width: "100%" }}>
+          <span style={{ display: "inline-flex", width: 30, height: 30, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: "50%", background: "rgba(252,165,165,0.18)" }}>
+            <ServerCrash className="size-4" />
+          </span>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <p style={{ fontSize: 13, fontWeight: 500, margin: 0 }}>{unavailableReason ? "一键更新不可用" : "更新失败"}</p>
+            <p style={{ marginTop: 4, maxHeight: 160, overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all", textAlign: "left", fontSize: 11, opacity: 0.85, margin: "4px 0 0" }}>
+              {formatErrorDetail(unavailableReason, error, job)}
             </p>
           </div>
-
-          {stage === "failed" || unavailableReason ? (
-            <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-3 text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
-              <span className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-950">
-                <ServerCrash className="size-4" />
-              </span>
-              <div className="min-w-0 overflow-hidden">
-                <p className="text-sm font-medium">{unavailableReason ? "一键更新不可用" : "更新失败"}</p>
-                <p className="mt-0.5 max-h-40 overflow-y-auto whitespace-pre-wrap break-all text-left text-xs opacity-80">
-                  {formatErrorDetail(unavailableReason, error, job)}
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div
-              className={cn(
-                "flex items-center gap-3 rounded-lg border p-3",
-                stage === "complete"
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300"
-                  : versionWarning
-                    ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300"
-                    : hasUpdate
-                    ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300"
-                    : "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-300",
-              )}
-            >
-              <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-white/70 dark:bg-black/20">
-                {stage === "updating" || stage === "restarting" ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Check className="size-4" />
-                )}
-              </span>
-              <div className="min-w-0">
-                <p className="text-sm font-medium">
-                  {stage === "complete"
-                    ? "更新完成"
-                    : versionWarning
-                      ? "版本检测失败"
-                      : hasUpdate
-                        ? "发现新版本"
-                        : hasUpdate === false
-                          ? "已是最新版本"
-                          : formatJobStatus(job)}
-                </p>
-                <p className="mt-0.5 text-xs opacity-80">
-                  {stage === "restarting"
-                    ? "正在等待新容器通过健康检查"
-                    : hasUpdate
-                      ? `可更新到 ${latestVersion || "最新版本"}`
-                      : versionWarning || "没有检测到可用更新"}
-                </p>
-              </div>
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-2">
-            <Button variant="outline" type="button" onClick={refreshStatus} disabled={checking || stage === "restarting"}>
-              {checking ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-              刷新状态
-            </Button>
-            <Button variant="outline" type="button" onClick={() => refreshVersion(true)} disabled={checking || stage === "restarting"}>
-              <RefreshCw className="size-4" />
-              刷新版本
-            </Button>
-          </div>
-
-          <Button className="w-full" type="button" onClick={handleUpdate} disabled={!canStart}>
+        </div>
+      ) : (
+        <div className={`app-badge ${statusBadge}`} style={{ display: "flex", alignItems: "center", gap: 10, padding: 12, borderRadius: 10, marginBottom: 14, width: "100%" }}>
+          <span style={{ display: "inline-flex", width: 30, height: 30, flexShrink: 0, alignItems: "center", justifyContent: "center", borderRadius: "50%", background: "rgba(255,255,255,0.12)" }}>
             {stage === "updating" || stage === "restarting" ? (
               <Loader2 className="size-4 animate-spin" />
             ) : (
-              <RotateCw className="size-4" />
+              <Check className="size-4" />
             )}
-            {stage === "restarting"
-              ? "正在重启..."
-              : stage === "updating"
-                ? "正在更新..."
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <p style={{ fontSize: 13, fontWeight: 500, margin: 0 }}>
+              {stage === "complete"
+                ? "更新完成"
                 : versionWarning
                   ? "版本检测失败"
-                  : hasUpdate === false
-                    ? "已是最新版本"
-                    : "立即更新"}
-          </Button>
-
-          <a
-            href={repositoryUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center justify-center gap-1 text-xs text-stone-500 transition hover:text-stone-800 dark:text-[var(--studio-text-muted)] dark:hover:text-[var(--studio-text)]"
-          >
-            查看 GitHub 仓库
-            <ExternalLink className="size-3" />
-          </a>
+                  : hasUpdate
+                    ? "发现新版本"
+                    : hasUpdate === false
+                      ? "已是最新版本"
+                      : formatJobStatus(job)}
+            </p>
+            <p style={{ marginTop: 4, fontSize: 11, opacity: 0.85, margin: "4px 0 0" }}>
+              {stage === "restarting"
+                ? "正在等待新容器通过健康检查"
+                : hasUpdate
+                  ? `可更新到 ${latestVersion || "最新版本"}`
+                  : versionWarning || "没有检测到可用更新"}
+            </p>
+          </div>
         </div>
-      </DialogContent>
-    </Dialog>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+        <button className="app-btn" type="button" onClick={refreshStatus} disabled={checking || stage === "restarting"}>
+          {checking ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+          刷新状态
+        </button>
+        <button className="app-btn" type="button" onClick={() => refreshVersion(true)} disabled={checking || stage === "restarting"}>
+          <RefreshCw className="size-4" />
+          刷新版本
+        </button>
+      </div>
+
+      <button className="app-btn-primary" type="button" onClick={handleUpdate} disabled={!canStart} style={{ width: "100%" }}>
+        {stage === "updating" || stage === "restarting" ? (
+          <Loader2 className="size-4 animate-spin" />
+        ) : (
+          <RotateCw className="size-4" />
+        )}
+        {stage === "restarting"
+          ? "正在重启..."
+          : stage === "updating"
+            ? "正在更新..."
+            : versionWarning
+              ? "版本检测失败"
+              : hasUpdate === false
+                ? "已是最新版本"
+                : "立即更新"}
+      </button>
+
+      <a
+        href={repositoryUrl}
+        target="_blank"
+        rel="noreferrer"
+        style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4, marginTop: 12, fontSize: 12, color: "var(--app-text-muted)", textDecoration: "none" }}
+      >
+        查看 GitHub 仓库
+        <ExternalLink className="size-3" />
+      </a>
+    </AppModal>
   );
 }

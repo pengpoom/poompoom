@@ -22,7 +22,7 @@ html[data-resolved-theme="light"] .dash-metric {
 .dash-bar .bar-top span { font-size: 12px; color: var(--app-text-muted); }
 .dash-bar .bar-track { height: 8px; border-radius: 999px; background: var(--app-bg-surface); overflow: hidden; }
 .dash-bar .bar-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #2f6bff, #28d6ff); }
-html[data-resolved-theme="light"] .dash-bar .bar-fill { background: linear-gradient(90deg, rgba(59, 130, 246, 0.55), rgba(14, 165, 233, 0.5)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4); }
+html[data-resolved-theme="light"] .dash-bar .bar-fill { background: linear-gradient(90deg, rgba(37, 99, 235, 0.92), rgba(14, 165, 233, 0.88)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 1px 2px rgba(37, 99, 235, 0.18); }
 
 .dash-rank a { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 16px; text-decoration: none; border-top: 1px solid var(--app-border); transition: background 0.15s ease; color: inherit; }
 .dash-rank a:first-child { border-top: 0; }

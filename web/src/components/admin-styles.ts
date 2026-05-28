@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 export const adminPanelClass = "app-panel";
 
 export const adminSubPanelClass =
-  "rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] backdrop-blur-[18px]";
+  "app-subpanel rounded-[var(--app-radius-md)] border border-[var(--app-border)]";
 
 export const adminLabelClass = "text-xs font-medium text-[var(--app-text-muted)]";
 

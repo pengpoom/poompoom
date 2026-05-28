@@ -194,6 +194,8 @@ describe("business image history adapter", () => {
           storageBytes: 0,
           creditReserved: 1,
           creditRefunded: 1,
+          upstreamSent: false,
+          upstreamStatus: "pending",
           createdAt: "2026-05-17T10:01:00Z",
           queuedAt: "2026-05-17T10:01:00Z",
           finishedAt: "2026-05-17T10:01:05Z",

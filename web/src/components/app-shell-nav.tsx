@@ -36,14 +36,6 @@ import { VersionUpdateDialog } from "@/components/version-update-dialog";
 import { AnnounceModal, AppModal, AppToastStack, type AppToastItem } from "@/components/app-controls";
 import { useTheme, type ThemeMode } from "@/components/theme-provider";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import {
   fetchBusinessCredit,
   fetchBusinessNotifications,
   fetchVersionInfo,
@@ -75,13 +67,13 @@ type ShellNavItem = {
 const adminItems: readonly ShellNavItem[] = [
   { href: "/admin/dashboard", matchPrefix: "/admin/dashboard", label: "仪表盘", icon: BarChart3 },
   { href: "/admin/operations", matchPrefix: "/admin/operations", label: "运维", icon: Gauge },
-  { href: "/admin/usage", matchPrefix: "/admin/usage", label: "记录", icon: History },
-  { href: "/users", matchPrefix: "/users", label: "用户", icon: UsersRound },
-  { href: "/notifications", matchPrefix: "/notifications", label: "通知", icon: Bell },
-  { href: "/codes", matchPrefix: "/codes", label: "码券", icon: Ticket },
-  { href: "/affiliate", matchPrefix: "/affiliate", label: "返利", icon: Share2 },
-  { href: "/payments", matchPrefix: "/payments", label: "支付", icon: CreditCard },
   { href: "/accounts", matchPrefix: "/accounts", label: "接入", icon: Activity },
+  { href: "/users", matchPrefix: "/users", label: "用户", icon: UsersRound },
+  { href: "/payments", matchPrefix: "/payments", label: "支付", icon: CreditCard },
+  { href: "/codes", matchPrefix: "/codes", label: "码券", icon: Ticket },
+  { href: "/notifications", matchPrefix: "/notifications", label: "通知", icon: Bell },
+  { href: "/affiliate", matchPrefix: "/affiliate", label: "返利", icon: Share2 },
+  { href: "/admin/usage", matchPrefix: "/admin/usage", label: "记录", icon: History },
   { href: "/storage", matchPrefix: "/storage", label: "存储", icon: Database },
 ];
 
@@ -588,7 +580,7 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
                 isActive(pathname, { href: "/profile", matchPrefix: "/profile", label: "账号", icon: UsersRound }) && "border-[var(--app-border-strong)] bg-[var(--app-bg-surface-hover)]",
               )}
             >
-              <span className="grid size-10 place-items-center overflow-hidden rounded-full border border-transparent bg-[linear-gradient(rgba(7,10,18,0.9),rgba(7,10,18,0.9))_padding-box,conic-gradient(#e8ed48,#28d9ef,#6257f8,#57f08b,#e8ed48)_border-box] px-0.5 text-[10px] font-bold leading-none text-white shadow-[0_0_24px_rgba(40,214,255,0.14)]">
+              <span className="app-rail-avatar grid size-10 place-items-center overflow-hidden rounded-full border border-transparent px-0.5 text-[10px] font-bold leading-none shadow-[0_0_24px_rgba(40,214,255,0.14)]">
                 {avatarUrl ? (
                   <img src={avatarUrl} alt={displayUsername} className="size-full rounded-full object-cover" />
                 ) : (
@@ -880,23 +872,22 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
         ) : null}
       </AppModal>
 
-      <Dialog open={infoDialog !== null} onOpenChange={(open) => !open && setInfoDialog(null)}>
-        <DialogContent className="w-[min(92vw,520px)]">
-          <DialogHeader>
-            <DialogTitle>{infoDialogTitle}</DialogTitle>
-            <DialogDescription>
-              {infoDialog === "terms" ? "平台协议会在正式发布前接入完整内容。" : "更新日志会按版本整理最近功能与修复。"}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] p-4 text-sm leading-6 text-[var(--app-text-secondary)]">
-            {infoDialog === "terms" ? (
-              <p>使用平台时请遵守账号安全、内容合规和资源使用规则。这里后续可以接入正式服务条款、隐私说明和使用限制。</p>
-            ) : (
-              <p>最近更新包含首页/登录页迁移、统一后台壳、生图工作区修复、时间筛选浮层修复、侧栏菜单整合和主题模式补充。</p>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      <AppModal
+        open={infoDialog !== null}
+        onClose={() => setInfoDialog(null)}
+        title={infoDialogTitle}
+      >
+        <p style={{ marginBottom: 12, fontSize: 13, color: "var(--app-text-muted)", lineHeight: 1.6 }}>
+          {infoDialog === "terms" ? "平台协议会在正式发布前接入完整内容。" : "更新日志会按版本整理最近功能与修复。"}
+        </p>
+        <div style={{ padding: 14, borderRadius: 10, border: "1px solid var(--app-border)", background: "var(--app-bg-surface)", fontSize: 13, lineHeight: 1.6, color: "var(--app-text-secondary)" }}>
+          {infoDialog === "terms" ? (
+            <p>使用平台时请遵守账号安全、内容合规和资源使用规则。这里后续可以接入正式服务条款、隐私说明和使用限制。</p>
+          ) : (
+            <p>最近更新包含首页/登录页迁移、统一后台壳、生图工作区修复、时间筛选浮层修复、侧栏菜单整合和主题模式补充。</p>
+          )}
+        </div>
+      </AppModal>
       <AnnounceModal
         open={popupNotification !== null}
         onClose={() => {

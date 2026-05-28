@@ -16,23 +16,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { AppModal, AppSelect } from "@/components/app-controls";
+import { cn } from "@/lib/utils";
 import {
   createBusinessAPIProvider,
   deleteBusinessAPIProvider,
@@ -44,16 +29,9 @@ import {
   type BusinessAPIProvider,
   type BusinessAPIProviderInput,
 } from "@/lib/api";
-import { cn } from "@/lib/utils";
 
 import { ConfigSection, Field, TooltipDetails } from "./shared";
-import {
-  settingsCounterClass,
-  settingsInputClass,
-  settingsSelectClass,
-  settingsSmallButtonClass,
-  settingsTableWrapClass,
-} from "./styles";
+import { settingsTableWrapClass } from "./styles";
 
 const allFilterValue = "all";
 
@@ -370,92 +348,80 @@ export function APIAccessSection() {
     <ConfigSection
       title="API 接入"
       description="维护图片生成平台的接口地址和密钥。工作台选择平台后，后端会使用该平台当前启用的默认接入。"
-      actions={
-        <>
-          <Button
-            type="button"
-            variant="outline"
-            className={settingsSmallButtonClass}
-            onClick={() => void loadProviders()}
-            disabled={isLoading || isSaving}
-          >
-            {isLoading ? (
-              <LoaderCircle className="size-4 animate-spin" />
-            ) : (
-              <RefreshCw className="size-4" />
-            )}
-            刷新
-          </Button>
-          <Button
-            type="button"
-            className={settingsSmallButtonClass}
-            onClick={openCreateDialog}
-            disabled={isLoading || isSaving}
-          >
-            <Plus className="size-4" />
-            添加账号
-          </Button>
-        </>
-      }
     >
       <div className="md:col-span-2">
-        <div className="mb-3 grid gap-2 lg:grid-cols-[minmax(220px,1fr)_180px_160px]">
-          <div className="relative">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="relative w-[280px] shrink-0">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[var(--app-text-muted)]" />
-            <Input
+            <input
+              className="app-input"
+              style={{ paddingLeft: 36 }}
               value={searchText}
               onChange={(event) => setSearchText(event.target.value)}
               placeholder="搜索名称、平台、Base URL、模型..."
-              className={cn(settingsInputClass, "pl-9")}
             />
           </div>
-          <Select
-            value={platformFilter}
-            onValueChange={(value) =>
-              setPlatformFilter(value as typeof allFilterValue | APIAccessPlatform)
-            }
-          >
-            <SelectTrigger className={settingsSelectClass}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={allFilterValue}>全部平台</SelectItem>
-              {platformOptions.map((item) => (
-                <SelectItem key={item.value} value={item.value}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
-            value={enabledFilter}
-            onValueChange={(value) => setEnabledFilter(value as EnabledFilter)}
-          >
-            <SelectTrigger className={settingsSelectClass}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">全部状态</SelectItem>
-              <SelectItem value="enabled">已启用</SelectItem>
-              <SelectItem value="disabled">已禁用</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="w-[140px] shrink-0">
+            <AppSelect
+              value={platformFilter}
+              onChange={(value) => setPlatformFilter(value as typeof allFilterValue | APIAccessPlatform)}
+              options={[
+                { value: allFilterValue, label: "全部平台" },
+                ...platformOptions.map((item) => ({ value: item.value, label: item.label })),
+              ]}
+            />
+          </div>
+          <div className="w-[140px] shrink-0">
+            <AppSelect
+              value={enabledFilter}
+              onChange={(value) => setEnabledFilter(value as EnabledFilter)}
+              options={[
+                { value: "all", label: "全部状态" },
+                { value: "enabled", label: "已启用" },
+                { value: "disabled", label: "已禁用" },
+              ]}
+            />
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              className="app-btn"
+              onClick={() => void loadProviders()}
+              disabled={isLoading || isSaving}
+            >
+              {isLoading ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <RefreshCw className="size-4" />
+              )}
+              刷新
+            </button>
+            <button
+              type="button"
+              className="app-btn-primary"
+              onClick={openCreateDialog}
+              disabled={isLoading || isSaving}
+            >
+              <Plus className="size-4" />
+              添加账号
+            </button>
+          </div>
         </div>
 
-        <div className="mb-3 flex flex-wrap gap-2 text-xs text-[var(--app-text-muted)]">
-          <span className={settingsCounterClass}>总计 {items.length}</span>
-          <span className="rounded-full bg-emerald-950/30 px-2.5 py-1 text-emerald-200">启用 {enabledCount}</span>
-          <span className={settingsCounterClass}>当前显示 {filteredItems.length}</span>
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span className="app-badge off">总计 {items.length}</span>
+          <span className="app-badge ok">启用 {enabledCount}</span>
+          <span className="app-badge off">当前 {filteredItems.length}</span>
         </div>
 
         <div className={settingsTableWrapClass}>
-          <div className="grid min-w-[1120px] grid-cols-[minmax(190px,1.1fr)_140px_minmax(220px,1.4fr)_minmax(160px,1fr)_120px_280px] border-b border-[var(--app-border)] bg-[var(--app-bg-surface)] px-4 py-3 text-xs font-medium text-[var(--app-text-muted)]">
+          <div className="grid min-w-[1050px] grid-cols-[minmax(100px,0.85fr)_140px_minmax(120px,1.05fr)_minmax(120px,1.3fr)_140px_260px] border-b border-[var(--app-border)] bg-[var(--app-bg-surface)] px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--app-text-muted)]">
             <div>名称</div>
             <div>平台</div>
             <div>Base URL</div>
             <div>模型</div>
             <div>状态</div>
-            <div>操作</div>
+            <div className="text-right">操作</div>
           </div>
           {isLoading ? (
             <div className="flex min-w-[1120px] items-center justify-center gap-2 px-4 py-10 text-sm text-[var(--app-text-muted)]">
@@ -472,9 +438,9 @@ export function APIAccessSection() {
               return (
               <div
                 key={provider.id}
-                className="border-b border-[var(--app-border)] last:border-b-0"
+                className="border-b border-[var(--app-border)] last:border-b-0 transition-colors hover:bg-[var(--app-bg-surface-hover)]"
               >
-                <div className="grid min-w-[1120px] grid-cols-[minmax(190px,1.1fr)_140px_minmax(220px,1.4fr)_minmax(160px,1fr)_120px_280px] items-center px-4 py-3 text-sm">
+                <div className="grid min-w-[1050px] grid-cols-[minmax(100px,0.85fr)_140px_minmax(120px,1.05fr)_minmax(120px,1.3fr)_140px_260px] items-center px-4 py-3 text-sm">
                   <div className="min-w-0">
                     <div className="truncate font-medium text-[var(--app-text-primary)]">{provider.name}</div>
                     <div className="mt-1 text-xs text-[var(--app-text-muted)]">
@@ -482,7 +448,7 @@ export function APIAccessSection() {
                     </div>
                   </div>
                   <div>
-                    <span className="rounded-full bg-[var(--app-bg-surface)] px-2.5 py-1 text-xs font-medium text-[var(--app-text-secondary)]">
+                    <span className="app-badge off">
                       {platformLabel(provider.platform)}
                     </span>
                   </div>
@@ -493,27 +459,22 @@ export function APIAccessSection() {
                     <div className="truncate text-xs text-[var(--app-text-secondary)]">{provider.defaultModel}</div>
                     <div className="mt-1 text-xs text-[var(--app-text-muted)]">Key {maskSecret(provider.apiKey)}</div>
                   </div>
-                  <div className="space-y-1">
-                    <span
-                      className={cn(
-                        "inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium",
-                        provider.enabled
-                          ? "bg-emerald-950/30 text-emerald-200"
-                          : "bg-[var(--app-bg-surface)] text-[var(--app-text-muted)]",
-                      )}
-                    >
-                      {provider.enabled ? <CheckCircle2 className="size-3" /> : <Power className="size-3" />}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className={cn("app-badge", provider.enabled ? "ok" : "off")}>
                       {provider.enabled ? "启用" : "禁用"}
                     </span>
                     {provider.isDefault ? (
-                      <div className="text-xs font-medium text-amber-600">默认</div>
+                      <span className="app-badge warn">
+                        <Star className="size-3" />
+                        默认
+                      </span>
                     ) : null}
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    <Button
+                  <div className="flex items-center justify-end gap-1">
+                    <button
                       type="button"
-                      variant="outline"
-                      className="h-8 px-2.5 text-xs"
+                      className="app-btn"
+                      title={testingId === provider.id ? "测试中" : "测试连通性"}
                       onClick={() => void handleTestProvider(provider)}
                       disabled={busyId === provider.id}
                     >
@@ -522,46 +483,44 @@ export function APIAccessSection() {
                       ) : (
                         <Send className="size-3.5" />
                       )}
-                      {testingId === provider.id ? "测试中" : "测试"}
-                    </Button>
-                    <Button
+                    </button>
+                    <button
                       type="button"
-                      variant="outline"
-                      className="h-8 px-2.5 text-xs"
+                      className="app-btn"
+                      title="编辑"
                       onClick={() => openEditDialog(provider)}
                       disabled={busyId === provider.id}
                     >
                       <Pencil className="size-3.5" />
-                      编辑
-                    </Button>
-                    <Button
+                    </button>
+                    <button
                       type="button"
-                      variant="outline"
-                      className="h-8 px-2.5 text-xs"
+                      className="app-btn"
+                      title={provider.isDefault ? "已是默认接入" : "设为默认接入"}
                       onClick={() => void handleSetDefault(provider)}
                       disabled={provider.isDefault || busyId === provider.id}
                     >
                       <Star className="size-3.5" />
-                      默认
-                    </Button>
-                    <Button
+                    </button>
+                    <button
                       type="button"
-                      variant="outline"
-                      className="h-8 px-2.5 text-xs"
+                      className="app-btn"
+                      title={provider.enabled ? "禁用" : "启用"}
                       onClick={() => void handleToggleEnabled(provider)}
                       disabled={busyId === provider.id}
                     >
-                      {provider.enabled ? "禁用" : "启用"}
-                    </Button>
-                    <Button
+                      <Power className="size-3.5" />
+                    </button>
+                    <button
                       type="button"
-                      variant="destructive"
-                      className="h-8 px-2.5 text-xs"
+                      className="app-btn"
+                      title="删除"
+                      style={{ color: "#fca5a5", borderColor: "rgba(252,165,165,0.32)" }}
                       onClick={() => void handleDelete(provider)}
                       disabled={busyId === provider.id}
                     >
                       <Trash2 className="size-3.5" />
-                    </Button>
+                    </button>
                   </div>
                 </div>
                 {testResult ? (
@@ -602,37 +561,35 @@ export function APIAccessSection() {
         </div>
       </div>
 
-      <Dialog
+      <AppModal
         open={dialogOpen}
-        onOpenChange={(open) => {
-          if (isSaving) {
-            return;
-          }
-          if (open) {
-            setDialogOpen(true);
-            return;
-          }
-          closeDialog();
-        }}
+        onClose={() => { if (!isSaving) closeDialog(); }}
+        title={editingId ? "编辑 API 接入" : "添加 API 接入"}
+        footer={
+          <>
+            <button type="button" className="app-btn" onClick={closeDialog} disabled={isSaving}>
+              取消
+            </button>
+            <button type="button" className="app-btn-primary" onClick={() => void handleSave()} disabled={isSaving}>
+              {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : null}
+              {editingId ? "更新" : "添加"}
+            </button>
+          </>
+        }
       >
-        <DialogContent className="max-h-[90vh] w-[min(92vw,760px)] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{editingId ? "编辑 API 接入" : "添加 API 接入"}</DialogTitle>
-            <DialogDescription>
-              配置业务后台请求上游图片模型时使用的 Base URL、Key 和请求模型。
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="grid gap-4 md:grid-cols-2">
+        <p style={{ marginTop: -4, marginBottom: 14, fontSize: 12, color: "var(--app-text-muted)" }}>
+          配置业务后台请求上游图片模型时使用的 Base URL、Key 和请求模型。
+        </p>
+        <div className="grid gap-4 md:grid-cols-2">
             <Field
               label="名称"
               hint="用于区分不同 API 接入。"
             >
-              <Input
+              <input className="app-input"
                 value={draft.name}
                 onChange={(event) => updateDraft("name", event.target.value)}
                 placeholder="默认 API 接入"
-                className={settingsInputClass}
+               
               />
             </Field>
 
@@ -654,21 +611,11 @@ export function APIAccessSection() {
                 />
               }
             >
-              <Select
+              <AppSelect
                 value={draft.platform}
-                onValueChange={(value) => updateDraft("platform", value as APIAccessPlatform)}
-              >
-                <SelectTrigger className={settingsSelectClass}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {platformOptions.map((item) => (
-                    <SelectItem key={item.value} value={item.value}>
-                      {item.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                onChange={(value) => updateDraft("platform", value as APIAccessPlatform)}
+                options={platformOptions.map((item) => ({ value: item.value, label: item.label }))}
+              />
             </Field>
 
             <Field
@@ -676,7 +623,7 @@ export function APIAccessSection() {
               hint="填写上游服务地址。"
               fullWidth
             >
-              <Input
+              <input className="app-input"
                 value={draft.baseUrl}
                 onChange={(event) => updateDraft("baseUrl", event.target.value)}
                 placeholder={
@@ -684,7 +631,7 @@ export function APIAccessSection() {
                     ? "https://generativelanguage.googleapis.com"
                     : "http://127.0.0.1:8080"
                 }
-                className={settingsInputClass}
+               
               />
             </Field>
 
@@ -697,27 +644,17 @@ export function APIAccessSection() {
               }
             >
               {draft.platform === "gemini-banana" ? (
-                <Select
+                <AppSelect
                   value={draft.defaultModel || defaultModelForPlatform(draft.platform)}
-                  onValueChange={(value) => updateDraft("defaultModel", value)}
-                >
-                  <SelectTrigger className={settingsSelectClass}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {geminiModelOptionsForDraft.map((model) => (
-                      <SelectItem key={model} value={model}>
-                        {model}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  onChange={(value) => updateDraft("defaultModel", value)}
+                  options={geminiModelOptionsForDraft.map((model) => ({ value: model, label: model }))}
+                />
               ) : (
-                <Input
+                <input className="app-input"
                   value={draft.defaultModel}
                   onChange={(event) => updateDraft("defaultModel", event.target.value)}
                   placeholder={defaultModelForPlatform(draft.platform)}
-                  className={settingsInputClass}
+                 
                 />
               )}
             </Field>
@@ -726,58 +663,34 @@ export function APIAccessSection() {
               label="API Key"
               hint="后端请求上游时使用。"
             >
-              <Input
+              <input className="app-input"
                 type="password"
                 value={draft.apiKey}
                 onChange={(event) => updateDraft("apiKey", event.target.value)}
                 placeholder={draft.platform === "gemini-banana" ? "AIza..." : "sk-..."}
-                className={settingsInputClass}
+               
               />
             </Field>
 
             <div className="flex flex-wrap items-center gap-2 md:col-span-2">
-              <Button
+              <button
                 type="button"
-                variant={draft.enabled ? "default" : "outline"}
-                className={settingsSmallButtonClass}
+                className={draft.enabled ? "app-btn-primary" : "app-btn"}
                 onClick={() => updateDraft("enabled", !draft.enabled)}
               >
                 {draft.enabled ? "已启用" : "已禁用"}
-              </Button>
-              <Button
+              </button>
+              <button
                 type="button"
-                variant={draft.isDefault ? "default" : "outline"}
-                className={settingsSmallButtonClass}
+                className={draft.isDefault ? "app-btn-primary" : "app-btn"}
                 onClick={() => updateDraft("isDefault", !draft.isDefault)}
               >
                 <Star className="size-3.5" />
                 {draft.isDefault ? "默认接入" : "设为默认"}
-              </Button>
+              </button>
             </div>
           </div>
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              className="px-4"
-              onClick={closeDialog}
-              disabled={isSaving}
-            >
-              取消
-            </Button>
-            <Button
-              type="button"
-              className="px-4"
-              onClick={() => void handleSave()}
-              disabled={isSaving}
-            >
-              {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : null}
-              {editingId ? "更新" : "添加"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </AppModal>
     </ConfigSection>
   );
 }

@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { useTheme } from "@/components/theme-provider";
+
 type TurnstileWidgetProps = {
   enabled?: boolean;
   siteKey?: string;
@@ -19,7 +21,8 @@ declare global {
         options: {
           sitekey: string;
           action?: string;
-          theme?: "auto";
+          theme?: "auto" | "light" | "dark";
+          size?: "normal" | "flexible" | "compact";
           callback?: (token: string) => void;
           "expired-callback"?: () => void;
           "error-callback"?: () => void;
@@ -75,6 +78,8 @@ export function TurnstileWidget({
   const widgetIdRef = useRef<string>("");
   const [failed, setFailed] = useState(false);
   const normalizedSiteKey = siteKey.trim();
+  const { resolvedThemeMode } = useTheme();
+  const widgetTheme: "light" | "dark" = resolvedThemeMode === "light" ? "light" : "dark";
 
   useEffect(() => {
     if (!enabled || !normalizedSiteKey || !containerRef.current) {
@@ -96,7 +101,8 @@ export function TurnstileWidget({
         widgetIdRef.current = window.turnstile.render(containerRef.current, {
           sitekey: normalizedSiteKey,
           action,
-          theme: "auto",
+          theme: widgetTheme,
+          size: "flexible",
           callback: (token) => onTokenChange(token),
           "expired-callback": () => onTokenChange(""),
           "error-callback": () => {
@@ -119,7 +125,7 @@ export function TurnstileWidget({
         widgetIdRef.current = "";
       }
     };
-  }, [action, enabled, normalizedSiteKey, onTokenChange]);
+  }, [action, enabled, normalizedSiteKey, onTokenChange, widgetTheme]);
 
   useEffect(() => {
     if (!enabled || disabled || !widgetIdRef.current || !window.turnstile) {
@@ -136,11 +142,10 @@ export function TurnstileWidget({
   return (
     <div className="grid gap-2">
       <div
-        className="min-h-[65px] overflow-hidden rounded-lg border border-white/15 bg-[#101723]"
+        ref={containerRef}
+        className="min-h-[65px] w-full"
         aria-disabled={disabled}
-      >
-        <div ref={containerRef} className="min-h-[65px]" />
-      </div>
+      />
       {failed ? (
         <p className="text-xs leading-5 text-rose-200">人机验证加载失败，请刷新页面后重试。</p>
       ) : null}

@@ -36,8 +36,6 @@ import {
 } from "@/components/admin-styles";
 import { AppSelect, AppTimeSeg } from "@/components/app-controls";
 import { timeRangeQuery, type TimeRangeValue } from "@/components/time-range-utils";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   fetchAdminBusinessImageJobs,
   fetchBusinessAPIProviders,
@@ -73,7 +71,7 @@ function runtimeCapacity(runtime: RuntimeStatusResponse | null) {
   };
 }
 
-function databaseName(database: RuntimeStatusResponse["system"]["database"] | undefined) {
+function databaseName(database: NonNullable<RuntimeStatusResponse["system"]>["database"] | undefined) {
   const driver = (database?.driver || "").toLowerCase();
   if (driver === "postgres" || driver === "postgresql") {
     return "PostgreSQL";
@@ -81,7 +79,7 @@ function databaseName(database: RuntimeStatusResponse["system"]["database"] | un
   return database?.name || driver || "数据库";
 }
 
-function databaseSummary(database: RuntimeStatusResponse["system"]["database"] | undefined) {
+function databaseSummary(database: NonNullable<RuntimeStatusResponse["system"]>["database"] | undefined) {
   const driver = (database?.driver || "").toLowerCase();
   if (driver === "postgres" || driver === "postgresql") {
     return `连接 ${numberText(database?.openConns)} / 使用中 ${numberText(database?.inUseConns)}`;
@@ -89,7 +87,7 @@ function databaseSummary(database: RuntimeStatusResponse["system"]["database"] |
   return database?.status || "-";
 }
 
-function databaseDetail(database: RuntimeStatusResponse["system"]["database"] | undefined) {
+function databaseDetail(database: NonNullable<RuntimeStatusResponse["system"]>["database"] | undefined) {
   if (!database) {
     return undefined;
   }
@@ -214,6 +212,13 @@ function jobStatusVariant(status: string): "success" | "warning" | "danger" | "i
   }
 }
 
+function badgeClass(variant: "success" | "warning" | "danger" | "info") {
+  if (variant === "success") return "ok";
+  if (variant === "danger") return "fail";
+  if (variant === "info") return "off";
+  return "warn";
+}
+
 function upstreamJobLabel(job: BusinessImageJob) {
   return job.upstreamSent || job.upstreamStatus === "sent" ? "已发上游" : "未发上游";
 }
@@ -300,7 +305,7 @@ function SystemStatusCard({
         </div>
         <div className="flex shrink-0 flex-col items-end gap-2">
           <Icon className={cn("size-5", color)} />
-          <Badge variant={badgeVariant}>{badge}</Badge>
+          <span className={cn("app-badge", badgeClass(badgeVariant))}>{badge}</span>
         </div>
       </div>
       <div className="mt-3 truncate text-xs text-[var(--app-text-muted)]">{sub}</div>
@@ -615,9 +620,9 @@ export default function OperationsPage() {
             <SectionTitle
               title="上游健康摘要"
               action={
-                <Badge variant={enabledProviders > 0 ? "success" : "danger"}>
+                <span className={cn("app-badge", enabledProviders > 0 ? "ok" : "fail")}>
                   启用 {numberText(enabledProviders)}/{numberText(providers.length)}
-                </Badge>
+                </span>
               }
             />
             <div className="space-y-4 p-4">
@@ -646,12 +651,12 @@ export default function OperationsPage() {
                       <div className="min-w-0 space-y-2">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-medium text-[var(--app-text-primary)]">{provider.name || provider.platform}</span>
-                          <Badge variant={provider.enabled ? "success" : "warning"}>{provider.enabled ? "已启用" : "已禁用"}</Badge>
+                          <span className={cn("app-badge", provider.enabled ? "ok" : "warn")}>{provider.enabled ? "已启用" : "已禁用"}</span>
                           {provider.isDefault ? (
-                            <Badge variant="info">
+                            <span className="app-badge off">
                               <Star className="size-3" />
                               默认
-                            </Badge>
+                            </span>
                           ) : null}
                         </div>
                         <div className="grid gap-2 text-xs text-[var(--app-text-muted)] sm:grid-cols-2">
@@ -677,9 +682,9 @@ export default function OperationsPage() {
               title="最近错误"
               action={
                 tracker?.failed ? (
-                  <Badge variant="warning">近 {numberText(tracker.windowSeconds)} 秒 {numberText(tracker.failed)} 次</Badge>
+                  <span className="app-badge warn">近 {numberText(tracker.windowSeconds)} 秒 {numberText(tracker.failed)} 次</span>
                 ) : (
-                  <Badge variant="success">暂无错误</Badge>
+                  <span className="app-badge ok">暂无错误</span>
                 )
               }
             />
@@ -795,7 +800,7 @@ export default function OperationsPage() {
                       <tr key={job.id} className={cn(adminTableRowClass, "align-top text-[var(--app-text-secondary)]")}>
                         <td className="px-4 py-3">
                           <div className="space-y-1">
-                            <Badge variant={jobStatusVariant(job.status)}>{jobStatusLabel(job.status)}</Badge>
+                            <span className={cn("app-badge", badgeClass(jobStatusVariant(job.status)))}>{jobStatusLabel(job.status)}</span>
                             <div className="font-mono text-[11px] text-[var(--app-text-muted)]">{job.stage || "-"}</div>
                           </div>
                         </td>
@@ -819,7 +824,7 @@ export default function OperationsPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3">
-                          <Badge variant={upstreamJobVariant(job)}>{upstreamJobLabel(job)}</Badge>
+                          <span className={cn("app-badge", badgeClass(upstreamJobVariant(job)))}>{upstreamJobLabel(job)}</span>
                           <div className="mt-1 font-mono text-[11px] text-[var(--app-text-muted)]">{job.upstreamStatus || "pending"}</div>
                         </td>
                         <td className="px-4 py-3">

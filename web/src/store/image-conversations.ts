@@ -358,7 +358,7 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
 }
 
 function normalizeImageQuality(
-  value: ImageConversationTurn["quality"],
+  value: string | undefined,
 ): ImageQuality | undefined {
   return value === "low" || value === "medium" || value === "high"
     ? value

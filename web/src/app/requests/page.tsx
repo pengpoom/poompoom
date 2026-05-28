@@ -4,16 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Activity, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { AppSelect } from "@/components/app-controls";
 import { fetchRequestLogs, type RequestLogItem } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -89,10 +80,9 @@ export default function RequestsPage() {
               </h1>
             </div>
           </div>
-          <Button
+          <button
             type="button"
-            variant="outline"
-            className="h-10 w-full rounded-full border-stone-200 bg-white px-4 text-stone-700 shadow-none sm:w-auto"
+            className="app-btn h-10 w-full rounded-full border-stone-200 bg-white px-4 text-stone-700 shadow-none sm:w-auto"
             onClick={() => void loadItems()}
             disabled={isLoading}
           >
@@ -102,11 +92,11 @@ export default function RequestsPage() {
               <RefreshCw className="size-4" />
             )}
             刷新记录
-          </Button>
+          </button>
         </section>
 
-        <Card className="mt-5 overflow-hidden rounded-2xl border-white/80 bg-white/90 shadow-sm lg:flex-1 lg:min-h-0">
-          <CardContent className="p-0 lg:flex lg:h-full lg:min-h-0 lg:flex-col">
+        <div className="mt-5 overflow-hidden rounded-2xl border border-white/80 bg-white/90 shadow-sm lg:flex-1 lg:min-h-0">
+          <div className="p-0 lg:flex lg:h-full lg:min-h-0 lg:flex-col">
                 <div className="space-y-4 p-4 lg:hidden">
                   {currentRows.map((item) => (
                     <div
@@ -124,35 +114,21 @@ export default function RequestsPage() {
                               : "进行中"}
                           </div>
                         </div>
-                        <Badge
-                          variant={item.success ? "success" : "danger"}
-                          className="w-fit shrink-0 rounded-md px-2 py-1"
-                        >
+                        <span className={cn("app-badge w-fit shrink-0", item.success ? "ok" : "fail")}>
                           {item.success ? "成功" : "失败"}
-                        </Badge>
+                        </span>
                       </div>
 
                       <div className="mt-3 flex flex-wrap gap-2">
-                        <Badge
-                          variant="secondary"
-                          className="rounded-md bg-stone-100 text-stone-700"
-                        >
+                        <span className="app-badge off">
                           {item.operation || "—"}
-                        </Badge>
-                        <Badge
-                          variant="secondary"
-                          className="rounded-md bg-stone-100 text-stone-700"
-                        >
+                        </span>
+                        <span className="app-badge off">
                           {item.imageMode || "studio"}
-                        </Badge>
-                        <Badge
-                          variant={
-                            item.direction === "cpa" ? "info" : "success"
-                          }
-                          className="rounded-md px-2 py-1"
-                        >
+                        </span>
+                        <span className={cn("app-badge", item.direction === "cpa" ? "warn" : "ok")}>
                           {item.direction === "cpa" ? "CPA" : "官方"}
-                        </Badge>
+                        </span>
                       </div>
 
                       <div className="mt-3 grid grid-cols-1 gap-3 text-sm text-stone-600 sm:grid-cols-2">
@@ -284,22 +260,14 @@ export default function RequestsPage() {
                                 {item.operation || "—"}
                               </td>
                               <td className="px-4 py-3 whitespace-nowrap">
-                                <Badge
-                                  variant="secondary"
-                                  className="rounded-md bg-stone-100 text-stone-700"
-                                >
+                                <span className="app-badge off">
                                   {item.imageMode || "studio"}
-                                </Badge>
+                                </span>
                               </td>
                               <td className="px-4 py-3 whitespace-nowrap">
-                                <Badge
-                                  variant={
-                                    item.direction === "cpa" ? "info" : "success"
-                                  }
-                                  className="rounded-md px-2 py-1"
-                                >
+                                <span className={cn("app-badge", item.direction === "cpa" ? "warn" : "ok")}>
                                   {item.direction === "cpa" ? "CPA" : "官方"}
-                                </Badge>
+                                </span>
                               </td>
                               <td className="px-4 py-3 whitespace-nowrap">
                                 {item.route || "—"}
@@ -358,12 +326,9 @@ export default function RequestsPage() {
                                 </div>
                               </td>
                               <td className="px-4 py-3 whitespace-nowrap">
-                                <Badge
-                                  variant={item.success ? "success" : "danger"}
-                                  className="rounded-md px-2 py-1"
-                                >
+                                <span className={cn("app-badge", item.success ? "ok" : "fail")}>
                                   {item.success ? "成功" : "失败"}
-                                </Badge>
+                                </span>
                               </td>
                               <td className="px-4 py-3">
                                 <div
@@ -393,32 +358,29 @@ export default function RequestsPage() {
                       <span className="shrink-0 text-sm leading-none text-stone-500">
                         {safePage} / {pageCount} 页
                       </span>
-                      <Select
-                        value={pageSize}
-                        onValueChange={(value) => {
-                          setPageSize(value);
-                          setPage(1);
-                        }}
-                      >
-                        <SelectTrigger className="h-10 w-[108px] shrink-0 rounded-lg border-stone-200 bg-white text-sm leading-none">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="10">10 / 页</SelectItem>
-                          <SelectItem value="20">20 / 页</SelectItem>
-                          <SelectItem value="50">50 / 页</SelectItem>
-                          <SelectItem value="100">100 / 页</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="size-10 shrink-0 rounded-lg border-stone-200 bg-white"
+                      <div className="w-[108px] shrink-0">
+                        <AppSelect
+                          value={pageSize}
+                          onChange={(value) => {
+                            setPageSize(value);
+                            setPage(1);
+                          }}
+                          options={[
+                            { value: "10", label: "10 / 页" },
+                            { value: "20", label: "20 / 页" },
+                            { value: "50", label: "50 / 页" },
+                            { value: "100", label: "100 / 页" },
+                          ]}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        className="app-btn size-10 shrink-0 rounded-lg"
                         disabled={safePage <= 1}
                         onClick={() => setPage((prev) => Math.max(1, prev - 1))}
                       >
                         <ChevronLeft className="size-4" />
-                      </Button>
+                      </button>
                       {paginationItems.map((item, index) =>
                         item === "..." ? (
                           <span
@@ -428,32 +390,29 @@ export default function RequestsPage() {
                             ...
                           </span>
                         ) : (
-                          <Button
+                          <button
+                            type="button"
                             key={item}
-                            variant={item === safePage ? "default" : "outline"}
                             className={cn(
                               "h-10 min-w-10 shrink-0 rounded-lg px-3",
-                              item === safePage
-                                ? "bg-stone-950 text-white hover:bg-stone-800"
-                                : "border-stone-200 bg-white text-stone-700",
+                              item === safePage ? "app-btn-primary" : "app-btn",
                             )}
                             onClick={() => setPage(item)}
                           >
                             {item}
-                          </Button>
+                          </button>
                         ),
                       )}
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="size-10 shrink-0 rounded-lg border-stone-200 bg-white"
+                      <button
+                        type="button"
+                        className="app-btn size-10 shrink-0 rounded-lg"
                         disabled={safePage >= pageCount}
                         onClick={() =>
                           setPage((prev) => Math.min(pageCount, prev + 1))
                         }
                       >
                         <ChevronRight className="size-4" />
-                      </Button>
+                      </button>
                     </div>
                   </div>
                 ) : null}
@@ -473,8 +432,8 @@ export default function RequestsPage() {
                     </div>
                   </div>
                 ) : null}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
     </section>
   );

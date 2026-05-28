@@ -5,8 +5,6 @@ import { CircleHelp } from "lucide-react";
 
 import { AdminPanel } from "@/components/admin-layout";
 import { adminSubPanelClass } from "@/components/admin-styles";
-import { CardContent } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import type { ConfigPayload } from "@/lib/api";
 
@@ -77,7 +75,7 @@ export function ConfigSection({
 }) {
   return (
     <AdminPanel>
-      <CardContent className="space-y-4 p-4 sm:space-y-5 sm:p-6">
+      <div className="space-y-4 p-4 sm:space-y-5 sm:p-6">
         <div className="flex flex-col gap-2 sm:gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <div className="text-[15px] font-semibold tracking-tight text-[var(--app-text-primary)] sm:text-base">{title}</div>
@@ -86,7 +84,7 @@ export function ConfigSection({
           {actions ? <div className="flex shrink-0 flex-wrap items-center gap-1.5 sm:gap-2">{actions}</div> : null}
         </div>
         <div className="grid gap-3 md:grid-cols-2 md:gap-4">{children}</div>
-      </CardContent>
+      </div>
     </AdminPanel>
   );
 }
@@ -130,14 +128,19 @@ export function ToggleField({
 }) {
   return (
     <div className={cn(adminSubPanelClass, "p-3 md:col-span-2 sm:p-4")}>
-      <div className="flex items-start gap-2.5 sm:gap-3">
-        <Checkbox checked={checked} onCheckedChange={(value) => onCheckedChange(Boolean(value))} />
+      <div className="flex items-center justify-between gap-2.5 sm:gap-3">
         <div className="min-w-0">
           <div className="text-[13px] font-medium text-[var(--app-text-secondary)] sm:text-sm">
             <LabelWithHint label={label} tooltip={tooltip ?? hint} />
           </div>
           <div className="mt-1 hidden text-xs leading-5 text-[var(--app-text-muted)] sm:block">{hint}</div>
         </div>
+        <button
+          type="button"
+          className={cn("app-switch", checked && "on")}
+          aria-label={typeof label === "string" ? label : "toggle"}
+          onClick={() => onCheckedChange(!checked)}
+        />
       </div>
     </div>
   );

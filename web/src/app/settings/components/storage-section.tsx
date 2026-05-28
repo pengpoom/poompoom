@@ -1,17 +1,9 @@
 "use client";
 
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { AppSelect } from "@/components/app-controls";
 import type { ConfigPayload } from "@/lib/api";
 
 import { ConfigSection, Field, TooltipDetails, type SetConfigSection } from "./shared";
-import { settingsInputClass, settingsSelectClass } from "./styles";
 
 type StorageSectionProps = {
   config: ConfigPayload;
@@ -57,40 +49,32 @@ export function StorageSection({ config, setSection }: StorageSectionProps) {
           />
         }
       >
-        <Select
+        <AppSelect
           value={accountStorageBackend}
-          onValueChange={(value) => setSection("storage", { ...config.storage, backend: value })}
-        >
-          <SelectTrigger className={settingsSelectClass}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="current">本地文件</SelectItem>
-            <SelectItem value="redis">Redis</SelectItem>
-          </SelectContent>
-        </Select>
+          onChange={(value) => setSection("storage", { ...config.storage, backend: value })}
+          options={[
+            { value: "current", label: "本地文件" },
+            { value: "redis", label: "Redis" },
+          ]}
+        />
       </Field>
       <Field label="配置文件存储" hint="决定配置管理页点击保存后，配置写到本地 config.toml 还是 Redis。">
-        <Select
+        <AppSelect
           value={config.storage.configBackend === "redis" ? "redis" : "file"}
-          onValueChange={(value) => setSection("storage", { ...config.storage, configBackend: value })}
-        >
-          <SelectTrigger className={settingsSelectClass}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="file">file</SelectItem>
-            <SelectItem value="redis">redis</SelectItem>
-          </SelectContent>
-        </Select>
+          onChange={(value) => setSection("storage", { ...config.storage, configBackend: value })}
+          options={[
+            { value: "file", label: "file" },
+            { value: "redis", label: "redis" },
+          ]}
+        />
       </Field>
       <Field
         label="会话记录存储"
         hint={`切换后保存配置时会自动迁移现有图片会话记录；从${serverConversationStorageLabel}切回浏览器时，需要把历史图片下载回当前浏览器。${serverConversationStorageHint}`}
       >
-        <Select
+        <AppSelect
           value={imageConversationStorage}
-          onValueChange={(value) =>
+          onChange={(value) =>
             setSection("storage", {
               ...config.storage,
               imageConversationStorage: value,
@@ -98,15 +82,11 @@ export function StorageSection({ config, setSection }: StorageSectionProps) {
               imageStorage: value,
             })
           }
-        >
-          <SelectTrigger className={settingsSelectClass}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="browser">浏览器存储</SelectItem>
-            <SelectItem value="server">{serverConversationStorageLabel}</SelectItem>
-          </SelectContent>
-        </Select>
+          options={[
+            { value: "browser", label: "浏览器存储" },
+            { value: "server", label: serverConversationStorageLabel },
+          ]}
+        />
       </Field>
       <Field
         label="图片数据存储"
@@ -116,9 +96,9 @@ export function StorageSection({ config, setSection }: StorageSectionProps) {
             : "当前会话记录使用浏览器存储，图片数据会随会话一起保存在浏览器 local；切换后保存配置时会自动迁移。"
         }
       >
-        <Select
+        <AppSelect
           value={imageDataStorage}
-          onValueChange={(value) =>
+          onChange={(value) =>
             setSection("storage", {
               ...config.storage,
               imageConversationStorage: value,
@@ -126,15 +106,11 @@ export function StorageSection({ config, setSection }: StorageSectionProps) {
               imageStorage: value,
             })
           }
-        >
-          <SelectTrigger className={settingsSelectClass}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="browser" disabled={imageConversationStorage === "server"}>浏览器 local</SelectItem>
-            <SelectItem value="server" disabled={imageConversationStorage !== "server"}>本地/服务器目录</SelectItem>
-          </SelectContent>
-        </Select>
+          options={[
+            { value: "browser", label: "浏览器 local", disabled: imageConversationStorage === "server" },
+            { value: "server", label: "本地/服务器目录", disabled: imageConversationStorage !== "server" },
+          ]}
+        />
       </Field>
       {shouldShowRedisFields ? (
         <>
@@ -148,22 +124,23 @@ export function StorageSection({ config, setSection }: StorageSectionProps) {
                   : "仅配置文件存储使用这组 Redis 连接。"
             }
           >
-            <Input
+            <input
+              className="app-input"
               value={config.storage.redisAddr}
               onChange={(event) => setSection("storage", { ...config.storage, redisAddr: event.target.value })}
-              className={settingsInputClass}
             />
           </Field>
           <Field label="Redis 密码" hint="Redis 无密码可留空。">
-            <Input
+            <input
+              className="app-input"
               type="password"
               value={config.storage.redisPassword}
               onChange={(event) => setSection("storage", { ...config.storage, redisPassword: event.target.value })}
-              className={settingsInputClass}
             />
           </Field>
           <Field label="Redis DB" hint="默认 0。">
-            <Input
+            <input
+              className="app-input"
               type="number"
               value={String(config.storage.redisDb)}
               onChange={(event) =>
@@ -172,14 +149,13 @@ export function StorageSection({ config, setSection }: StorageSectionProps) {
                   redisDb: Number(event.target.value || 0),
                 })
               }
-              className={settingsInputClass}
             />
           </Field>
           <Field label="Redis Key 前缀" hint="避免和其他业务共享 Redis 时键名冲突。">
-            <Input
+            <input
+              className="app-input"
               value={config.storage.redisPrefix}
               onChange={(event) => setSection("storage", { ...config.storage, redisPrefix: event.target.value })}
-              className={settingsInputClass}
             />
           </Field>
         </>

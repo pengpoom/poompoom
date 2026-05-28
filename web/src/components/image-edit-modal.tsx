@@ -5,16 +5,7 @@ import { ArrowUp, Brush, ChevronDown, Cpu, LoaderCircle, Redo2, Trash2, Undo2, X
 import { toast } from "sonner";
 
 import type { APIAccessPlatform } from "@/lib/api";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+import { ChipSelect } from "@/components/chip-select";
 import { cn } from "@/lib/utils";
 
 type StrokePoint = {
@@ -542,23 +533,23 @@ export function ImageEditModal({
                 <span className="hidden text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--app-text-muted)] sm:inline sm:text-xs">
                   笔刷
                 </span>
-                <Input
+                <input
                   type="range"
                   min="16"
                   max="96"
                   step="2"
                   value={brushSize}
                   onChange={(event) => setBrushSize(Number(event.target.value))}
-                  className="h-8 w-[112px] border-0 bg-transparent px-0 sm:w-[148px]"
+                  className="h-8 w-[112px] sm:w-[148px]"
+                  style={{ accentColor: "var(--app-text-primary)" }}
                 />
                 <span className="min-w-9 text-right text-sm font-medium text-[var(--app-text-secondary)]">
                   {brushSize}px
                 </span>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-9 w-9 rounded-full px-0 sm:h-10 sm:w-auto sm:px-4"
+              <button
+                type="button"
+                className="app-btn"
                 onClick={handleUndo}
                 disabled={!hasSelection || isSubmitting}
                 aria-label="撤销"
@@ -566,11 +557,10 @@ export function ImageEditModal({
               >
                 <Undo2 className="size-4" />
                 <span className="hidden sm:inline">撤销</span>
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-9 w-9 rounded-full px-0 sm:h-10 sm:w-auto sm:px-4"
+              </button>
+              <button
+                type="button"
+                className="app-btn"
                 onClick={handleRedo}
                 disabled={redoStrokes.length === 0 || isSubmitting}
                 aria-label="重做"
@@ -578,11 +568,10 @@ export function ImageEditModal({
               >
                 <Redo2 className="size-4" />
                 <span className="hidden sm:inline">重做</span>
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-9 w-9 rounded-full px-0 sm:h-10 sm:w-auto sm:px-4"
+              </button>
+              <button
+                type="button"
+                className="app-btn"
                 onClick={handleClear}
                 disabled={(!hasSelection && !currentStroke) || isSubmitting}
                 aria-label="清空"
@@ -590,20 +579,16 @@ export function ImageEditModal({
               >
                 <Trash2 className="size-4" />
                 <span className="hidden sm:inline">清空</span>
-              </Button>
-              <Button
-                variant={selectionMode ? "default" : "outline"}
-                size="sm"
-                className={cn(
-                  "h-9 rounded-full px-3 sm:h-10 sm:px-4",
-                  selectionMode ? "bg-[var(--app-text-primary)] text-[var(--app-bg-root)] hover:bg-white" : "",
-                )}
+              </button>
+              <button
+                type="button"
+                className={selectionMode ? "app-btn-primary" : "app-btn"}
                 onClick={() => setSelectionMode((value) => !value)}
                 disabled={isSubmitting}
               >
                 <Brush className="size-4" />
                 <span>{selectionMode ? "选择中" : "选择"}</span>
-              </Button>
+              </button>
             </div>
           </div>
         </header>
@@ -688,105 +673,41 @@ export function ImageEditModal({
             <div className="min-w-0 flex-1">
               {allowOutputOptions ? (
                 <div className="hide-scrollbar -mx-1 mb-2 flex items-center gap-2 overflow-x-auto px-1 pb-1">
-                  <Select
+                  <ChipSelect<APIAccessPlatform>
                     value={providerPlatform}
-                    onValueChange={(value) =>
-                      onProviderPlatformChange?.(value as APIAccessPlatform)
-                    }
-                  >
-                    <SelectTrigger className="h-9 w-[156px] shrink-0 rounded-full border-[var(--app-border)] bg-[var(--app-bg-surface)] text-[13px] font-medium text-[var(--app-text-secondary)] shadow-none focus-visible:ring-0 sm:w-[172px] sm:text-sm">
-                      <Cpu className="size-4 shrink-0" />
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {providerPlatformOptions.map((item) => (
-                        <SelectItem
-                          key={item.value}
-                          value={item.value}
-                          disabled={item.disabled}
-                        >
-                          {item.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    options={providerPlatformOptions.map((item) => ({ value: item.value as APIAccessPlatform, label: item.label, disabled: item.disabled }))}
+                    onChange={(value) => onProviderPlatformChange?.(value)}
+                    triggerClassName="app-cs-trigger"
+                    triggerIcon={<Cpu className="size-4 shrink-0" />}
+                    triggerLabel={providerPlatformOptions.find((item) => item.value === providerPlatform)?.label ?? providerPlatform}
+                  />
 
-                  <Select
+                  <ChipSelect<string>
                     value={imageAspectRatio}
-                    onValueChange={(value) => onImageAspectRatioChange?.(value)}
-                  >
-                    <SelectTrigger className="h-9 w-[88px] shrink-0 rounded-full border-[var(--app-border)] bg-[var(--app-bg-surface)] text-[13px] font-medium text-[var(--app-text-secondary)] shadow-none focus-visible:ring-0 sm:w-[108px] sm:text-sm">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {imageAspectRatioOptions.map((item) => (
-                        <SelectItem key={item.value} value={item.value}>
-                          {item.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    options={imageAspectRatioOptions}
+                    onChange={(value) => onImageAspectRatioChange?.(value)}
+                    triggerClassName="app-cs-trigger"
+                    triggerLabel={imageAspectRatioOptions.find((item) => item.value === imageAspectRatio)?.label ?? imageAspectRatio}
+                  />
 
-                  <Select
+                  <ChipSelect<string>
                     value={imageResolutionTier}
-                    onValueChange={(value) =>
-                      onImageResolutionTierChange?.(value)
-                    }
-                  >
-                    <SelectTrigger
-                      className="h-9 w-[168px] shrink-0 rounded-full border-[var(--app-border)] bg-[var(--app-bg-surface)] text-[13px] font-medium text-[var(--app-text-secondary)] shadow-none focus-visible:ring-0 sm:w-[238px] sm:text-sm"
-                      title={currentResolutionTierLabel}
-                    >
-                      <SelectValue>{currentResolutionTierLabel}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {imageResolutionTierOptions.map((item) => (
-                        <SelectItem
-                          key={item.value}
-                          value={item.value}
-                          disabled={item.disabled}
-                        >
-                          {item.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    options={imageResolutionTierOptions}
+                    onChange={(value) => onImageResolutionTierChange?.(value)}
+                    triggerClassName="app-cs-trigger"
+                    triggerLabel={currentResolutionTierLabel}
+                    title={currentResolutionTierLabel}
+                  />
 
-                  <Select
+                  <ChipSelect<string>
                     value={imageQuality}
-                    onValueChange={(value) => onImageQualityChange?.(value)}
+                    options={imageQualityOptions.map((item) => ({ value: item.value, label: `质量 ${item.label}`, description: item.description }))}
+                    onChange={(value) => onImageQualityChange?.(value)}
+                    triggerClassName="app-cs-trigger"
+                    triggerLabel={`质量 ${imageQualityOptions.find((item) => item.value === imageQuality)?.label ?? imageQuality}`}
                     disabled={imageQualityDisabled}
-                  >
-                    <SelectTrigger
-                      className={cn(
-                        "h-9 w-[118px] shrink-0 rounded-full border-[var(--app-border)] bg-[var(--app-bg-surface)] text-[13px] font-medium text-[var(--app-text-secondary)] shadow-none focus-visible:ring-0 sm:w-[136px] sm:text-sm",
-                        imageQualityDisabled &&
-                          "cursor-not-allowed bg-[var(--app-bg-sidebar)] text-[var(--app-text-muted)] opacity-80",
-                      )}
-                      title={
-                        imageQualityDisabled
-                          ? imageQualityDisabledReason
-                          : imageQualityOptions.find(
-                              (item) => item.value === imageQuality,
-                            )?.description
-                      }
-                    >
-                      <SelectValue>
-                        {`质量 ${
-                          imageQualityOptions.find(
-                            (item) => item.value === imageQuality,
-                          )?.label ?? imageQuality
-                        }`}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {imageQualityOptions.map((item) => (
-                        <SelectItem key={item.value} value={item.value}>
-                          <span title={item.description}>{`质量 ${item.label}`}</span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    title={imageQualityDisabled ? imageQualityDisabledReason : imageQualityOptions.find((item) => item.value === imageQuality)?.description}
+                  />
                 </div>
               ) : null}
             <div className="relative">
@@ -803,12 +724,12 @@ export function ImageEditModal({
                 >
                   <ChevronDown className="size-4" />
                 </button>
-                <Textarea
+                <textarea
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
                   onFocus={() => setIsPromptExpanded(true)}
                   placeholder="描述要怎么改"
-                  className="min-h-[72px] max-h-[180px] resize-none overflow-y-auto rounded-none border-0 bg-transparent px-1 py-1 pr-12 text-[14px] leading-6 text-[var(--app-text-primary)] shadow-none focus-visible:ring-0 sm:min-h-[88px] sm:max-h-none sm:pr-14 sm:text-[15px] sm:leading-7"
+                  className="pc-textarea min-h-[72px] max-h-[180px] pr-12 text-[14px] leading-6 sm:min-h-[88px] sm:max-h-none sm:pr-14 sm:text-[15px] sm:leading-7"
                 />
                 </>
               ) : (
@@ -820,26 +741,26 @@ export function ImageEditModal({
                   >
                     <span className="block w-full truncate">{prompt.trim() || "描述要怎么改"}</span>
                   </button>
-                  <Textarea
+                  <textarea
                     value={prompt}
                     onChange={(event) => setPrompt(event.target.value)}
                     onFocus={() => setIsPromptExpanded(true)}
                     placeholder="描述要怎么改"
-                    className="hidden min-h-[88px] resize-none rounded-none border-0 bg-transparent px-1 py-1 text-[15px] leading-7 text-[var(--app-text-primary)] shadow-none focus-visible:ring-0 sm:block"
+                    className="pc-textarea hidden min-h-[88px] text-[15px] leading-7 sm:block"
                   />
                 </>
               )}
             </div>
             <div className="absolute right-3 bottom-2.5 flex shrink-0 items-end sm:right-5 sm:bottom-4">
-              <Button
-                size="icon"
-                className="size-9 rounded-full bg-[var(--app-text-primary)] text-[var(--app-bg-root)] hover:bg-white sm:size-11"
+              <button
+                type="button"
+                className="pc-submit"
                 onClick={() => void handleSubmit()}
                 disabled={isSubmitting}
                 aria-label="提交编辑"
               >
                 {isSubmitting ? <LoaderCircle className="size-4 animate-spin sm:size-5" /> : <ArrowUp className="size-4 sm:size-5" />}
-              </Button>
+              </button>
             </div>
           </div>
           </div>

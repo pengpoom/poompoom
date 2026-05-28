@@ -390,15 +390,16 @@ function GeneratedImageCard({
             </div>
           </>
         ) : image.status === "success" && imageLoadFailed ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 bg-rose-950/20 px-6 py-8 text-center text-rose-300">
-            <div className="rounded-full bg-rose-500/10 p-3">
+          <div className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--app-img-fail-bg)] px-6 py-8 text-center text-[var(--app-img-fail-fg)]">
+            <div className="rounded-full bg-[var(--app-img-fail-ic-bg)] p-3">
               <X className="size-5" />
             </div>
             <p className="text-sm font-bold">图片加载失败</p>
-            <p className="text-xs leading-6 text-rose-200/80">图片地址不可用或文件暂时无法访问。</p>
+            <p className="text-xs leading-6 text-[var(--app-img-fail-sub)]">图片地址不可用或文件暂时无法访问。</p>
             <button
               type="button"
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-rose-300/25 px-3 text-xs font-semibold text-rose-100 transition hover:bg-rose-300/10 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
+              style={{ borderColor: "var(--app-img-fail-btn-bd)", color: "var(--app-img-fail-btn-fg)" }}
               onClick={() => void onRetryTurn(conversationId, turn, index)}
               disabled={turnProcessing}
             >
@@ -411,7 +412,7 @@ function GeneratedImageCard({
             本次生成已取消
           </div>
         ) : image.status === "error" ? (
-          <div className="flex h-full items-center justify-center whitespace-pre-line bg-rose-950/20 px-6 py-8 text-center text-sm font-semibold leading-7 text-rose-300">
+          <div className="flex h-full items-center justify-center whitespace-pre-line bg-[var(--app-img-fail-bg)] px-6 py-8 text-center text-sm font-semibold leading-7 text-[var(--app-img-fail-fg)]">
             {formatImageErrorMessage(image.error || "处理失败")}
           </div>
         ) : (

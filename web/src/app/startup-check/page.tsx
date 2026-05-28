@@ -6,22 +6,14 @@ import { toast } from "sonner";
 
 import { AdminHeader, AdminPage, AdminPanel } from "@/components/admin-layout";
 import { adminSubPanelClass } from "@/components/admin-styles";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { downloadDiagnosticsExport, fetchStartupCheck, type StartupCheckResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-function statusBadgeVariant(status: string): "success" | "warning" | "danger" | "secondary" {
-  if (status === "pass") {
-    return "success";
-  }
-  if (status === "warn") {
-    return "warning";
-  }
-  if (status === "fail") {
-    return "danger";
-  }
-  return "secondary";
+function statusBadgeClass(status: string) {
+  if (status === "pass") return "ok";
+  if (status === "warn") return "warn";
+  if (status === "fail") return "fail";
+  return "off";
 }
 
 function statusLabel(status: string) {
@@ -100,26 +92,24 @@ export default function StartupCheckPage() {
           }
           actions={
             <>
-              <Button
+              <button
                 type="button"
-                variant="outline"
-                className="h-10 px-4"
+                className="app-btn"
                 onClick={() => void runCheck()}
                 disabled={isLoading}
               >
                 <RefreshCw className={isLoading ? "size-4 animate-spin" : "size-4"} />
                 重新检测
-              </Button>
-              <Button
+              </button>
+              <button
                 type="button"
-                variant="outline"
-                className="h-10 px-4"
+                className="app-btn"
                 onClick={() => void handleDownloadDiagnostics()}
                 disabled={isDownloading}
               >
                 <Download className={isDownloading ? "size-4 animate-pulse" : "size-4"} />
                 导出诊断包
-              </Button>
+              </button>
             </>
           }
         >
@@ -134,7 +124,7 @@ export default function StartupCheckPage() {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm font-semibold text-[var(--app-text-primary)]">{item.label}</div>
                   <div className="flex items-center gap-2">
-                    <Badge variant={statusBadgeVariant(item.status)}>{statusLabel(item.status)}</Badge>
+                    <span className={`app-badge ${statusBadgeClass(item.status)}`}>{statusLabel(item.status)}</span>
                     <span className="text-xs text-[var(--app-text-muted)]">{item.durationMs} ms</span>
                   </div>
                 </div>

@@ -4,8 +4,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperti
 import { createPortal } from "react-dom";
 import { CalendarDays, ChevronDown } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { TimeRangePreset, TimeRangeValue } from "@/components/time-range-utils";
 
@@ -183,10 +181,10 @@ export function TimeRangeFilter({
 
   return (
     <div ref={rootRef} className={cn("relative", className)}>
-      <Button
+      <button
         type="button"
-        variant="outline"
-        className="h-10 w-full justify-between rounded-full border-[var(--app-border)] bg-white/[0.055] px-4 text-[var(--app-text-primary)] shadow-none backdrop-blur-xl hover:bg-white/[0.085]"
+        className="app-cs-trigger"
+        style={{ width: "100%", justifyContent: "space-between" }}
         onClick={() => setOpen((current) => !current)}
       >
         <span className="inline-flex min-w-0 items-center gap-2">
@@ -194,7 +192,7 @@ export function TimeRangeFilter({
           <span className="truncate">{buttonLabel}</span>
         </span>
         <ChevronDown className={cn("size-4 shrink-0 text-[var(--app-text-muted)] transition", open ? "rotate-180" : "")} />
-      </Button>
+      </button>
 
       {mounted && open && panelStyle ? createPortal(
         <div
@@ -224,32 +222,32 @@ export function TimeRangeFilter({
           <div className="grid gap-3 border-t border-[var(--app-border)] p-4 sm:grid-cols-[1fr_auto_1fr] sm:items-end">
             <label className="grid gap-1.5 text-xs text-[var(--app-text-muted)]">
               开始日期
-              <Input
+              <input
                 type="date"
+                className="app-input"
                 value={draft.from}
                 onChange={(event) => setDraft((current) => ({ ...current, preset: "custom", from: event.target.value }))}
-                className="h-10 rounded-xl border-[var(--app-border)] bg-white/[0.055] text-[var(--app-text-primary)]"
               />
             </label>
             <span className="hidden pb-2 text-[var(--app-text-muted)] sm:block">{"->"}</span>
             <label className="grid gap-1.5 text-xs text-[var(--app-text-muted)]">
               结束日期
-              <Input
+              <input
                 type="date"
+                className="app-input"
                 value={draft.to}
                 onChange={(event) => setDraft((current) => ({ ...current, preset: "custom", to: event.target.value }))}
-                className="h-10 rounded-xl border-[var(--app-border)] bg-white/[0.055] text-[var(--app-text-primary)]"
               />
             </label>
           </div>
 
           <div className="flex justify-end gap-2 px-4 pb-4">
-            <Button type="button" variant="outline" className="rounded-xl" onClick={() => setOpen(false)}>
+            <button type="button" className="app-btn" onClick={() => setOpen(false)}>
               取消
-            </Button>
-            <Button type="button" className="rounded-xl" onClick={apply}>
+            </button>
+            <button type="button" className="app-btn-primary" onClick={apply}>
               应用
-            </Button>
+            </button>
           </div>
         </div>
       , document.body) : null}

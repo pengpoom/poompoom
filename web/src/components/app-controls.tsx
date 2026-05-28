@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Calendar, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 
@@ -195,7 +195,7 @@ export function AppModal({
 
 /* ── AppSelect ── */
 
-export type AppSelectOption = { value: string; label: string };
+export type AppSelectOption = { value: string; label: string; disabled?: boolean };
 
 export function AppSelect({
   value,
@@ -203,47 +203,109 @@ export function AppSelect({
   options,
   placeholder = "请选择",
   className,
+  disabled,
 }: {
   value: string;
   onChange: (value: string) => void;
   options: AppSelectOption[];
   placeholder?: string;
   className?: string;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [panelStyle, setPanelStyle] = useState<CSSProperties | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const closePanel = useCallback(() => {
+    setOpen(false);
+    setPanelStyle(null);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const button = triggerRef.current;
+      if (!button) return;
+      const rect = button.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const margin = 12;
+      const gap = 6;
+      const panelWidth = rect.width;
+      const panelHeight = panelRef.current?.offsetHeight || 0;
+      const left = Math.min(Math.max(rect.left, margin), Math.max(margin, viewportWidth - panelWidth - margin));
+      const hasRoomBelow = rect.bottom + gap + panelHeight + margin < viewportHeight;
+      const top = hasRoomBelow ? rect.bottom + gap : Math.max(margin, rect.top - gap - panelHeight);
+      setPanelStyle({ position: "fixed", left, top, minWidth: panelWidth, zIndex: 80 });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
-    const handler = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    const onPointer = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      closePanel();
     };
-    document.addEventListener("pointerdown", handler);
-    return () => document.removeEventListener("pointerdown", handler);
-  }, [open]);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closePanel();
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [closePanel, open]);
+
+  useEffect(() => {
+    if (disabled) closePanel();
+  }, [closePanel, disabled]);
 
   const selected = options.find((o) => o.value === value);
 
   return (
-    <div className={cn("app-cs", open && "open", className)} ref={ref}>
-      <button className="app-cs-trigger" type="button" onClick={() => setOpen(!open)}>
+    <div className={cn("app-cs", open && "open", className)}>
+      <button
+        ref={triggerRef}
+        className="app-cs-trigger"
+        type="button"
+        disabled={disabled}
+        onClick={() => !disabled && (open ? closePanel() : setOpen(true))}
+      >
         <span>{selected?.label || placeholder}</span>
         <ChevronDown className="app-cs-arrow" />
       </button>
-      {open ? (
-        <div className="app-cs-panel">
-          {options.map((opt) => (
-            <button
-              key={opt.value}
-              className={cn("app-cs-opt", value === opt.value && "is-on")}
-              type="button"
-              onClick={() => { onChange(opt.value); setOpen(false); }}
+      {open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={panelRef}
+              className="app-cs-panel"
+              style={panelStyle ?? { position: "fixed", top: 0, left: 0, visibility: "hidden", zIndex: 80, minWidth: 0 }}
             >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      ) : null}
+              {options.map((opt) => (
+                <button
+                  key={opt.value}
+                  className={cn("app-cs-opt", value === opt.value && "is-on")}
+                  type="button"
+                  disabled={opt.disabled}
+                  onClick={() => { onChange(opt.value); closePanel(); }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

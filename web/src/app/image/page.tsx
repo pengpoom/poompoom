@@ -39,7 +39,6 @@ import { WorkspaceHeader } from "./components/workspace-header";
 import { useImageHistory } from "./hooks/use-image-history";
 import { useImageSourceInputs } from "./hooks/use-image-source-inputs";
 import { useImageSubmit } from "./hooks/use-image-submit";
-import { formatImageConversationTitle } from "./title-utils";
 import { buildConversationPreviewSource } from "./view-utils";
 
 type ImageAspectRatio = "auto" | "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "9:16" | "16:9" | "21:9";
@@ -1488,16 +1487,7 @@ export default function ImagePage() {
         !isStandaloneWorkspace && "md:min-h-0",
       )}
     >
-      <WorkspaceHeader
-        selectedConversationTitle={
-          selectedConversation
-            ? formatImageConversationTitle(
-                selectedConversation.title,
-                selectedConversation.prompt,
-              )
-            : null
-        }
-      />
+      <WorkspaceHeader />
 
       {historyCollapsed && !isStandaloneWorkspace && !isStandaloneHistory ? (
         <button
