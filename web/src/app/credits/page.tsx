@@ -46,6 +46,12 @@ function formatDateTime(value?: string) {
   return date.toLocaleString();
 }
 
+function daysUntil(value?: string) {
+  const date = new Date(value || "");
+  if (Number.isNaN(date.getTime())) return 0;
+  return Math.max(0, Math.ceil((date.getTime() - Date.now()) / 86400000));
+}
+
 function ledgerReasonText(reason: string) {
   if (reason === "registration_default") return "注册送点";
   if (reason === "registration_promo") return "优惠码赠送";
@@ -401,28 +407,29 @@ export default function CreditsPage() {
                 订阅状态
               </h3>
             </div>
-            <div style={{ padding: 18 }}>
-              <div style={subPanelStyle}>
-                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 15, fontWeight: 600, color: "var(--app-text-primary)" }}>{subscription?.packageName || "未订阅"}</div>
-                    <div style={{ marginTop: 4, fontSize: 11.5, color: "var(--app-text-muted)" }}>
-                      {subscription?.active ? `到期后未用订阅点数自动失效` : "订阅套餐会获得独立订阅点数，不会混入普通余额。"}
-                    </div>
-                  </div>
-                  <span className={`app-badge ${subscription?.active ? "ok" : "off"}`}>
-                    <CheckCircle2 className="size-3" />
-                    {subscriptionStatusText(subscription)}
-                  </span>
-                </div>
-                <div style={{ marginTop: 14, display: "grid", gap: 6, fontSize: 11.5, lineHeight: 1.6, color: "var(--app-text-muted)" }}>
-                  <div>生效时间：{subscription?.active ? formatDateTime(subscription.startsAt) : "-"}</div>
-                  <div>当前周期到期：{subscription?.active ? formatDateTime(subscription.expiresAt) : "-"}</div>
-                  <div>订阅至：{subscription?.active ? formatDateTime(subscriptionCoverageExpiresAt(subscription)) : "-"}</div>
-                  <div>当前周期点数：剩余 {numberText(subscription?.active ? subscription.creditsLeft : 0)} / {numberText(subscription?.active ? subscription.creditsTotal : 0)}</div>
-                  <div>扣点顺序：先用订阅点数，再用普通余额。</div>
-                </div>
+            <div className="cr-sub">
+              <div className="cr-sub-top">
+                <b>{subscription?.packageName || "未订阅"}</b>
+                <span className={`app-badge ${subscription?.active ? "ok" : "off"}`}>
+                  {subscriptionStatusText(subscription)}
+                </span>
               </div>
+              {subscription?.active ? (
+                <>
+                  <div className="cr-sub-days">剩余 <b>{daysUntil(subscription.expiresAt)}</b> 天</div>
+                  <dl className="cr-sub-list">
+                    <div><dt>生效时间</dt><dd>{formatDateTime(subscription.startsAt)}</dd></div>
+                    <div><dt>到期时间</dt><dd>{formatDateTime(subscription.expiresAt)}</dd></div>
+                    <div><dt>订阅点数</dt><dd>{numberText(subscription.creditsLeft)} / {numberText(subscription.creditsTotal)}</dd></div>
+                    {subscriptionCoverageExpiresAt(subscription) && subscriptionCoverageExpiresAt(subscription) !== subscription.expiresAt ? (
+                      <div><dt>订阅至</dt><dd>{formatDateTime(subscriptionCoverageExpiresAt(subscription))}</dd></div>
+                    ) : null}
+                  </dl>
+                  <p className="cr-note">订阅期内优先消耗订阅点数，到期后未用完不结转，以实际为准。</p>
+                </>
+              ) : (
+                <p className="cr-note">订阅套餐获得独立订阅点数，扣点时先用订阅点数再用普通余额。</p>
+              )}
             </div>
           </AdminPanel>
 

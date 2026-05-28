@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Coins, KeyRound, LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, UserRound } from "lucide-react";
-import { Link } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import {
@@ -12,6 +12,8 @@ import {
   AdminStatCard,
 } from "@/components/admin-layout";
 import { AppModal, AppSelect } from "@/components/app-controls";
+import { AppDrawer } from "@/components/app-drawer";
+import { UserDetailDrawerContent, UserDetailDrawerTitle } from "@/app/users/detail/page";
 import {
   adjustBusinessUserCredit,
   clearBusinessUserData,
@@ -23,6 +25,7 @@ import {
   updateBusinessUser,
   updateBusinessUserStatus,
   type BusinessUser,
+  type BusinessUserDetail,
   type BusinessUserRole,
   type BusinessUserStatus,
 } from "@/lib/api";
@@ -93,6 +96,24 @@ function userRoleVariant(role: BusinessUserRole) {
 }
 
 export default function UsersPage() {
+  const navigate = useNavigate();
+  const params = useParams<{ id?: string }>();
+  const detailUserID = (params.id || "").trim();
+  const [drawerDetail, setDrawerDetail] = useState<BusinessUserDetail | null>(null);
+  const [drawerLoading, setDrawerLoading] = useState(false);
+  const [drawerReload, setDrawerReload] = useState<(() => void) | null>(null);
+  const handleDrawerLoaded = useCallback((d: BusinessUserDetail | null, l: boolean) => {
+    setDrawerDetail(d);
+    setDrawerLoading(l);
+  }, []);
+  const handleDrawerReady = useCallback((api: { reload: () => void }) => {
+    setDrawerReload(() => api.reload);
+  }, []);
+  const closeDrawer = useCallback(() => {
+    navigate("/users");
+    setDrawerDetail(null);
+    setDrawerReload(null);
+  }, [navigate]);
   const [users, setUsers] = useState<BusinessUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -454,7 +475,7 @@ export default function UsersPage() {
                       <td>
                         <div style={{ display: "flex", justifyContent: "flex-end" }}>
                           <div className="app-act">
-                            <Link to={`/users/${encodeURIComponent(user.id)}`}>详情</Link>
+                            <button type="button" onClick={() => navigate(`/users/${encodeURIComponent(user.id)}`)}>详情</button>
                             {user.status === "deleted" ? (
                               <>
                                 <button type="button" onClick={() => void handleRestoreUser(user)} disabled={submitting}>恢复</button>
@@ -655,6 +676,24 @@ export default function UsersPage() {
         <p style={{ fontSize: 14, color: "var(--app-text-primary)", lineHeight: 1.6 }}>确认永久删除用户 <b>{purgeTarget?.username ?? "-"}</b>？</p>
         <p style={{ marginTop: 8, fontSize: 13, color: "var(--app-text-muted)", lineHeight: 1.6 }}>这会立即清除该用户账号、余额账本、使用记录和图片资产，删除后无法恢复。</p>
       </AppModal>
+
+      <AppDrawer
+        open={Boolean(detailUserID)}
+        onClose={closeDrawer}
+        title={detailUserID ? (
+          <UserDetailDrawerTitle userID={detailUserID} detail={drawerDetail} loading={drawerLoading} />
+        ) : null}
+        actions={detailUserID ? (
+          <button className="app-btn" type="button" onClick={() => drawerReload?.()} disabled={drawerLoading || !drawerReload}>
+            {drawerLoading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+            刷新
+          </button>
+        ) : null}
+      >
+        {detailUserID ? (
+          <UserDetailDrawerContent userID={detailUserID} onLoaded={handleDrawerLoaded} onReady={handleDrawerReady} />
+        ) : null}
+      </AppDrawer>
     </AdminPage>
   );
 }

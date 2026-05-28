@@ -2,11 +2,9 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowRight, LoaderCircle, LockKeyhole, MailCheck, Sparkles } from "lucide-react";
+import { LoaderCircle, MailCheck, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { TurnstileWidget } from "@/components/turnstile-widget";
 import {
   fetchRegistrationOptions,
@@ -18,7 +16,6 @@ import {
 } from "@/lib/api";
 import { usePublicSiteSettings, usePublicTurnstileSettings } from "@/lib/site-settings";
 import { setStoredAuthAvatarUrl, setStoredAuthRole, setStoredAuthUsername } from "@/store/auth";
-import { cn } from "@/lib/utils";
 
 export type AuthMode = "login" | "register";
 
@@ -116,8 +113,7 @@ export function AuthCard({
     setTurnstileToken("");
     setTurnstileResetKey((current) => current + 1);
   };
-  const authTitle =
-    mode === "register" ? "Create your account" : "Log in to Image Studio";
+  const authTitle = mode === "register" ? "创建你的账号" : `登录 ${site.name || "Image Studio"}`;
   const authSubtitle =
     mode === "register"
       ? "创建你的 AI 图像工作区，开始沉淀提示词、素材和生成结果。"
@@ -260,235 +256,199 @@ export function AuthCard({
   };
 
   const submit = () => (mode === "register" ? handleRegister() : handleLogin());
-  const inputClass =
-    "h-12 rounded-[10px] border-white/15 bg-[#182130] text-white shadow-none placeholder:text-[#7f8a9d] outline-none transition-[border-color,background,box-shadow] duration-[180ms] focus-visible:border-[rgba(80,183,255,0.6)] focus-visible:shadow-[0_0_0_4px_rgba(80,183,255,0.16)] focus-visible:ring-0";
 
   return (
-    <section
-      className={cn(
-        "relative w-full overflow-hidden rounded-lg border border-white/15 bg-[#05070c] p-6 shadow-[0_34px_120px_rgba(0,0,0,0.74),0_0_74px_rgba(44,137,255,0.16),inset_0_1px_0_rgba(255,255,255,0.16)] sm:p-8",
-        className,
-      )}
-    >
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-28 bg-[radial-gradient(circle_at_30%_0%,rgba(91,214,255,0.16),transparent_18rem),linear-gradient(180deg,rgba(255,255,255,0.065),transparent)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.035),transparent_42%)]" />
-      <div className="relative z-10">
-      <div className="inline-flex items-center gap-3 text-sm font-bold">
-        <AuthBrandMark logoUrl={site.logoUrl} siteName={site.name} compact />
-        <span>{site.name || "Image Studio"}</span>
-      </div>
+    <section className={`auth-card${className ? ` ${className}` : ""}`}>
+      <div className="auth-card-inner">
+        <div className="auth-brand-row">
+          <AuthBrandMark logoUrl={site.logoUrl} siteName={site.name} compact />
+          <span>{site.name || "Image Studio"}</span>
+        </div>
 
-      <div className="mt-8">
-        <h2 className="text-3xl font-bold leading-tight text-white">
-          {authTitle}
-        </h2>
-        <p className="mt-3 text-sm leading-6 text-[#9ca6b8]">{authSubtitle}</p>
-      </div>
+        <h2>{authTitle}</h2>
+        <p className="auth-sub">{authSubtitle}</p>
 
-      <div className="mt-7 grid gap-4">
-        <Field label="邮箱" htmlFor="email">
-          <Input
-            id="email"
-            name="email"
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                void submit();
-              }
-            }}
-            placeholder="you@example.com"
-            className={inputClass}
-          />
-        </Field>
-
-        {mode === "register" ? (
-          <Field label="用户名" htmlFor="username">
-            <Input
-              id="username"
-              name="username"
-              type="text"
-              autoComplete="username"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              placeholder="你的名称(选填)"
-              className={inputClass}
+        <div className="auth-fields auth-fields-anim" key={mode}>
+          <AuthField label="邮箱" htmlFor="email">
+            <input
+              id="email"
+              name="email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  void submit();
+                }
+              }}
+              placeholder="you@example.com"
+              className="auth-input"
             />
-          </Field>
-        ) : null}
+          </AuthField>
 
-        <Field label="密码" htmlFor="password">
-          <Input
-            id="password"
-            name="password"
-            type="password"
-            autoComplete={mode === "register" ? "new-password" : "current-password"}
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                void submit();
-              }
-            }}
-            placeholder="请输入密码"
-            className={inputClass}
-          />
-        </Field>
-
-        {mode === "register" ? (
-          <>
-            <Field label="确认密码" htmlFor="confirm-password">
-              <Input
-                id="confirm-password"
-                name="confirm-password"
-                type="password"
-                autoComplete="new-password"
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    void handleRegister();
-                  }
-                }}
-                placeholder="请再次输入密码"
-                className={inputClass}
+          {mode === "register" ? (
+            <AuthField label="用户名" htmlFor="username">
+              <input
+                id="username"
+                name="username"
+                type="text"
+                autoComplete="username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                placeholder="你的名称（选填）"
+                className="auth-input"
               />
-            </Field>
+            </AuthField>
+          ) : null}
 
-            <Field label="验证码" htmlFor="verification-code">
-              <div className="flex gap-2">
-                <Input
-                  id="verification-code"
-                  name="verification-code"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  value={code}
-                  onChange={(event) => setCode(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      void handleRegister();
-                    }
-                  }}
-                  placeholder="邮箱验证码"
-                  className={inputClass}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-12 min-w-[96px] shrink-0 rounded-[10px] border-white/15 bg-[#111823] text-[#e9eef7] shadow-none transition-[background,border-color,transform] duration-[180ms] hover:-translate-y-px hover:bg-[#182130]"
-                  onClick={() => void handleSendCode()}
-                  disabled={!canSendCode || formDisabled}
-                >
-                  {isSendingCode ? (
-                    <LoaderCircle className="size-4 animate-spin" />
-                  ) : (
-                    <MailCheck className="size-4" />
-                  )}
-                  {codeCooldownLeft > 0 ? `${codeCooldownLeft}s` : "发送"}
-                </Button>
-              </div>
-            </Field>
-            {registrationCodeRequired ? (
-              <Field label="注册码" htmlFor="register-code">
-                <Input
-                  id="register-code"
-                  name="register-code"
-                  value={registerCode}
-                  onChange={(event) => setRegisterCode(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      void handleRegister();
-                    }
-                  }}
-                  placeholder="邀请码或优惠码"
-                  className={inputClass}
-                />
-              </Field>
-            ) : null}
-          </>
-        ) : null}
+          <AuthField label="密码" htmlFor="password">
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autoComplete={mode === "register" ? "new-password" : "current-password"}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  void submit();
+                }
+              }}
+              placeholder="请输入密码"
+              className="auth-input"
+            />
+          </AuthField>
 
-        {showRegisterCodeTurnstile ? (
-          <TurnstileWidget
-            enabled
-            siteKey={turnstile.siteKey}
-            action="register-code"
-            disabled={formDisabled}
-            resetKey={turnstileResetKey}
-            onTokenChange={setTurnstileToken}
-          />
-        ) : (
-          <TurnstileWidget
-            enabled={visibleTurnstileRequired}
-            siteKey={turnstile.siteKey}
-            action={mode}
-            disabled={formDisabled}
-            resetKey={turnstileResetKey}
-            onTokenChange={setTurnstileToken}
-          />
-        )}
-
-        <Button
-          className="mt-2 h-12 w-full rounded-[10px] border border-[rgba(191,232,255,0.42)] bg-[linear-gradient(135deg,rgba(255,255,255,0.18),rgba(255,255,255,0.05)),linear-gradient(135deg,rgba(63,105,255,0.9),rgba(31,220,255,0.78))] text-white shadow-[0_18px_40px_rgba(41,152,255,0.26),inset_0_1px_0_rgba(255,255,255,0.42)] transition-[transform,box-shadow] duration-[200ms] [transition-timing-function:cubic-bezier(0.215,0.61,0.355,1)] hover:-translate-y-0.5 hover:bg-[linear-gradient(135deg,rgba(255,255,255,0.22),rgba(255,255,255,0.08)),linear-gradient(135deg,rgba(63,105,255,0.95),rgba(31,220,255,0.82))] hover:shadow-[0_22px_50px_rgba(41,152,255,0.42),inset_0_1px_0_rgba(255,255,255,0.5)]"
-          onClick={() => void submit()}
-          disabled={isSubmitting || (visibleTurnstileRequired && !turnstileToken)}
-        >
-          {isSubmitting ? (
-            <LoaderCircle className="size-4 animate-spin" />
-          ) : mode === "register" ? (
-            <MailCheck className="size-4" />
-          ) : (
-            <LockKeyhole className="size-4" />
-          )}
-          {mode === "register" ? "注册并登录" : "登录"}
-          <ArrowRight className="size-4" />
-        </Button>
-
-        {mode === "login" ? (
-          <div className="-mt-1 flex justify-end">
-            <Link
-              to="/forgot-password"
-              className="text-sm font-semibold text-[#77dfff] transition hover:text-[#a7ecff] hover:underline"
-            >
-              忘记密码？
-            </Link>
-          </div>
-        ) : null}
-
-        <p className="text-center text-sm leading-6 text-[#8d98aa]">
           {mode === "register" ? (
             <>
-              已有账号？{" "}
-              <button
-                type="button"
-                className="font-bold text-[#77dfff] hover:underline"
-                onClick={() => switchMode("login")}
-              >
-                返回登录
-              </button>
+              <AuthField label="确认密码" htmlFor="confirm-password">
+                <input
+                  id="confirm-password"
+                  name="confirm-password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      void handleRegister();
+                    }
+                  }}
+                  placeholder="请再次输入密码"
+                  className="auth-input"
+                />
+              </AuthField>
+
+              <AuthField label="验证码" htmlFor="verification-code">
+                <div className="auth-code-row">
+                  <input
+                    id="verification-code"
+                    name="verification-code"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    value={code}
+                    onChange={(event) => setCode(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        void handleRegister();
+                      }
+                    }}
+                    placeholder="邮箱验证码"
+                    className="auth-input"
+                  />
+                  <button
+                    type="button"
+                    className="auth-code-send"
+                    onClick={() => void handleSendCode()}
+                    disabled={!canSendCode || formDisabled}
+                  >
+                    {isSendingCode ? (
+                      <LoaderCircle className="size-4 animate-spin" />
+                    ) : (
+                      <MailCheck className="size-4" />
+                    )}
+                    {codeCooldownLeft > 0 ? `${codeCooldownLeft}s` : "发送"}
+                  </button>
+                </div>
+              </AuthField>
+
+              {registrationCodeRequired ? (
+                <AuthField label="注册码" htmlFor="register-code">
+                  <input
+                    id="register-code"
+                    name="register-code"
+                    value={registerCode}
+                    onChange={(event) => setRegisterCode(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        void handleRegister();
+                      }
+                    }}
+                    placeholder="邀请码或优惠码"
+                    className="auth-input"
+                  />
+                </AuthField>
+              ) : null}
             </>
+          ) : null}
+
+          {showRegisterCodeTurnstile ? (
+            <TurnstileWidget
+              enabled
+              siteKey={turnstile.siteKey}
+              action="register-code"
+              disabled={formDisabled}
+              resetKey={turnstileResetKey}
+              onTokenChange={setTurnstileToken}
+            />
           ) : (
-            <>
-              还没有账户？{" "}
-              <button
-                type="button"
-                className="font-bold text-[#77dfff] hover:underline"
-                onClick={handleOpenRegister}
-              >
-                创建账号
-              </button>
-            </>
+            <TurnstileWidget
+              enabled={visibleTurnstileRequired}
+              siteKey={turnstile.siteKey}
+              action={mode}
+              disabled={formDisabled}
+              resetKey={turnstileResetKey}
+              onTokenChange={setTurnstileToken}
+            />
           )}
-        </p>
-      </div>
+
+          <button
+            type="button"
+            className="auth-primary"
+            onClick={() => void submit()}
+            disabled={isSubmitting || (visibleTurnstileRequired && !turnstileToken)}
+          >
+            {isSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}
+            {mode === "register" ? "注册并登录" : "登录"}
+          </button>
+
+          {mode === "login" ? (
+            <div className="auth-forgot">
+              <Link to="/forgot-password">忘记密码？</Link>
+            </div>
+          ) : null}
+
+          <p className="auth-switch">
+            {mode === "register" ? (
+              <>
+                已有账号？
+                <button type="button" onClick={() => switchMode("login")}>返回登录</button>
+              </>
+            ) : (
+              <>
+                还没有账户？
+                <button type="button" onClick={handleOpenRegister}>创建账号</button>
+              </>
+            )}
+          </p>
+        </div>
       </div>
     </section>
   );
 }
 
-function Field({
+function AuthField({
   label,
   htmlFor,
   children,
@@ -498,10 +458,8 @@ function Field({
   children: ReactNode;
 }) {
   return (
-    <div className="grid gap-2">
-      <label htmlFor={htmlFor} className="text-sm font-semibold text-[#c6cfdd]">
-        {label}
-      </label>
+    <div className="auth-field">
+      <label htmlFor={htmlFor}>{label}</label>
       {children}
     </div>
   );
@@ -517,7 +475,7 @@ export function AuthBrandMark({
   compact?: boolean;
 }) {
   const [failed, setFailed] = useState(false);
-  const size = compact ? "size-[30px]" : "size-8";
+  const size = compact ? 30 : 32;
 
   useEffect(() => {
     setFailed(false);
@@ -525,11 +483,11 @@ export function AuthBrandMark({
 
   if (logoUrl && !failed) {
     return (
-      <span className={`app-logo-image-frame inline-grid ${size} place-items-center overflow-hidden rounded-lg`}>
+      <span className="app-logo-image-frame" style={{ display: "inline-grid", width: size, height: size, placeItems: "center", overflow: "hidden", borderRadius: 8 }}>
         <img
           src={logoUrl}
           alt={siteName}
-          className="size-full object-cover"
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
           onError={() => setFailed(true)}
         />
       </span>
@@ -537,7 +495,16 @@ export function AuthBrandMark({
   }
 
   return (
-    <span className={`inline-grid ${size} place-items-center rounded-lg bg-[radial-gradient(circle_at_30%_26%,#ffffff_0_8%,transparent_9%),linear-gradient(135deg,#2f6bff,#8b5cff_54%,#28d6ff)] shadow-[0_0_26px_rgba(40,214,255,0.35),inset_0_1px_0_rgba(255,255,255,0.42)]`}>
+    <span style={{
+      display: "inline-grid",
+      width: size,
+      height: size,
+      placeItems: "center",
+      borderRadius: 8,
+      background: "radial-gradient(circle at 30% 26%, #ffffff 0 8%, transparent 9%), linear-gradient(135deg, #2f6bff, #8b5cff 54%, #28d6ff)",
+      boxShadow: "0 0 26px rgba(40,214,255,0.35), inset 0 1px 0 rgba(255,255,255,0.42)",
+      color: "#fff",
+    }}>
       <Sparkles className="size-4" />
     </span>
   );

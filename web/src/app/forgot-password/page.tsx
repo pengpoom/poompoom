@@ -7,8 +7,6 @@ import { toast } from "sonner";
 
 import { AuthBrandMark } from "@/components/auth-card";
 import { TurnstileWidget } from "@/components/turnstile-widget";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { requestPasswordResetCode, resetBusinessUserPasswordByEmail } from "@/lib/api";
 import { usePublicSiteSettings, usePublicTurnstileSettings } from "@/lib/site-settings";
 
@@ -100,54 +98,48 @@ export default function ForgotPasswordPage() {
     }
   };
 
-  const inputClass =
-    "h-12 rounded-lg border-white/15 bg-[#182130] text-white shadow-none placeholder:text-[#7f8a9d] focus-visible:ring-[rgba(80,183,255,0.18)]";
-
   return (
-    <div className="relative min-h-screen overflow-hidden bg-black px-4 py-6 text-white sm:px-6 lg:px-8">
-      <div className="pointer-events-none absolute -left-[16vw] -top-[22%] h-[72vh] w-[62vw] rotate-[18deg] bg-[radial-gradient(ellipse_at_0%_0%,rgba(160,205,255,0.68),rgba(70,135,235,0.36)_42%,rgba(70,135,235,0)_85%)] opacity-80 blur-[64px]" />
-      <div className="pointer-events-none absolute -right-[16vw] top-[-18%] h-[72vh] w-[62vw] -rotate-[18deg] bg-[radial-gradient(ellipse_at_100%_0%,rgba(160,205,255,0.68),rgba(70,135,235,0.36)_42%,rgba(70,135,235,0)_85%)] opacity-80 blur-[64px]" />
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[size:48px_48px] opacity-20 [mask-image:radial-gradient(ellipse_at_50%_42%,#000_0%,transparent_72%)]" />
+    <div className="auth-shell">
+      <div className="auth-bg-beam left" aria-hidden="true" />
+      <div className="auth-bg-beam right" aria-hidden="true" />
+      <div className="auth-bg-grid" aria-hidden="true" />
 
-      <header className="relative z-10 mx-auto flex max-w-[1200px] items-center justify-between">
-        <Link to="/login" className="inline-flex items-center gap-3 text-sm font-semibold text-[#c8d1df] transition hover:text-white">
+      <header className="auth-top">
+        <Link to="/login" className="auth-back">
           <ArrowLeft className="size-4" />
           返回登录
         </Link>
-        <div className="inline-flex items-center gap-3 text-base font-bold">
+        <div className="auth-brand">
           <AuthBrandMark logoUrl={site.logoUrl} siteName={site.name} />
           <span>{site.name || "Image Studio"}</span>
         </div>
       </header>
 
-      <main className="relative z-10 mx-auto flex min-h-[calc(100vh-72px)] w-full max-w-[520px] items-center py-10">
-        <section className="relative w-full overflow-hidden rounded-lg border border-white/15 bg-[#05070c] p-6 shadow-[0_34px_120px_rgba(0,0,0,0.74),0_0_74px_rgba(44,137,255,0.16),inset_0_1px_0_rgba(255,255,255,0.16)] sm:p-8">
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-28 bg-[radial-gradient(circle_at_30%_0%,rgba(91,214,255,0.16),transparent_18rem),linear-gradient(180deg,rgba(255,255,255,0.065),transparent)]" />
-          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.035),transparent_42%)]" />
-          <div className="relative z-10">
-            <div className="inline-flex size-12 items-center justify-center rounded-lg border border-cyan-200/30 bg-cyan-200/10 text-cyan-100">
+      <main style={{ position: "relative", zIndex: 10, maxWidth: 520, margin: "0 auto", minHeight: "calc(100vh - 96px)", display: "flex", alignItems: "center", padding: "40px 0" }}>
+        <section className="auth-card" style={{ width: "100%" }}>
+          <div className="auth-card-inner">
+            <div className="auth-icon-frame">
               {completed ? <CheckCircle2 className="size-6" /> : <ShieldCheck className="size-6" />}
             </div>
-            <h1 className="mt-6 text-3xl font-bold leading-tight text-white">
-              {completed ? "密码已重置" : "重置密码"}
-            </h1>
-            <p className="mt-3 text-sm leading-6 text-[#9ca6b8]">
+            <h2>{completed ? "密码已重置" : "重置密码"}</h2>
+            <p className="auth-sub">
               {completed ? "请使用新密码重新登录。" : "通过注册邮箱接收验证码，然后设置新密码。"}
             </p>
 
             {completed ? (
-              <Button
+              <button
                 type="button"
-                className="mt-8 h-12 w-full rounded-lg border border-cyan-200/40 bg-[linear-gradient(135deg,rgba(255,255,255,0.18),rgba(255,255,255,0.05)),linear-gradient(135deg,rgba(63,105,255,0.9),rgba(31,220,255,0.78))] text-white shadow-[0_18px_40px_rgba(41,152,255,0.26)]"
+                className="auth-primary"
+                style={{ marginTop: 28 }}
                 onClick={() => navigate("/login", { replace: true })}
               >
                 返回登录
-              </Button>
+              </button>
             ) : (
-              <div className="mt-7 grid gap-4">
-                <Field label="邮箱" htmlFor="reset-email">
-                  <div className="flex gap-2">
-                    <Input
+              <div className="auth-fields">
+                <AuthField label="邮箱" htmlFor="reset-email">
+                  <div className="auth-code-row">
+                    <input
                       id="reset-email"
                       name="email"
                       type="email"
@@ -155,23 +147,22 @@ export default function ForgotPasswordPage() {
                       value={email}
                       onChange={(event) => setEmail(event.target.value)}
                       placeholder="you@example.com"
-                      className={inputClass}
+                      className="auth-input"
                     />
-                    <Button
+                    <button
                       type="button"
-                      variant="outline"
-                      className="h-12 min-w-[96px] shrink-0 rounded-lg border-white/15 bg-[#111823] text-[#e9eef7] shadow-none hover:bg-[#182130]"
+                      className="auth-code-send"
                       onClick={() => void handleSendCode()}
                       disabled={cooldownLeft > 0 || isSendingCode || isSubmitting}
                     >
                       {isSendingCode ? <LoaderCircle className="size-4 animate-spin" /> : <MailCheck className="size-4" />}
                       {cooldownLeft > 0 ? `${cooldownLeft}s` : "发送"}
-                    </Button>
+                    </button>
                   </div>
-                </Field>
+                </AuthField>
 
-                <Field label="验证码" htmlFor="reset-code">
-                  <Input
+                <AuthField label="验证码" htmlFor="reset-code">
+                  <input
                     id="reset-code"
                     name="code"
                     inputMode="numeric"
@@ -179,12 +170,12 @@ export default function ForgotPasswordPage() {
                     value={code}
                     onChange={(event) => setCode(event.target.value)}
                     placeholder="邮箱验证码"
-                    className={inputClass}
+                    className="auth-input"
                   />
-                </Field>
+                </AuthField>
 
-                <Field label="新密码" htmlFor="reset-password">
-                  <Input
+                <AuthField label="新密码" htmlFor="reset-password">
+                  <input
                     id="reset-password"
                     name="password"
                     type="password"
@@ -192,12 +183,12 @@ export default function ForgotPasswordPage() {
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
                     placeholder="至少 6 位"
-                    className={inputClass}
+                    className="auth-input"
                   />
-                </Field>
+                </AuthField>
 
-                <Field label="确认新密码" htmlFor="reset-confirm-password">
-                  <Input
+                <AuthField label="确认新密码" htmlFor="reset-confirm-password">
+                  <input
                     id="reset-confirm-password"
                     name="confirm-password"
                     type="password"
@@ -210,9 +201,9 @@ export default function ForgotPasswordPage() {
                       }
                     }}
                     placeholder="请再次输入新密码"
-                    className={inputClass}
+                    className="auth-input"
                   />
-                </Field>
+                </AuthField>
 
                 <TurnstileWidget
                   enabled={turnstileRequired}
@@ -223,15 +214,15 @@ export default function ForgotPasswordPage() {
                   onTokenChange={setTurnstileToken}
                 />
 
-                <Button
+                <button
                   type="button"
-                  className="mt-2 h-12 w-full rounded-lg border border-cyan-200/40 bg-[linear-gradient(135deg,rgba(255,255,255,0.18),rgba(255,255,255,0.05)),linear-gradient(135deg,rgba(63,105,255,0.9),rgba(31,220,255,0.78))] text-white shadow-[0_18px_40px_rgba(41,152,255,0.26)] hover:bg-[linear-gradient(135deg,rgba(255,255,255,0.22),rgba(255,255,255,0.08)),linear-gradient(135deg,rgba(63,105,255,0.95),rgba(31,220,255,0.82))]"
+                  className="auth-primary"
                   onClick={() => void handleResetPassword()}
                   disabled={isSubmitting || isSendingCode}
                 >
-                  {isSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
+                  {isSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : null}
                   重置密码
-                </Button>
+                </button>
               </div>
             )}
           </div>
@@ -241,7 +232,7 @@ export default function ForgotPasswordPage() {
   );
 }
 
-function Field({
+function AuthField({
   label,
   htmlFor,
   children,
@@ -251,10 +242,8 @@ function Field({
   children: ReactNode;
 }) {
   return (
-    <div className="grid gap-2">
-      <label htmlFor={htmlFor} className="text-sm font-semibold text-[#c6cfdd]">
-        {label}
-      </label>
+    <div className="auth-field">
+      <label htmlFor={htmlFor}>{label}</label>
       {children}
     </div>
   );

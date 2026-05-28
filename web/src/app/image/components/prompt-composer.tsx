@@ -16,15 +16,6 @@ import Zoom from "react-medium-image-zoom";
 import { ArrowUp, Brain, Brush, Check, ChevronDown, Cpu, Mic2, SquarePlus, Trash2 } from "lucide-react";
 
 import { HtmlImage as Image } from "@/components/html-image";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import type { APIAccessPlatform, ImageQuality } from "@/lib/api";
 import type { ImageMode, StoredSourceImage } from "@/store/image-conversations";
 import { cn } from "@/lib/utils";
@@ -102,6 +93,136 @@ function AspectPreviewIcon({ ratio }: { ratio: string }) {
   );
 }
 
+type ChipSelectOption<T extends string> = {
+  value: T;
+  label: ReactNode;
+  description?: string;
+  disabled?: boolean;
+};
+
+function ChipSelect<T extends string>({
+  value,
+  options,
+  onChange,
+  triggerClassName,
+  triggerIcon,
+  triggerLabel,
+  disabled,
+  title,
+}: {
+  value: T;
+  options: Array<ChipSelectOption<T>>;
+  onChange: (value: T) => void;
+  triggerClassName?: string;
+  triggerIcon?: ReactNode;
+  triggerLabel: ReactNode;
+  disabled?: boolean;
+  title?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [panelStyle, setPanelStyle] = useState<CSSProperties | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const closePanel = useCallback(() => {
+    setOpen(false);
+    setPanelStyle(null);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const update = () => {
+      const button = triggerRef.current;
+      if (!button) return;
+      const rect = button.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const margin = 12;
+      const gap = 6;
+      const panelWidth = rect.width;
+      const panelHeight = panelRef.current?.offsetHeight || 0;
+      const left = Math.min(Math.max(rect.left, margin), Math.max(margin, viewportWidth - panelWidth - margin));
+      const hasRoomAbove = rect.top - gap - panelHeight > margin;
+      const top = hasRoomAbove ? rect.top - gap - panelHeight : Math.min(rect.bottom + gap, viewportHeight - panelHeight - margin);
+      setPanelStyle({ position: "fixed", left, top: Math.max(margin, top), minWidth: panelWidth, zIndex: 80 });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      closePanel();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closePanel();
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [closePanel, open]);
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={cn(triggerClassName, "inline-flex items-center")}
+        onClick={() => {
+          if (disabled) return;
+          setOpen((current) => {
+            if (current) setPanelStyle(null);
+            return !current;
+          });
+        }}
+        aria-expanded={open}
+        disabled={disabled}
+        title={title}
+      >
+        {triggerIcon}
+        <span>{triggerLabel}</span>
+        <ChevronDown className={cn("size-4 opacity-65 transition", open && "rotate-180")} />
+      </button>
+      {open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={panelRef}
+              className="app-cs-panel"
+              style={panelStyle ?? { position: "fixed", top: 0, left: 0, visibility: "hidden", zIndex: 80, minWidth: 0 }}
+            >
+              {options.map((opt) => (
+                <button
+                  key={opt.value}
+                  className={cn("app-cs-opt", value === opt.value && "is-on")}
+                  type="button"
+                  disabled={opt.disabled}
+                  title={opt.description}
+                  onClick={() => {
+                    onChange(opt.value);
+                    closePanel();
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
 function AspectResolutionPicker({
   aspectRatio,
   aspectRatioOptions,
@@ -155,8 +276,8 @@ function AspectResolutionPicker({
       const viewportHeight = window.innerHeight;
       const margin = 12;
       const gap = 10;
-      const panelWidth = Math.min(460, viewportWidth - margin * 2);
-      const panelHeight = panelRef.current?.offsetHeight || 330;
+      const panelWidth = Math.min(320, viewportWidth - margin * 2);
+      const panelHeight = panelRef.current?.offsetHeight || 0;
       const left = Math.min(
         Math.max(rect.left, margin),
         Math.max(margin, viewportWidth - panelWidth - margin),
@@ -230,11 +351,11 @@ function AspectResolutionPicker({
         <ChevronDown className={cn("size-4 opacity-65 transition", open && "rotate-180")} />
       </button>
 
-      {open && panelStyle && typeof document !== "undefined" ? createPortal(
+      {open && typeof document !== "undefined" ? createPortal(
         <div
           ref={panelRef}
           data-aspect-resolution-panel
-          style={panelStyle}
+          style={panelStyle ?? { position: "fixed", top: 0, left: 0, visibility: "hidden", zIndex: 80, width: 320 }}
           className="rounded-[20px] border border-[var(--app-border)] bg-[var(--app-bg-elevated)] p-4 text-[var(--app-text-primary)] shadow-[var(--app-shadow-floating)] backdrop-blur-2xl"
         >
           <div className="text-[13px] font-bold text-[var(--app-text-muted)]">比例</div>
@@ -325,6 +446,7 @@ export function PromptComposer({
   const imageQualityLabel = imageQualityOptions.find((item) => item.value === imageQuality)?.label ?? imageQuality;
   const imageQualityPrefix = mode === "edit" ? "输出质量" : "清晰度";
   const modeLabel = modeOptions.find((item) => item.value === mode)?.label ?? "模式";
+  const providerLabel = providerPlatformOptions.find((item) => item.value === providerPlatform)?.label ?? providerPlatform;
   const hasComposerContent = imagePrompt.trim().length > 0 || sourceImages.length > 0;
   const shouldFocusAfterExpandRef = useRef(false);
   const [isDesktopComposer, setIsDesktopComposer] = useState(() => {
@@ -384,8 +506,7 @@ export function PromptComposer({
     onMobileCollapsedChange?.(isMobileComposerCollapsed);
   }, [isMobileComposerCollapsed, onMobileCollapsedChange]);
 
-  const controlButtonClass =
-    "h-9 w-auto shrink-0 gap-1.5 whitespace-nowrap rounded-lg border border-[var(--app-border)] bg-[#1B1C22] px-3 text-[13px] font-semibold text-[var(--app-text-secondary)] shadow-none outline-none backdrop-blur-xl transition hover:bg-[#22242B] hover:text-[var(--app-text-primary)] focus-visible:border-[var(--app-border-strong)] focus-visible:ring-[3px] focus-visible:ring-[rgba(91,214,255,0.18)]";
+  const controlButtonClass = "app-btn";
   const parsedImageCount = Number.parseInt(imageCount, 10);
   const normalizedImageCount = Number.isFinite(parsedImageCount)
     ? Math.min(8, Math.max(1, parsedImageCount))
@@ -497,8 +618,9 @@ export function PromptComposer({
               </span>
             </button>
           ) : (
-            <Textarea
+            <textarea
               ref={textareaRef}
+              className="pc-textarea"
               value={imagePrompt}
               onChange={(event) => onPromptChange(event.target.value)}
               placeholder={
@@ -513,7 +635,6 @@ export function PromptComposer({
                   void onSubmit();
                 }
               }}
-              className="min-h-[52px] max-h-[128px] resize-none overflow-y-auto border-0 bg-transparent !px-1 !py-0 pr-12 text-[14px] font-medium leading-6 text-[var(--app-text-primary)] shadow-none placeholder:text-[var(--app-text-muted)] focus-visible:ring-0"
               onFocus={() => setIsMobileComposerExpanded(true)}
             />
           )}
@@ -524,43 +645,34 @@ export function PromptComposer({
             <div className="hide-scrollbar flex min-w-0 flex-1 items-center gap-2 overflow-x-auto pb-0.5">
               <button
                 type="button"
-                className="grid size-9 shrink-0 place-items-center rounded-lg border border-[var(--app-border)] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)] transition hover:bg-[var(--app-bg-surface-hover)]"
+                className="app-btn"
+                style={{ width: 36, padding: 0, justifyContent: "center", flexShrink: 0 }}
                 onClick={(event) => {
                   event.stopPropagation();
                   uploadInputRef.current?.click();
                 }}
                 aria-label={mode === "generate" ? "上传参考图" : "上传源图"}
               >
-                <SquarePlus className="size-5" />
+                <SquarePlus />
               </button>
 
-              <Select value={mode} onValueChange={(value) => onModeChange(value as ImageMode)}>
-                <SelectTrigger className={cn(controlButtonClass, "min-w-[92px] justify-center focus:ring-0")}>
-                  <SparkModeIcon mode={mode} />
-                  <SelectValue>{modeLabel}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {modeOptions.map((item) => (
-                    <SelectItem key={item.value} value={item.value}>
-                      {item.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <ChipSelect<ImageMode>
+                value={mode}
+                options={modeOptions.map((item) => ({ value: item.value, label: item.label, description: item.description }))}
+                onChange={(value) => onModeChange(value)}
+                triggerClassName={cn(controlButtonClass, "min-w-[92px] justify-center")}
+                triggerIcon={<SparkModeIcon mode={mode} />}
+                triggerLabel={modeLabel}
+              />
 
-              <Select value={providerPlatform} onValueChange={(value) => onProviderPlatformChange(value as APIAccessPlatform)}>
-                <SelectTrigger className={cn(controlButtonClass, "min-w-[156px] focus:ring-0")}>
-                  <Cpu className="size-4" />
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {providerPlatformOptions.map((item) => (
-                    <SelectItem key={item.value} value={item.value} disabled={item.disabled}>
-                      {item.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <ChipSelect<APIAccessPlatform>
+                value={providerPlatform}
+                options={providerPlatformOptions.map((item) => ({ value: item.value, label: item.label, disabled: item.disabled }))}
+                onChange={(value) => onProviderPlatformChange(value)}
+                triggerClassName={cn(controlButtonClass, "min-w-[156px]")}
+                triggerIcon={<Cpu className="size-4" />}
+                triggerLabel={providerLabel}
+              />
 
               <AspectResolutionPicker
                 aspectRatio={imageAspectRatio}
@@ -573,38 +685,30 @@ export function PromptComposer({
                 onResolutionTierChange={onImageResolutionTierChange}
               />
 
-              <Select value={imageQuality} onValueChange={onImageQualityChange} disabled={imageQualityDisabled}>
-                <SelectTrigger
-                  className={cn(
-                    controlButtonClass,
-                    "min-w-[150px] focus:ring-0",
-                    imageQualityDisabled && "cursor-not-allowed opacity-55",
-                  )}
-                  title={
-                    imageQualityDisabled
-                      ? imageQualityDisabledReason
-                      : imageQualityOptions.find((item) => item.value === imageQuality)?.description
-                  }
-                >
-                  <Mic2 className="size-4" />
-                  <SelectValue>{`${imageQualityPrefix} ${imageQualityLabel}`}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {imageQualityOptions.map((item) => (
-                    <SelectItem key={item.value} value={item.value}>
-                      <span title={item.description}>
-                        {imageQualityPrefix} {item.label}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <ChipSelect<string>
+                value={imageQuality}
+                options={imageQualityOptions.map((item) => ({
+                  value: item.value,
+                  label: `${imageQualityPrefix} ${item.label}`,
+                  description: item.description,
+                }))}
+                onChange={onImageQualityChange}
+                triggerClassName={cn(controlButtonClass, "min-w-[150px]", imageQualityDisabled && "is-disabled")}
+                triggerIcon={<Mic2 className="size-4" />}
+                triggerLabel={`${imageQualityPrefix} ${imageQualityLabel}`}
+                disabled={imageQualityDisabled}
+                title={
+                  imageQualityDisabled
+                    ? imageQualityDisabledReason
+                    : imageQualityOptions.find((item) => item.value === imageQuality)?.description
+                }
+              />
 
               {mode === "generate" ? (
                 <div className={cn(controlButtonClass, "inline-flex min-w-[132px] items-center justify-center gap-2")}>
                   <span>数量</span>
                   <div className="inline-flex items-center gap-1.5">
-                    <Input
+                    <input
                       type="text"
                       inputMode="numeric"
                       pattern="[0-9]*"
@@ -614,7 +718,7 @@ export function PromptComposer({
                         onImageCountChange(nextValue);
                       }}
                       onBlur={() => setNormalizedImageCount(normalizedImageCount)}
-                      className="h-7 w-9 rounded-full border-0 bg-[var(--app-bg-surface-hover)] px-2 text-center text-[13px] font-bold text-[var(--app-text-primary)] shadow-none focus-visible:ring-0"
+                      className="pc-count-input"
                     />
                     <div className="inline-flex flex-col items-center justify-center gap-0.5">
                       <button
@@ -645,7 +749,7 @@ export function PromptComposer({
             <button
               type="button"
               onClick={() => void onSubmit()}
-              className="relative grid size-11 shrink-0 place-items-center rounded-full bg-[var(--app-text-primary)] text-[var(--app-bg-root)] transition hover:opacity-90"
+              className="pc-submit"
               aria-label="提交图片任务"
             >
               <ArrowUp className="size-6" />

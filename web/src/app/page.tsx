@@ -465,10 +465,10 @@ function AuthModal({
       data-auth-modal={mode ? "true" : "false"}
       className={cn(
         "fixed inset-0 z-[60] grid place-items-center p-6 transition-[opacity,visibility,backdrop-filter] duration-[260ms]",
-        "bg-[radial-gradient(circle_at_50%_0%,rgba(80,145,255,0.22),transparent_30rem),rgba(0,0,0,0.52)]",
+        "bg-[radial-gradient(circle_at_50%_0%,rgba(80,145,255,0.12),transparent_30rem),rgba(0,0,0,0.62)]",
         mode
-          ? "pointer-events-auto opacity-100 backdrop-blur-[18px] [backdrop-filter:blur(18px)_saturate(1.35)] [-webkit-backdrop-filter:blur(18px)_saturate(1.35)]"
-          : "pointer-events-none opacity-0 backdrop-blur-0 [backdrop-filter:blur(0)_saturate(1)] [-webkit-backdrop-filter:blur(0)_saturate(1)]",
+          ? "pointer-events-auto opacity-100 backdrop-blur-[16px] [backdrop-filter:blur(16px)] [-webkit-backdrop-filter:blur(16px)]"
+          : "pointer-events-none opacity-0 backdrop-blur-0 [backdrop-filter:blur(0)] [-webkit-backdrop-filter:blur(0)]",
       )}
       aria-hidden={!mode}
       onMouseDown={(event) => {

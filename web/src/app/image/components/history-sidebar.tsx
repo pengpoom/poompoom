@@ -10,14 +10,7 @@ import {
   Trash2,
 } from "lucide-react";
 
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { AppModal } from "@/components/app-controls";
 import type { ImageConversation, ImageMode } from "@/store/image-conversations";
 import { cn } from "@/lib/utils";
 import { formatImageConversationTitle } from "../title-utils";
@@ -174,16 +167,27 @@ export const HistorySidebar = memo(
       <>
         <aside
           data-image-history-sidebar
-          className={cn(
-            "min-h-0 overflow-hidden border-[var(--app-border)] bg-[var(--app-bg-sidebar)] text-[var(--app-text-primary)]",
-            standalone
-              ? "min-h-[420px] rounded-[18px] border"
-              : "hidden border-r md:block",
-          )}
+          className={cn("hs-sidebar", standalone ? "hs-sidebar-standalone" : "hs-sidebar-rail")}
+          style={{
+            minHeight: standalone ? 420 : undefined,
+            background: "var(--app-bg-sidebar)",
+            color: "var(--app-text-primary)",
+            borderRadius: standalone ? 18 : 0,
+            border: standalone ? "1px solid var(--app-border)" : undefined,
+            borderRight: !standalone ? "1px solid var(--app-border)" : undefined,
+            overflow: "hidden",
+          }}
         >
-          <div className="flex h-full min-h-0 flex-col px-5 py-8 md:px-[21px] md:py-[46px]">
-            <header className="flex items-center justify-between gap-4">
-              <h1 className="m-0 text-[17px] font-semibold tracking-normal text-[var(--app-text-primary)]">
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              height: "100%",
+              padding: "32px 20px",
+            }}
+          >
+            <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+              <h1 style={{ margin: 0, fontSize: 17, fontWeight: 600, color: "var(--app-text-primary)" }}>
                 开始你的创作
               </h1>
               <button
@@ -191,31 +195,38 @@ export const HistorySidebar = memo(
                 data-history-collapse
                 onClick={onCollapse}
                 disabled={!onCollapse}
-                className="grid size-[34px] shrink-0 place-items-center text-[var(--app-text-secondary)] transition hover:text-[var(--app-text-primary)] disabled:cursor-default disabled:opacity-45"
                 aria-label="收起侧边栏"
                 title={onCollapse ? "收起历史对话" : "当前视图不可收起"}
+                style={{
+                  display: "grid",
+                  placeItems: "center",
+                  width: 34,
+                  height: 34,
+                  border: 0,
+                  background: "transparent",
+                  color: "var(--app-text-secondary)",
+                  cursor: onCollapse ? "pointer" : "default",
+                  opacity: onCollapse ? 1 : 0.45,
+                  borderRadius: 8,
+                  transition: "color 0.2s ease, background 0.2s ease",
+                }}
               >
-                <PanelLeftClose className="size-6" />
+                <PanelLeftClose className="size-5" />
               </button>
             </header>
 
-            <div className="mt-[38px] grid gap-3">
+            <div style={{ marginTop: 32, display: "grid", gap: 10 }}>
               <button
                 type="button"
                 onClick={onCreateDraft}
-                className={cn(
-                  "flex min-h-[38px] items-center gap-[18px] rounded-full px-[15px] text-[14px] font-semibold transition",
-                  draftActive
-                    ? "bg-[var(--app-bg-surface-hover)] text-[var(--app-text-primary)]"
-                    : "text-[var(--app-text-secondary)] hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)]",
-                )}
+                className={cn("hs-row", draftActive && "active")}
               >
                 <MessageSquarePlus className="size-5" />
                 新建对话
               </button>
               {searchOpen ? (
-                <label className="relative block">
-                  <Search className="pointer-events-none absolute left-[15px] top-1/2 size-5 -translate-y-1/2 text-[var(--app-text-secondary)]" />
+                <label className="hs-search">
+                  <Search className="hs-search-ic size-5" />
                   <input
                     type="search"
                     value={searchQuery}
@@ -233,56 +244,58 @@ export const HistorySidebar = memo(
                     }}
                     autoFocus
                     placeholder="搜索"
-                    className="h-[38px] w-full rounded-full border-0 bg-[var(--app-bg-surface-hover)] pl-[55px] pr-[15px] text-[14px] font-semibold text-[var(--app-text-primary)] outline-none transition placeholder:text-[var(--app-text-muted)] focus:ring-[3px] focus:ring-[rgba(91,214,255,0.18)]"
                   />
                 </label>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => setSearchOpen(true)}
-                  className="flex h-[38px] items-center gap-[18px] rounded-full px-[15px] text-[14px] font-semibold text-[var(--app-text-secondary)] transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)]"
-                >
+                <button type="button" onClick={() => setSearchOpen(true)} className="hs-row">
                   <Search className="size-5" />
                   搜索
                 </button>
               )}
             </div>
 
-            <section className="mt-8 min-h-0 flex-1">
-              <div className="mb-3 flex items-center justify-between gap-3 pl-2">
-                <div className="min-w-0">
-                  <h2 className="m-0 text-[13px] font-semibold text-[var(--app-text-muted)]">
-                    最近对话
-                  </h2>
-                </div>
+            <section style={{ marginTop: 28, minHeight: 0, flex: 1, display: "flex", flexDirection: "column" }}>
+              <div
+                style={{
+                  marginBottom: 10,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  paddingLeft: 8,
+                }}
+              >
+                <h2 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "var(--app-text-muted)" }}>
+                  最近对话
+                </h2>
                 <button
                   type="button"
                   onClick={() => setDeleteDialog({ type: "all" })}
                   disabled={conversations.length === 0 || hasProcessingConversations}
-                  className="grid size-8 place-items-center rounded-lg text-[var(--app-text-muted)] transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
                   title={hasProcessingConversations ? "有生成处理中时不能清空历史" : "清空历史记录"}
                   aria-label="清空历史记录"
+                  className="hs-icon-btn"
                 >
                   <Trash2 className="size-4" />
                 </button>
               </div>
 
-              <div className="hide-scrollbar min-h-0 overflow-y-auto">
+              <div className="hide-scrollbar" style={{ minHeight: 0, overflowY: "auto", flex: 1 }}>
                 {isLoadingHistory ? (
-                  <div className="flex items-center gap-2 rounded-full px-3 py-3 text-sm text-[var(--app-text-muted)]">
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", fontSize: 13, color: "var(--app-text-muted)" }}>
                     <LoaderCircle className="size-4 animate-spin" />
                     正在读取会话记录
                   </div>
                 ) : conversations.length === 0 ? (
-                  <p className="px-3 py-3 text-sm leading-6 text-[var(--app-text-muted)]">
+                  <p style={{ padding: "10px 12px", fontSize: 13, lineHeight: 1.6, color: "var(--app-text-muted)" }}>
                     还没有历史记录。
                   </p>
                 ) : displayedConversations.length === 0 ? (
-                  <p className="px-3 py-3 text-sm leading-6 text-[var(--app-text-muted)]">
+                  <p style={{ padding: "10px 12px", fontSize: 13, lineHeight: 1.6, color: "var(--app-text-muted)" }}>
                     没有找到匹配的对话。
                   </p>
                 ) : (
-                  <div className="grid gap-1.5">
+                  <div style={{ display: "grid", gap: 4 }}>
                     {displayedConversations.map((conversation) => {
                       const active = conversation.id === selectedConversationId;
                       const deletingDisabled = processingConversationIds.has(conversation.id);
@@ -291,26 +304,21 @@ export const HistorySidebar = memo(
                         conversation.prompt,
                       );
                       return (
-                        <div key={conversation.id} className="group flex items-center gap-1">
+                        <div key={conversation.id} className="hs-conv">
                           <button
                             type="button"
                             onClick={() => onFocusConversation(conversation.id)}
-                            className={cn(
-                              "min-h-[34px] min-w-0 flex-1 overflow-hidden rounded-full px-[22px] text-left text-[14px] font-semibold transition",
-                              active
-                                ? "bg-[var(--app-bg-surface-hover)] text-[var(--app-text-primary)]"
-                                : "text-[var(--app-text-secondary)] hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)]",
-                            )}
+                            className={cn("hs-conv-btn", active && "active")}
                             title={title}
                           >
-                            <span className="block min-w-0 truncate" data-history-title>
+                            <span data-history-title style={{ display: "block", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                               {title}
                             </span>
                           </button>
                           <button
                             type="button"
                             onClick={() => openRenameDialog(conversation.id, title)}
-                            className="grid size-8 shrink-0 place-items-center rounded-lg text-[var(--app-text-muted)] opacity-0 transition hover:bg-[var(--app-bg-surface)] hover:text-[var(--app-text-primary)] group-hover:opacity-100"
+                            className="hs-conv-act"
                             title="重命名会话"
                             aria-label="重命名会话"
                           >
@@ -324,7 +332,7 @@ export const HistorySidebar = memo(
                               title,
                             })}
                             disabled={deletingDisabled}
-                            className="grid size-8 shrink-0 place-items-center rounded-lg text-[var(--app-text-muted)] opacity-0 transition hover:bg-[var(--app-bg-surface)] hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-30 group-hover:opacity-100"
+                            className="hs-conv-act danger"
                             title={deletingDisabled ? "当前会话仍在处理中，暂时不能删除" : "删除会话"}
                             aria-label="删除会话"
                           >
@@ -340,128 +348,115 @@ export const HistorySidebar = memo(
           </div>
         </aside>
 
-        <Dialog open={deleteDialog !== null} onOpenChange={(open) => !open && setDeleteDialog(null)}>
-          <DialogContent className="w-[min(92vw,420px)] rounded-[20px] p-0" showCloseButton={false}>
-            <DialogHeader className="border-b border-[var(--app-border)] px-5 py-4">
-              <div className="flex items-start gap-3">
-                <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-rose-400/25 bg-rose-500/10 text-rose-300">
-                  <Trash2 className="size-5" />
-                </span>
-                <div className="min-w-0">
-                  <DialogTitle className="text-base">{deleteDialogTitle}</DialogTitle>
-                  <DialogDescription className="mt-2 leading-6">
-                    {deleteDialogDescription}
-                  </DialogDescription>
-                </div>
-              </div>
-            </DialogHeader>
-
-            <div className="px-5 py-4">
-              {deleteDialogTarget ? (
-                <p className="truncate rounded-xl border border-[var(--app-border)] bg-[#1B1C22] px-3 py-2 text-sm font-semibold text-[var(--app-text-primary)]" title={deleteDialogTarget}>
-                  {deleteDialogTarget}
-                </p>
-              ) : (
-                <p className="text-sm leading-6 text-[var(--app-text-secondary)]">
-                  该操作会影响当前账号下的全部历史会话。
-                </p>
-              )}
-            </div>
-
-            <DialogFooter className="border-t border-[var(--app-border)] px-5 py-4">
-              <button
-                type="button"
-                onClick={() => setDeleteDialog(null)}
-                className="h-10 rounded-full border border-[var(--app-border)] bg-[#1B1C22] px-5 text-sm font-semibold text-[var(--app-text-secondary)] transition hover:bg-[#22242B] hover:text-[var(--app-text-primary)]"
-              >
+        <AppModal
+          open={deleteDialog !== null}
+          onClose={() => setDeleteDialog(null)}
+          title={deleteDialogTitle}
+          footer={
+            <>
+              <button className="app-btn" type="button" onClick={() => setDeleteDialog(null)}>
                 取消
               </button>
               <button
+                className="app-btn-primary"
                 type="button"
                 onClick={handleConfirmDelete}
-                className="h-10 rounded-full border border-rose-300/30 bg-rose-500/90 px-5 text-sm font-semibold text-white shadow-[0_12px_28px_rgba(244,63,94,0.18)] transition hover:bg-rose-400"
+                style={{
+                  background: "linear-gradient(135deg, rgba(252, 165, 165, 0.95), rgba(244, 63, 94, 0.85))",
+                  borderColor: "rgba(252, 165, 165, 0.5)",
+                }}
               >
+                <Trash2 className="size-4" />
                 {isClearAllDialog ? "清空历史" : "删除会话"}
               </button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+            </>
+          }
+        >
+          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.7, color: "var(--app-text-secondary)" }}>
+            {deleteDialogDescription}
+          </p>
+          {deleteDialogTarget ? (
+            <p
+              style={{
+                marginTop: 12,
+                padding: "10px 14px",
+                borderRadius: 10,
+                border: "1px solid var(--app-border)",
+                background: "var(--app-bg-surface)",
+                fontSize: 13,
+                fontWeight: 500,
+                color: "var(--app-text-primary)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              title={deleteDialogTarget}
+            >
+              {deleteDialogTarget}
+            </p>
+          ) : null}
+        </AppModal>
 
-        <Dialog
+        <AppModal
           open={renameDialog !== null}
-          onOpenChange={(open) => {
-            if (!open && !isRenaming) {
+          onClose={() => {
+            if (!isRenaming) {
               setRenameDialog(null);
               setRenameValue("");
             }
           }}
-        >
-          <DialogContent className="w-[min(92vw,420px)] rounded-[20px] p-0" showCloseButton={false}>
-            <DialogHeader className="border-b border-[var(--app-border)] px-5 py-4">
-              <div className="flex items-start gap-3">
-                <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-[rgba(91,214,255,0.25)] bg-[rgba(91,214,255,0.1)] text-[var(--app-accent-cyan)]">
-                  <Pencil className="size-5" />
-                </span>
-                <div className="min-w-0">
-                  <DialogTitle className="text-base">重命名会话</DialogTitle>
-                  <DialogDescription className="mt-2 leading-6">
-                    修改后会同步到当前账号的历史记录。
-                  </DialogDescription>
-                </div>
-              </div>
-            </DialogHeader>
-
-            <div className="px-5 py-4">
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-[var(--app-text-secondary)]">
-                  对话名
-                </span>
-                <input
-                  type="text"
-                  value={renameValue}
-                  onChange={(event) => setRenameValue(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      void handleConfirmRename();
-                    }
-                    if (event.key === "Escape" && !isRenaming) {
-                      setRenameDialog(null);
-                      setRenameValue("");
-                    }
-                  }}
-                  maxLength={80}
-                  autoFocus
-                  className="h-11 rounded-xl border border-[var(--app-border)] bg-[#1B1C22] px-3 text-sm font-semibold text-[var(--app-text-primary)] outline-none transition placeholder:text-[var(--app-text-muted)] focus:border-[rgba(91,214,255,0.5)] focus:ring-[3px] focus:ring-[rgba(91,214,255,0.16)]"
-                  placeholder="输入对话名"
-                />
-              </label>
-            </div>
-
-            <DialogFooter className="border-t border-[var(--app-border)] px-5 py-4">
+          title="重命名会话"
+          footer={
+            <>
               <button
+                className="app-btn"
                 type="button"
                 onClick={() => {
                   setRenameDialog(null);
                   setRenameValue("");
                 }}
                 disabled={isRenaming}
-                className="h-10 rounded-full border border-[var(--app-border)] bg-[#1B1C22] px-5 text-sm font-semibold text-[var(--app-text-secondary)] transition hover:bg-[#22242B] hover:text-[var(--app-text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 取消
               </button>
               <button
+                className="app-btn-primary"
                 type="button"
                 onClick={() => void handleConfirmRename()}
                 disabled={!normalizedRenameValue || isRenaming}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-full border border-[rgba(91,214,255,0.28)] bg-[var(--app-accent-cyan)] px-5 text-sm font-semibold text-[#03121C] shadow-[0_12px_28px_rgba(91,214,255,0.16)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isRenaming ? <LoaderCircle className="size-4 animate-spin" /> : null}
+                {isRenaming ? <LoaderCircle className="size-4 animate-spin" /> : <Pencil className="size-4" />}
                 保存
               </button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+            </>
+          }
+        >
+          <p style={{ margin: 0, marginBottom: 12, fontSize: 13, lineHeight: 1.6, color: "var(--app-text-muted)" }}>
+            修改后会同步到当前账号的历史记录。
+          </p>
+          <label className="app-fld">
+            <span className="fl">对话名</span>
+            <input
+              className="app-input"
+              type="text"
+              value={renameValue}
+              onChange={(event) => setRenameValue(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void handleConfirmRename();
+                }
+                if (event.key === "Escape" && !isRenaming) {
+                  setRenameDialog(null);
+                  setRenameValue("");
+                }
+              }}
+              maxLength={80}
+              autoFocus
+              placeholder="输入对话名"
+            />
+          </label>
+        </AppModal>
       </>
     );
   },

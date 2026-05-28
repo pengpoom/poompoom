@@ -28,7 +28,6 @@ const StartupCheckPage = lazy(() => import("@/app/startup-check/page"));
 const StoragePage = lazy(() => import("@/app/storage/page"));
 const ToolsPage = lazy(() => import("@/app/tools/page"));
 const MyUsagePage = lazy(() => import("@/app/usage/page"));
-const UserDetailPage = lazy(() => import("@/app/users/detail/page"));
 const UsersPage = lazy(() => import("@/app/users/page"));
 
 type RouteErrorBoundaryState = {
@@ -237,7 +236,7 @@ export default function App() {
             <Route path="/affiliate" element={<ProtectedRoute role={role} adminOnly><AffiliatePage /></ProtectedRoute>} />
             <Route path="/payments" element={<ProtectedRoute role={role} adminOnly><PaymentsPage /></ProtectedRoute>} />
             <Route path="/users" element={<ProtectedRoute role={role} adminOnly><UsersPage /></ProtectedRoute>} />
-            <Route path="/users/:id" element={<ProtectedRoute role={role} adminOnly><UserDetailPage /></ProtectedRoute>} />
+            <Route path="/users/:id" element={<ProtectedRoute role={role} adminOnly><UsersPage /></ProtectedRoute>} />
             <Route path="/storage" element={<ProtectedRoute role={role} adminOnly><StoragePage /></ProtectedRoute>} />
             <Route path="/accounts" element={<ProtectedRoute role={role} adminOnly><AccountsPage /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute role={role} adminOnly><SettingsPage /></ProtectedRoute>} />
