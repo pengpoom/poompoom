@@ -65,10 +65,20 @@ type GenerationSettings struct {
 }
 
 type BillingSettings struct {
-	GPTImageCost       int64 `json:"gptImageCost"`
-	GeminiBananaCost   int64 `json:"geminiBananaCost"`
-	RefundOnFailure    bool  `json:"refundOnFailure"`
-	RefundPartialCount bool  `json:"refundPartialCount"`
+	GPTImageCost       int64                  `json:"gptImageCost"`
+	GeminiBananaCost   int64                  `json:"geminiBananaCost"`
+	RefundOnFailure    bool                   `json:"refundOnFailure"`
+	RefundPartialCount bool                   `json:"refundPartialCount"`
+	SubscriptionLevels []BillingLevelSettings `json:"subscriptionLevels"`
+	WalletLevels       []BillingLevelSettings `json:"walletLevels"`
+}
+
+type BillingLevelSettings struct {
+	Name        string `json:"name"`
+	Tag         string `json:"tag"`
+	Description string `json:"description"`
+	Enabled     bool   `json:"enabled"`
+	SortOrder   int    `json:"sortOrder"`
 }
 
 type RuntimeSettings struct {
@@ -240,6 +250,21 @@ func Defaults() Settings {
 			GeminiBananaCost:   1,
 			RefundOnFailure:    true,
 			RefundPartialCount: true,
+			SubscriptionLevels: []BillingLevelSettings{
+				{Name: "Free", Tag: "tier:free", Description: "免费体验", Enabled: true, SortOrder: 0},
+				{Name: "Lumen", Tag: "tier:lumen", Description: "入门创作订阅", Enabled: true, SortOrder: 10},
+				{Name: "Prism", Tag: "tier:prism", Description: "标准创作订阅", Enabled: true, SortOrder: 20},
+				{Name: "Atelier", Tag: "tier:atelier", Description: "专业创作订阅", Enabled: true, SortOrder: 30},
+				{Name: "Meridian", Tag: "tier:meridian", Description: "旗舰创作订阅", Enabled: true, SortOrder: 40},
+			},
+			WalletLevels: []BillingLevelSettings{
+				{Name: "None", Tag: "wallet:none", Description: "未充值", Enabled: true, SortOrder: 0},
+				{Name: "Ember", Tag: "wallet:ember", Description: "小额充值", Enabled: true, SortOrder: 10},
+				{Name: "Glow", Tag: "wallet:glow", Description: "中等充值", Enabled: true, SortOrder: 20},
+				{Name: "Flare", Tag: "wallet:flare", Description: "高价值充值", Enabled: true, SortOrder: 30},
+				{Name: "Radiant", Tag: "wallet:radiant", Description: "重度充值", Enabled: true, SortOrder: 40},
+				{Name: "Zenith", Tag: "wallet:zenith", Description: "顶级充值用户", Enabled: true, SortOrder: 50},
+			},
 		},
 		Runtime: RuntimeSettings{
 			MaxImageConcurrency:      8,
@@ -331,6 +356,8 @@ func Normalize(settings Settings) Settings {
 	if settings.Billing.GeminiBananaCost < 0 {
 		settings.Billing.GeminiBananaCost = 0
 	}
+	settings.Billing.SubscriptionLevels = normalizeBillingLevels(settings.Billing.SubscriptionLevels, defaults.Billing.SubscriptionLevels)
+	settings.Billing.WalletLevels = normalizeBillingLevels(settings.Billing.WalletLevels, defaults.Billing.WalletLevels)
 	if settings.Runtime.MaxImageConcurrency < 1 {
 		settings.Runtime.MaxImageConcurrency = defaults.Runtime.MaxImageConcurrency
 	}
@@ -437,6 +464,64 @@ func (s *Store) isPostgres() bool {
 
 func (s *Store) rebind(query string) string {
 	return database.Rebind(s.driver, query)
+}
+
+func normalizeBillingLevels(levels []BillingLevelSettings, defaults []BillingLevelSettings) []BillingLevelSettings {
+	if len(levels) == 0 {
+		return append([]BillingLevelSettings(nil), defaults...)
+	}
+	items := make([]BillingLevelSettings, 0, len(levels))
+	seen := make(map[string]struct{}, len(levels))
+	for index, level := range levels {
+		name := strings.TrimSpace(level.Name)
+		tag := normalizeLevelTag(level.Tag)
+		if tag == "" {
+			continue
+		}
+		if name == "" {
+			name = tag
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		sortOrder := level.SortOrder
+		if sortOrder < 0 {
+			sortOrder = index * 10
+		}
+		items = append(items, BillingLevelSettings{
+			Name:        name,
+			Tag:         tag,
+			Description: strings.TrimSpace(level.Description),
+			Enabled:     level.Enabled,
+			SortOrder:   sortOrder,
+		})
+	}
+	if len(items) == 0 {
+		return append([]BillingLevelSettings(nil), defaults...)
+	}
+	return items
+}
+
+func normalizeLevelTag(value string) string {
+	tag := strings.ToLower(strings.TrimSpace(value))
+	if tag == "" {
+		return ""
+	}
+	var builder strings.Builder
+	for _, r := range tag {
+		switch {
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r == ':', r == '-', r == '_':
+			builder.WriteRune(r)
+		default:
+			builder.WriteRune('-')
+		}
+	}
+	return strings.Trim(builder.String(), "-")
 }
 
 func normalizeRole(value string) string {

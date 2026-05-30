@@ -26,6 +26,7 @@ import {
   fetchBusinessSystemSettings,
   updateBusinessSystemSettings,
   type APIAccessPlatform,
+  type BusinessBillingLevel,
   type BusinessSystemRuntime,
   type BusinessSystemSettings,
   type ImageQuality,
@@ -58,6 +59,23 @@ const sizeOptions = [
   { label: "1:1 1024 x 1024", value: "1024x1024" },
   { label: "横版 1536 x 1024", value: "1536x1024" },
   { label: "竖版 1024 x 1536", value: "1024x1536" },
+];
+
+const defaultSubscriptionLevels: BusinessBillingLevel[] = [
+  { name: "Free", tag: "tier:free", description: "免费体验", enabled: true, sortOrder: 0 },
+  { name: "Lumen", tag: "tier:lumen", description: "入门创作订阅", enabled: true, sortOrder: 10 },
+  { name: "Prism", tag: "tier:prism", description: "标准创作订阅", enabled: true, sortOrder: 20 },
+  { name: "Atelier", tag: "tier:atelier", description: "专业创作订阅", enabled: true, sortOrder: 30 },
+  { name: "Meridian", tag: "tier:meridian", description: "旗舰创作订阅", enabled: true, sortOrder: 40 },
+];
+
+const defaultWalletLevels: BusinessBillingLevel[] = [
+  { name: "None", tag: "wallet:none", description: "未充值", enabled: true, sortOrder: 0 },
+  { name: "Ember", tag: "wallet:ember", description: "小额充值", enabled: true, sortOrder: 10 },
+  { name: "Glow", tag: "wallet:glow", description: "中等充值", enabled: true, sortOrder: 20 },
+  { name: "Flare", tag: "wallet:flare", description: "高价值充值", enabled: true, sortOrder: 30 },
+  { name: "Radiant", tag: "wallet:radiant", description: "重度充值", enabled: true, sortOrder: 40 },
+  { name: "Zenith", tag: "wallet:zenith", description: "顶级充值用户", enabled: true, sortOrder: 50 },
 ];
 
 
@@ -102,6 +120,8 @@ function defaultSystemSettings(): BusinessSystemSettings {
       geminiBananaCost: 1,
       refundOnFailure: true,
       refundPartialCount: true,
+      subscriptionLevels: defaultSubscriptionLevels,
+      walletLevels: defaultWalletLevels,
     },
     runtime: {
       maxImageConcurrency: 8,
@@ -140,6 +160,19 @@ function normalizePositiveInt(value: number, fallback: number, max?: number) {
 
 function normalizeNonNegativeInt(value: number) {
   return Math.max(0, Math.floor(Number(value) || 0));
+}
+
+function normalizeBillingLevels(levels: BusinessBillingLevel[] | undefined, defaults: BusinessBillingLevel[]) {
+  const source = levels?.length ? levels : defaults;
+  return source
+    .map((level, index) => ({
+      name: level.name?.trim() || level.tag?.trim() || "Level",
+      tag: level.tag?.trim().toLowerCase() || "",
+      description: level.description?.trim() || "",
+      enabled: Boolean(level.enabled),
+      sortOrder: Math.max(0, Math.floor(Number(level.sortOrder) || index * 10)),
+    }))
+    .filter((level) => level.tag);
 }
 
 function normalizeSettings(settings: BusinessSystemSettings): BusinessSystemSettings {
@@ -200,6 +233,8 @@ function normalizeSettings(settings: BusinessSystemSettings): BusinessSystemSett
       ...next.billing,
       gptImageCost: normalizeNonNegativeInt(next.billing.gptImageCost),
       geminiBananaCost: normalizeNonNegativeInt(next.billing.geminiBananaCost),
+      subscriptionLevels: normalizeBillingLevels(next.billing.subscriptionLevels, defaultSubscriptionLevels),
+      walletLevels: normalizeBillingLevels(next.billing.walletLevels, defaultWalletLevels),
     },
     runtime: {
       ...next.runtime,
@@ -284,6 +319,64 @@ function ReadonlyField({
         {value}
       </div>
       <span className="fd">{hint}</span>
+    </div>
+  );
+}
+
+function BillingLevelEditor({
+  title,
+  levels,
+  onChange,
+}: {
+  title: string;
+  levels: BusinessBillingLevel[];
+  onChange: (levels: BusinessBillingLevel[]) => void;
+}) {
+  const updateLevel = (index: number, patch: Partial<BusinessBillingLevel>) => {
+    onChange(levels.map((level, currentIndex) => (currentIndex === index ? { ...level, ...patch } : level)));
+  };
+  return (
+    <div className="app-fld full">
+      <span className="fl">{title}</span>
+      <div className="space-y-2">
+        {levels.map((level, index) => (
+          <div key={`${level.tag}-${index}`} className="grid gap-2 rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] p-3 md:grid-cols-[minmax(110px,0.8fr)_minmax(150px,1fr)_minmax(180px,1.2fr)_90px_88px]">
+            <input
+              className="app-input"
+              value={level.name}
+              onChange={(event) => updateLevel(index, { name: event.target.value })}
+              placeholder="名称"
+            />
+            <input
+              className="app-input"
+              value={level.tag}
+              onChange={(event) => updateLevel(index, { tag: event.target.value })}
+              placeholder="tier:lumen"
+            />
+            <input
+              className="app-input"
+              value={level.description}
+              onChange={(event) => updateLevel(index, { description: event.target.value })}
+              placeholder="说明"
+            />
+            <input
+              className="app-input"
+              type="number"
+              min={0}
+              value={level.sortOrder}
+              onChange={(event) => updateLevel(index, { sortOrder: Math.max(0, Number(event.target.value) || 0) })}
+            />
+            <button
+              type="button"
+              className={level.enabled ? "app-btn-primary" : "app-btn"}
+              onClick={() => updateLevel(index, { enabled: !level.enabled })}
+            >
+              {level.enabled ? "启用" : "禁用"}
+            </button>
+          </div>
+        ))}
+      </div>
+      <span className="fd">展示名可改；标签会用于套餐、充值等级和后续号池调度。</span>
     </div>
   );
 }
@@ -960,6 +1053,26 @@ export default function SettingsPage() {
                   setSettings((current) => ({
                     ...current,
                     billing: { ...current.billing, refundPartialCount: checked },
+                  }))
+                }
+              />
+              <BillingLevelEditor
+                title="订阅等级"
+                levels={settings.billing.subscriptionLevels}
+                onChange={(levels) =>
+                  setSettings((current) => ({
+                    ...current,
+                    billing: { ...current.billing, subscriptionLevels: levels },
+                  }))
+                }
+              />
+              <BillingLevelEditor
+                title="充值等级"
+                levels={settings.billing.walletLevels}
+                onChange={(levels) =>
+                  setSettings((current) => ({
+                    ...current,
+                    billing: { ...current.billing, walletLevels: levels },
                   }))
                 }
               />

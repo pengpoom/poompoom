@@ -24,6 +24,7 @@ import {
   buildInpaintSourceReference,
   createConversationTurn,
   createLoadingImages,
+  formatImageError,
   mergeResultImages,
 } from "../submit-utils";
 import { buildSourceRequestImageUrl } from "../view-utils";
@@ -315,8 +316,7 @@ export function useImageSubmit({
           toast.success("图片编辑完成");
         }
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "提交编辑失败";
+        const message = formatImageError(error || "提交编辑失败");
         await updateConversation(conversationId, (current) => ({
           ...(current ?? buildConversationBase(conversationId, draftTurn)),
           turns: (current?.turns ?? [draftTurn]).map((turn) =>
@@ -492,8 +492,7 @@ export function useImageSubmit({
           toast.success(isSingleImageRetry ? "失败图片已重新生成" : "已重新生成");
         }
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "提交任务失败";
+        const message = formatImageError(error || "提交任务失败");
         await updateConversation(conversationId, (current) => ({
           ...(current ?? buildConversationBase(conversationId, draftTurn)),
           turns: (current?.turns ?? [draftTurn]).map((item) =>
@@ -648,8 +647,7 @@ export function useImageSubmit({
       }
       resetComposer(mode === "generate" ? "generate" : "edit");
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "提交任务失败";
+      const message = formatImageError(error || "提交任务失败");
       await updateConversation(conversationId, (current) => ({
         ...(current ?? buildConversationBase(conversationId, draftTurn)),
         turns: (current?.turns ?? [draftTurn]).map((turn) =>

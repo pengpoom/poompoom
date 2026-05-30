@@ -22,7 +22,31 @@ const (
 	StatusFailed          = "failed"
 )
 
+const (
+	ErrorTypeCredit    = "credit"
+	ErrorTypeInput     = "input"
+	ErrorTypeQueue     = "queue"
+	ErrorTypeBusy      = "busy"
+	ErrorTypeRefused   = "refused"
+	ErrorTypeOverload  = "overload"
+	ErrorTypeTimeout   = "timeout"
+	ErrorTypeCancelled = "cancelled"
+	ErrorTypeUnknown   = "unknown"
+)
+
 const defaultClaimLease = 30 * time.Second
+
+var (
+	creditErrorPatterns   = []string{"insufficient", "credit", "点数", "余额不足"}
+	inputErrorPatterns    = []string{"请输入提示词", "prompt is required", "invalid_request", "编辑模式至少需要一张源图", "编辑模式需要提示词"}
+	queueErrorPatterns    = []string{"请求较多", "前方爆满", "排队", "队列", "queue", "capacity", "concurrency", "image_queue_full", "image_queue_timeout", "image_user_job_limit", "image_provider_job_limit"}
+	busyErrorPatterns     = []string{"号池", "provider pool", "provider_pool", "api 接入", "api_access", "image_base_url", "image_api_key", "unsupported image_provider", "unsupported api_access", "baseurl is required", "apikey is required", "base_url is required", "api_key is required", "provider_not_configured", "provider pool member", "pool member", "provider_error", "provider_request_failed", "provider_response_failed", "cloudflare", "bad gateway", "502", "503", "504", "too many requests", "rate limit", "origin_bad_gateway", "upstream", "上游"}
+	refusedErrorPatterns  = []string{"no images generated", "model may have refused"}
+	overloadErrorPatterns = []string{
+		"an error occurred while processing your request",
+	}
+	timeoutErrorPatterns = []string{"timed out waiting for async image generation"}
+)
 
 const jobSelectColumns = `id, user_id, conversation_id, generation_id, turn_id, platform,
 	provider_id, provider_name, model, prompt, size, quality,
@@ -95,13 +119,14 @@ type ReconcileResult struct {
 }
 
 type AdminListFilter struct {
-	UserID   string
-	Status   string
-	Platform string
-	From     string
-	To       string
-	Limit    int
-	Offset   int
+	UserID    string
+	Status    string
+	Platform  string
+	ErrorType string
+	From      string
+	To        string
+	Limit     int
+	Offset    int
 }
 
 type ActiveCounts struct {
@@ -712,6 +737,7 @@ func (s *Store) AdminList(ctx context.Context, filter AdminListFilter) ([]Job, i
 	filter.UserID = strings.TrimSpace(filter.UserID)
 	filter.Status = normalizeOptionalStatus(filter.Status)
 	filter.Platform = strings.TrimSpace(filter.Platform)
+	filter.ErrorType = normalizeAdminErrorType(filter.ErrorType)
 	filter.From = strings.TrimSpace(filter.From)
 	filter.To = strings.TrimSpace(filter.To)
 	if filter.Limit <= 0 || filter.Limit > 200 {
@@ -1128,6 +1154,10 @@ func adminListWhere(filter AdminListFilter) (string, []any) {
 		clauses = append(clauses, "platform = ?")
 		args = append(args, filter.Platform)
 	}
+	if errorSQL, errorArgs := adminErrorTypeWhere(filter.ErrorType); errorSQL != "" {
+		clauses = append(clauses, errorSQL)
+		args = append(args, errorArgs...)
+	}
 	if filter.From != "" {
 		clauses = append(clauses, "created_at >= ?")
 		args = append(args, filter.From)
@@ -1140,6 +1170,75 @@ func adminListWhere(filter AdminListFilter) (string, []any) {
 		return "", args
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+func adminErrorTypeWhere(errorType string) (string, []any) {
+	switch normalizeAdminErrorType(errorType) {
+	case "credit":
+		return lowerContainsAny(adminErrorTextSQL(), creditErrorPatterns), nil
+	case "input":
+		return lowerContainsAny(adminErrorTextSQL(), inputErrorPatterns), nil
+	case "queue":
+		return lowerContainsAny(adminErrorTextSQL(), queueErrorPatterns), nil
+	case "busy":
+		refusedSQL, _ := adminErrorTypeWhere("refused")
+		overloadSQL, _ := adminErrorTypeWhere("overload")
+		timeoutSQL, _ := adminErrorTypeWhere("timeout")
+		busySQL := lowerContainsAny(adminErrorTextSQL(), busyErrorPatterns)
+		return "(" + strings.Join([]string{busySQL, "NOT (" + refusedSQL + ")", "NOT (" + overloadSQL + ")", "NOT (" + timeoutSQL + ")"}, " AND ") + ")", nil
+	case "refused":
+		return lowerContainsAll(adminErrorTextSQL(), refusedErrorPatterns), nil
+	case "overload":
+		return lowerContainsAny(adminErrorTextSQL(), overloadErrorPatterns), nil
+	case "timeout":
+		return lowerContainsAny(adminErrorTextSQL(), timeoutErrorPatterns), nil
+	case "cancelled":
+		return "status IN (?, ?)", []any{StatusCancelled, StatusCancelRequested}
+	case "unknown":
+		knownSQL := make([]string, 0, 8)
+		for _, item := range []string{"credit", "input", "queue", "busy", "refused", "overload", "timeout"} {
+			sql, _ := adminErrorTypeWhere(item)
+			if sql != "" {
+				knownSQL = append(knownSQL, "NOT ("+sql+")")
+			}
+		}
+		knownSQL = append([]string{"status = '" + StatusFailed + "'"}, knownSQL...)
+		return strings.Join(knownSQL, " AND "), nil
+	default:
+		return "", nil
+	}
+}
+
+func adminErrorTextSQL() string {
+	return "COALESCE(error_code, '') || ' ' || COALESCE(error_message, '') || ' ' || COALESCE(last_error, '')"
+}
+
+func lowerContainsAny(expr string, values []string) string {
+	clauses := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value != "" {
+			clauses = append(clauses, "LOWER("+expr+") LIKE '%"+strings.ReplaceAll(value, "'", "''")+"%'")
+		}
+	}
+	if len(clauses) == 0 {
+		return ""
+	}
+	return "(" + strings.Join(clauses, " OR ") + ")"
+}
+
+func lowerContainsAll(expr string, values []string) string {
+	clauses := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value != "" {
+			clauses = append(clauses, "LOWER("+expr+") LIKE '%"+strings.ReplaceAll(value, "'", "''")+"%'")
+		}
+	}
+	if len(clauses) == 0 {
+		return ""
+	}
+	return "(" + strings.Join(clauses, " AND ") + ")"
 }
 
 func (s *Store) RequestCancel(ctx context.Context, id string, userID string) (Job, bool, error) {
@@ -1552,6 +1651,93 @@ func normalizeOptionalStatus(status string) string {
 	default:
 		return ""
 	}
+}
+
+func normalizeAdminErrorType(errorType string) string {
+	switch strings.ToLower(strings.TrimSpace(errorType)) {
+	case ErrorTypeCredit, ErrorTypeInput, ErrorTypeQueue, ErrorTypeBusy, ErrorTypeRefused, ErrorTypeOverload, ErrorTypeTimeout, ErrorTypeCancelled, ErrorTypeUnknown:
+		return strings.ToLower(strings.TrimSpace(errorType))
+	default:
+		return ""
+	}
+}
+
+func JobUserErrorType(job Job) string {
+	switch normalizeStatus(job.Status) {
+	case StatusCancelled, StatusCancelRequested:
+		return ErrorTypeCancelled
+	case StatusQueued, StatusRunning, StatusSucceeded:
+		return ""
+	}
+	normalized := strings.ToLower(strings.Join([]string{job.ErrorCode, job.ErrorMessage, job.LastError}, " "))
+	switch {
+	case containsAnyPattern(normalized, creditErrorPatterns):
+		return ErrorTypeCredit
+	case containsAnyPattern(normalized, inputErrorPatterns):
+		return ErrorTypeInput
+	case containsAnyPattern(normalized, queueErrorPatterns):
+		return ErrorTypeQueue
+	case containsAllPatterns(normalized, refusedErrorPatterns):
+		return ErrorTypeRefused
+	case containsAnyPattern(normalized, overloadErrorPatterns):
+		return ErrorTypeOverload
+	case containsAnyPattern(normalized, timeoutErrorPatterns):
+		return ErrorTypeTimeout
+	case containsAnyPattern(normalized, busyErrorPatterns):
+		return ErrorTypeBusy
+	case normalizeStatus(job.Status) == StatusFailed:
+		return ErrorTypeUnknown
+	default:
+		return ""
+	}
+}
+
+func JobUserErrorMessage(job Job) string {
+	switch JobUserErrorType(job) {
+	case ErrorTypeCredit:
+		return "点数余额不足，请充值后再试。"
+	case ErrorTypeInput:
+		return "请输入提示词后再生成。"
+	case ErrorTypeQueue:
+		return "当前生成请求较多，请稍后再试。"
+	case ErrorTypeBusy:
+		return "服务繁忙，请稍后重试。"
+	case ErrorTypeRefused:
+		return "内容可能未通过模型安全检查，请调整提示词后重试。"
+	case ErrorTypeOverload:
+		return "提示词较长或当前规格较高，请简化描述或降低规格后重试。"
+	case ErrorTypeTimeout:
+		return "生成等待超时，请稍后重试或降低规格。"
+	case ErrorTypeCancelled:
+		return "本次生成已取消"
+	case ErrorTypeUnknown:
+		return "生成失败，请稍后重试。"
+	default:
+		return ""
+	}
+}
+
+func containsAnyPattern(value string, patterns []string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, pattern := range patterns {
+		if pattern = strings.ToLower(strings.TrimSpace(pattern)); pattern != "" && strings.Contains(value, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAllPatterns(value string, patterns []string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if len(patterns) == 0 {
+		return false
+	}
+	for _, pattern := range patterns {
+		if pattern = strings.ToLower(strings.TrimSpace(pattern)); pattern == "" || !strings.Contains(value, pattern) {
+			return false
+		}
+	}
+	return true
 }
 
 func isFinalStatus(status string) bool {

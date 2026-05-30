@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Server,
   Star,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -39,12 +40,14 @@ import { timeRangeQuery, type TimeRangeValue } from "@/components/time-range-uti
 import {
   fetchAdminBusinessImageJobs,
   fetchBusinessAPIProviders,
+  fetchBusinessProviderPools,
   fetchBusinessTrackerSummary,
   fetchBusinessUsers,
   fetchMaintenanceStatus,
   fetchRuntimeStatus,
   updateMaintenanceStatus,
   type BusinessAPIProvider,
+  type BusinessProviderPool,
   type BusinessImageJob,
   type BusinessTrackerSummary,
   type BusinessUser,
@@ -166,6 +169,13 @@ function defaultProviderNames(items: BusinessAPIProvider[]) {
   return names.length > 0 ? names.join(" / ") : "-";
 }
 
+function poolDefaultNames(items: BusinessProviderPool[]) {
+  const names = items
+    .filter((item) => item.enabled && item.isDefault)
+    .map((item) => item.name || item.platform);
+  return names.length > 0 ? names.join(" / ") : "-";
+}
+
 function platformLabel(value: string) {
   switch (value) {
     case "gpt-image":
@@ -212,6 +222,31 @@ function jobStatusVariant(status: string): "success" | "warning" | "danger" | "i
   }
 }
 
+function userErrorTypeLabel(type?: string) {
+  switch (type) {
+    case "credit":
+      return "点数不足";
+    case "input":
+      return "输入不完整";
+    case "queue":
+      return "队列/并发";
+    case "busy":
+      return "服务繁忙";
+    case "refused":
+      return "内容拒绝";
+    case "overload":
+      return "规格过高";
+    case "timeout":
+      return "生成超时";
+    case "cancelled":
+      return "用户取消";
+    case "unknown":
+      return "未知错误";
+    default:
+      return "";
+  }
+}
+
 function badgeClass(variant: "success" | "warning" | "danger" | "info") {
   if (variant === "success") return "ok";
   if (variant === "danger") return "fail";
@@ -225,6 +260,161 @@ function upstreamJobLabel(job: BusinessImageJob) {
 
 function upstreamJobVariant(job: BusinessImageJob): "warning" | "info" {
   return job.upstreamSent || job.upstreamStatus === "sent" ? "warning" : "info";
+}
+
+function providerSourceLabel(job: BusinessImageJob) {
+  switch (job.providerSource) {
+    case "provider_pool":
+      return "号池";
+    case "legacy_provider":
+      return "API 接入";
+    case "api_access":
+      return "配置接入";
+    case "environment":
+      return "环境变量";
+    default:
+      return job.providerId ? "API 接入" : "-";
+  }
+}
+
+function providerSourceVariant(job: BusinessImageJob): "success" | "warning" | "danger" | "info" {
+  if (job.providerSource === "provider_pool") {
+    return "success";
+  }
+  if (job.providerSource === "legacy_provider" || job.providerSource === "api_access") {
+    return "info";
+  }
+  if (job.providerSource === "environment") {
+    return "warning";
+  }
+  return "info";
+}
+
+function dispatchStrategyLabel(value?: string) {
+  switch (value) {
+    case "tagged_pool":
+      return "标签池";
+    case "tagged_pool_fallback":
+      return "标签池回退";
+    case "fallback_pool":
+      return "兜底池";
+    case "api_fallback":
+      return "API 兜底";
+    case "api_access":
+      return "API 策略";
+    default:
+      return "";
+  }
+}
+
+function dispatchStrategyVariant(value?: string): "success" | "warning" | "danger" | "info" {
+  switch (value) {
+    case "tagged_pool":
+      return "success";
+    case "tagged_pool_fallback":
+    case "fallback_pool":
+    case "api_fallback":
+      return "warning";
+    default:
+      return "info";
+  }
+}
+
+function providerMatchModeLabel(value?: string) {
+  switch (value) {
+    case "any":
+      return "任一标签";
+    case "all":
+      return "全部标签";
+    case "fallback":
+      return "fallback";
+    default:
+      return "";
+  }
+}
+
+function compactTags(tags?: string[], limit = 2) {
+  const normalized = (tags || []).map((tag) => tag.trim()).filter(Boolean);
+  return {
+    visible: normalized.slice(0, limit),
+    overflow: Math.max(0, normalized.length - limit),
+    title: normalized.join(", "),
+  };
+}
+
+function compactTagText(tags?: string[], limit = 2) {
+  const compact = compactTags(tags, limit);
+  if (compact.visible.length === 0) {
+    return "-";
+  }
+  return `${compact.visible.join(" · ")}${compact.overflow > 0 ? ` +${compact.overflow}` : ""}`;
+}
+
+function tagLine(title: string, tags?: string[], limit = 2) {
+  const compact = compactTags(tags, limit);
+  const text = compactTagText(tags, limit);
+  return (
+    <div className="min-w-0 truncate text-[11px] leading-4 text-[var(--app-text-muted)]" title={compact.title || undefined}>
+      {title} <span className="font-mono text-[var(--app-text-secondary)]">{text}</span>
+    </div>
+  );
+}
+
+function fullTagList(tags?: string[]) {
+  const items = (tags || []).map((tag) => tag.trim()).filter(Boolean);
+  return items.length > 0 ? items.join(" · ") : "-";
+}
+
+function prettyPayload(payload?: Record<string, unknown>) {
+  if (!payload || Object.keys(payload).length === 0) {
+    return "{}";
+  }
+  return JSON.stringify(payload, null, 2);
+}
+
+function jobDispatchTrace(job: BusinessImageJob) {
+  if ((job.dispatchTrace || []).length > 0) {
+    return job.dispatchTrace || [];
+  }
+  switch (job.dispatchStrategy) {
+    case "tagged_pool":
+      return [
+        "请求标签命中标签池",
+        `调度到池 ${job.providerGroupName || job.providerGroupId || "-"}`,
+        `调度到成员 ${job.providerMemberName || job.providerName || job.providerMemberId || "-"}`,
+      ];
+    case "tagged_pool_fallback":
+      return [
+        "请求标签命中标签池",
+        "标签池无可用成员",
+        `回退 fallback 池 ${job.providerGroupName || job.providerGroupId || "-"}`,
+        `调度到成员 ${job.providerMemberName || job.providerName || job.providerMemberId || "-"}`,
+      ];
+    case "fallback_pool":
+      return [
+        "没有标签池命中",
+        `调度到 fallback 池 ${job.providerGroupName || job.providerGroupId || "-"}`,
+        `调度到成员 ${job.providerMemberName || job.providerName || job.providerMemberId || "-"}`,
+      ];
+    case "api_fallback":
+      return [
+        "号池无可用成员",
+        `回退 API 接入 ${job.providerName || job.providerId || providerSourceLabel(job)}`,
+      ];
+    case "api_access":
+      return [`使用 API 接入 ${job.providerName || job.providerId || providerSourceLabel(job)}`];
+    default:
+      if (job.providerSource === "provider_pool") {
+        return [
+          `调度到池 ${job.providerGroupName || job.providerGroupId || "-"}`,
+          `调度到成员 ${job.providerMemberName || job.providerName || job.providerMemberId || "-"}`,
+        ];
+      }
+      if (job.providerSource) {
+        return [`使用 ${providerSourceLabel(job)} ${job.providerName || job.providerId || ""}`.trim()];
+      }
+      return ["未记录调度策略"];
+  }
 }
 
 function statusVariant(runtime: RuntimeStatusResponse | null, providers: BusinessAPIProvider[], tracker: BusinessTrackerSummary | null): "success" | "warning" | "danger" {
@@ -329,17 +519,145 @@ function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-const jobTableColumnCount = 10;
+function JobDetailDrawer({
+  job,
+  username,
+  onClose,
+}: {
+  job: BusinessImageJob | null;
+  username: string;
+  onClose: () => void;
+}) {
+  if (!job) {
+    return null;
+  }
+  return (
+    <div className="fixed inset-0 z-50">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/55"
+        aria-label="关闭 Job 详情"
+        onClick={onClose}
+      />
+      <aside className="absolute right-0 top-0 h-full w-full max-w-[720px] overflow-y-auto border-l border-[var(--app-border)] bg-[var(--app-bg-panel)] shadow-2xl">
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-[var(--app-border)] bg-[var(--app-bg-panel)] px-5 py-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={cn("app-badge", badgeClass(jobStatusVariant(job.status)))}>{jobStatusLabel(job.status)}</span>
+              <span className={cn("app-badge", badgeClass(providerSourceVariant(job)))}>{providerSourceLabel(job)}</span>
+              {dispatchStrategyLabel(job.dispatchStrategy) ? (
+                <span className={cn("app-badge", badgeClass(dispatchStrategyVariant(job.dispatchStrategy)))}>
+                  {dispatchStrategyLabel(job.dispatchStrategy)}
+                </span>
+              ) : null}
+            </div>
+            <h3 className="mt-3 truncate text-base font-semibold text-[var(--app-text-primary)]">{job.prompt || "无提示词"}</h3>
+            <div className="mt-1 truncate text-xs text-[var(--app-text-muted)]">{job.id}</div>
+          </div>
+          <button type="button" className="app-btn" onClick={onClose} aria-label="关闭">
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="grid gap-4 p-5 text-sm text-[var(--app-text-secondary)]">
+          <section className="grid gap-2 sm:grid-cols-2">
+            <DetailRow label="用户" value={username || job.userId} />
+            <DetailRow label="阶段" value={job.stage || "-"} />
+            <DetailRow label="平台" value={`${platformLabel(String(job.platform || ""))} / ${job.model || "-"}`} />
+            <DetailRow label="规格" value={`${job.size || "-"} / ${job.quality || "-"}`} />
+            <DetailRow label="图片" value={`${numberText(job.actualCount)} / ${numberText(job.requestedCount)} 张`} />
+            <DetailRow label="扣点" value={`${numberText(job.creditReserved)} / 退 ${numberText(job.creditRefunded)}`} />
+          </section>
+
+          <section className={cn(adminSubPanelClass, "p-4")}>
+            <h4 className="mb-3 text-sm font-semibold text-[var(--app-text-primary)]">Provider</h4>
+            <div className="grid gap-2 text-xs leading-5 sm:grid-cols-2">
+              <div>来源：{providerSourceLabel(job)}</div>
+              <div>策略：{dispatchStrategyLabel(job.dispatchStrategy) || "-"}</div>
+              <div>池：{job.providerGroupName || job.providerGroupId || "-"}</div>
+              <div>成员：{job.providerMemberName || job.providerName || job.providerMemberId || job.providerId || "-"}</div>
+              <div>池匹配：{providerMatchModeLabel(job.providerGroupMatchMode) || "-"}</div>
+              <div>池标签：{fullTagList(job.providerGroupTags)}</div>
+            </div>
+          </section>
+
+          <section className={cn(adminSubPanelClass, "p-4")}>
+            <h4 className="mb-3 text-sm font-semibold text-[var(--app-text-primary)]">标签</h4>
+            <div className="grid gap-2 text-xs leading-5">
+              <div>请求：<span className="font-mono">{fullTagList(job.requestDispatchTags)}</span></div>
+              <div>用户：<span className="font-mono">{fullTagList(job.userDispatchTags)}</span></div>
+              <div>最终：<span className="font-mono">{fullTagList(job.dispatchTags)}</span></div>
+            </div>
+          </section>
+
+          <section className={cn(adminSubPanelClass, "p-4")}>
+            <h4 className="mb-3 text-sm font-semibold text-[var(--app-text-primary)]">调度链路</h4>
+            <div className="grid gap-2 text-xs leading-5">
+              {jobDispatchTrace(job).map((item, index) => (
+                <div key={`${item}-${index}`} className="flex items-center gap-2">
+                  <span className="app-badge off">{index + 1}</span>
+                  <span>{item}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section className={cn(adminSubPanelClass, "p-4")}>
+            <h4 className="mb-3 text-sm font-semibold text-[var(--app-text-primary)]">耗时链路</h4>
+            <div className="grid gap-2 text-xs leading-5 sm:grid-cols-2">
+              <div>排队：{formatDurationMs(job.queueWaitMs)}</div>
+              <div>上游：{formatDurationMs(job.upstreamDurationMs)}</div>
+              <div>落盘：{formatDurationMs(job.persistDurationMs)}</div>
+              <div>总计：{formatDurationMs(job.totalDurationMs)}</div>
+              <div>创建：{formatDateTime(job.createdAt)}</div>
+              <div>开始：{formatDateTime(job.startedAt)}</div>
+              <div>结束：{formatDateTime(job.finishedAt)}</div>
+              <div>更新：{formatDateTime(job.updatedAt)}</div>
+            </div>
+          </section>
+
+          <section className={cn(adminSubPanelClass, "p-4")}>
+            <h4 className="mb-3 text-sm font-semibold text-[var(--app-text-primary)]">错误</h4>
+            <div className="grid gap-3 text-xs leading-5">
+              <div>
+                <div className="mb-1 text-[var(--app-text-muted)]">用户展示</div>
+                <div className="flex flex-wrap items-center gap-2 text-[var(--app-text-secondary)]">
+                  {job.userErrorType ? <span className="app-badge fail">{userErrorTypeLabel(job.userErrorType) || job.userErrorType}</span> : null}
+                  <span className="break-words">{job.userErrorMessage || "-"}</span>
+                </div>
+              </div>
+              <div className="text-rose-200">
+                <div className="mb-1 text-[var(--app-text-muted)]">真实错误</div>
+                <div>{job.errorCode || "-"}</div>
+                <div className="mt-1 break-words">{job.errorMessage || "-"}</div>
+              </div>
+            </div>
+          </section>
+
+          <section className={cn(adminSubPanelClass, "p-4")}>
+            <h4 className="mb-3 text-sm font-semibold text-[var(--app-text-primary)]">Payload</h4>
+            <pre className="max-h-[360px] overflow-auto rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-black/20 p-3 text-xs leading-5 text-[var(--app-text-secondary)]">
+              {prettyPayload(job.payload)}
+            </pre>
+          </section>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+const jobTableColumnCount = 6;
 
 
 export default function OperationsPage() {
   const [runtime, setRuntime] = useState<RuntimeStatusResponse | null>(null);
   const [tracker, setTracker] = useState<BusinessTrackerSummary | null>(null);
   const [providers, setProviders] = useState<BusinessAPIProvider[]>([]);
+  const [providerPools, setProviderPools] = useState<BusinessProviderPool[]>([]);
   const [users, setUsers] = useState<BusinessUser[]>([]);
   const [jobs, setJobs] = useState<BusinessImageJob[]>([]);
   const [jobsPage, setJobsPage] = useState({ page: 1, pageSize: 20, total: 0 });
   const [jobStatus, setJobStatus] = useState("");
+  const [jobErrorType, setJobErrorType] = useState("");
   const [jobUserId, setJobUserId] = useState("");
   const [jobPlatform, setJobPlatform] = useState("");
   const [jobTimeRange, setJobTimeRange] = useState<TimeRangeValue>({ preset: "last7", from: "", to: "" });
@@ -347,29 +665,33 @@ export default function OperationsPage() {
   const [jobsLoading, setJobsLoading] = useState(true);
   const [maintenance, setMaintenance] = useState<MaintenanceStatus | null>(null);
   const [maintenanceSaving, setMaintenanceSaving] = useState(false);
+  const [selectedJob, setSelectedJob] = useState<BusinessImageJob | null>(null);
 
   const jobQuery = useMemo(
     () => ({
       status: jobStatus || undefined,
+      errorType: jobErrorType || undefined,
       userId: jobUserId || undefined,
       platform: jobPlatform || undefined,
       ...timeRangeQuery(jobTimeRange),
     }),
-    [jobPlatform, jobStatus, jobTimeRange, jobUserId],
+    [jobErrorType, jobPlatform, jobStatus, jobTimeRange, jobUserId],
   );
 
   const loadStatus = useCallback(async () => {
     setLoading(true);
     try {
-      const [runtimePayload, trackerPayload, providersPayload, maintenancePayload] = await Promise.all([
+      const [runtimePayload, trackerPayload, providersPayload, poolsPayload, maintenancePayload] = await Promise.all([
         fetchRuntimeStatus(),
         fetchBusinessTrackerSummary(600),
         fetchBusinessAPIProviders(),
+        fetchBusinessProviderPools(),
         fetchMaintenanceStatus(),
       ]);
       setRuntime(runtimePayload);
       setTracker(trackerPayload);
       setProviders(providersPayload.items);
+      setProviderPools(poolsPayload.items);
       setMaintenance(maintenancePayload);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "读取运维监控失败");
@@ -434,6 +756,9 @@ export default function OperationsPage() {
   const pressure = useMemo(() => admissionPressure(runtime), [runtime]);
   const enabledProviders = useMemo(() => enabledProviderCount(providers), [providers]);
   const defaultProviders = useMemo(() => defaultProviderNames(providers), [providers]);
+  const defaultPools = useMemo(() => poolDefaultNames(providerPools), [providerPools]);
+  const providerPool = runtime?.providerPool;
+  const providerPoolIssues = providerPool?.dispatchIssues || [];
   const recentFailure = tracker?.recentFailures[0];
   const system = runtime?.system;
   const capacity = runtimeCapacity(runtime);
@@ -442,6 +767,7 @@ export default function OperationsPage() {
     users.forEach((user) => next.set(user.id, user.username));
     return next;
   }, [users]);
+  const selectedJobUsername = selectedJob ? usernamesByID.get(selectedJob.userId) || selectedJob.userId : "";
 
   return (
     <AdminPage>
@@ -637,6 +963,73 @@ export default function OperationsPage() {
                   <LoaderCircle className="mx-auto mb-2 size-5 animate-spin" />
                   读取中
                 </div>
+              ) : providerPool && (providerPool.groups > 0 || providerPool.members > 0) ? (
+                <div className="space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <DetailRow label="默认池" value={defaultPools} />
+                    <DetailRow label="池 / 成员" value={`${numberText(providerPool.groups)} / ${numberText(providerPool.members)}`} />
+                    <DetailRow label="可用成员" value={numberText(providerPool.availableMembers)} />
+                    <DetailRow label="冷却成员" value={numberText(providerPool.coolingMembers)} />
+                    <DetailRow label="限流成员" value={numberText(providerPool.limitedMembers)} />
+                    <DetailRow label="并发已满" value={numberText(providerPool.concurrencyLimitedMembers)} />
+                    <DetailRow label="不可用成员" value={numberText(providerPool.unavailableMembers)} />
+                  </div>
+                  <div className="rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] p-4">
+                    <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--app-text-primary)]">
+                      <Gauge className="size-4 text-sky-300" />
+                      调度诊断
+                    </div>
+                    {providerPoolIssues.length > 0 ? (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {providerPoolIssues.map((issue) => (
+                          <div
+                            key={issue.code}
+                            className={cn(
+                              "rounded-[var(--app-radius-md)] border px-3 py-2 text-sm",
+                              issue.code === "no_api_fallback" || issue.code === "no_available_member"
+                                ? "border-rose-400/20 bg-rose-400/10 text-rose-100"
+                                : "border-amber-400/20 bg-amber-400/10 text-amber-100",
+                            )}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="font-medium">{issue.label}</span>
+                              <span className="app-badge off">{numberText(issue.count)}</span>
+                            </div>
+                            {issue.detail ? (
+                              <div className="mt-1 text-xs leading-5 opacity-80">{issue.detail}</div>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-[var(--app-radius-md)] border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-100">
+                        当前调度无明显阻塞。
+                      </div>
+                    )}
+                  </div>
+                  {providerPool.lastError ? (
+                    <div className="rounded-[var(--app-radius-md)] border border-amber-400/20 bg-amber-400/10 p-4 text-sm text-amber-100">
+                      <div className="flex items-center gap-2 font-semibold">
+                        <AlertTriangle className="size-4" />
+                        号池最近错误
+                      </div>
+                      <div className="mt-2 text-xs leading-5 text-amber-100/80">
+                        <div>成员：{providerPool.lastErrorMember || "-"}</div>
+                        <div>时间：{formatDateTime(providerPool.lastErrorAt)}</div>
+                        <div className="mt-1 break-words">{providerPool.lastError}</div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-[var(--app-radius-md)] border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-100">
+                      Provider 号池暂无成员错误。
+                    </div>
+                  )}
+                  {providerPool.availableMembers === 0 ? (
+                    <div className="rounded-[var(--app-radius-md)] border border-rose-400/20 bg-rose-400/10 p-4 text-sm text-rose-100">
+                      当前没有可调度号池成员。若未配置 API 接入兜底，生图会直接失败。
+                    </div>
+                  ) : null}
+                </div>
               ) : providers.length === 0 ? (
                 <div className="rounded-[var(--app-radius-md)] border border-amber-400/20 bg-amber-400/10 p-4 text-sm text-amber-100">
                   当前没有上游接入。请先到上游管理添加 gpt-image 或 gemini-banana 接入。
@@ -740,6 +1133,23 @@ export default function OperationsPage() {
                 placeholder="全部状态"
               />
               <AppSelect
+                value={jobErrorType}
+                onChange={setJobErrorType}
+                options={[
+                  { value: "", label: "全部错误" },
+                  { value: "credit", label: "点数不足" },
+                  { value: "input", label: "输入不完整" },
+                  { value: "queue", label: "队列/并发" },
+                  { value: "busy", label: "服务繁忙" },
+                  { value: "refused", label: "内容拒绝" },
+                  { value: "overload", label: "规格过高" },
+                  { value: "timeout", label: "生成超时" },
+                  { value: "cancelled", label: "用户取消" },
+                  { value: "unknown", label: "未知错误" },
+                ]}
+                placeholder="全部错误"
+              />
+              <AppSelect
                 value={jobUserId}
                 onChange={setJobUserId}
                 options={[
@@ -765,20 +1175,24 @@ export default function OperationsPage() {
               </button>
             </div>
 
-            <div className="overflow-x-auto rounded-[var(--app-radius-lg)] border border-[var(--app-border)]">
-              <table className={cn(adminTableClass, "min-w-[1480px] text-left")}>
+            <div className="rounded-[var(--app-radius-lg)] border border-[var(--app-border)]">
+              <table className={cn(adminTableClass, "table-fixed text-left")}>
+	                <colgroup>
+	                  <col className="w-[11%]" />
+	                  <col className="w-[15%]" />
+	                  <col className="w-[31%]" />
+	                  <col className="w-[12%]" />
+	                  <col className="w-[15%]" />
+	                  <col className="w-[16%]" />
+                </colgroup>
                 <thead className={adminTableHeadClass}>
                   <tr>
-                    <th className="px-4 py-3 font-medium">状态</th>
-                    <th className="px-4 py-3 font-medium">用户</th>
-                    <th className="px-4 py-3 font-medium">平台 / 模型</th>
-                    <th className="px-4 py-3 font-medium">提示词</th>
-                    <th className="px-4 py-3 font-medium">上游状态</th>
-                    <th className="px-4 py-3 font-medium">耗时</th>
-                    <th className="px-4 py-3 font-medium">产物</th>
-                    <th className="px-4 py-3 font-medium">扣点 / 退款</th>
-                    <th className="px-4 py-3 font-medium">时间线</th>
-                    <th className="px-4 py-3 font-medium">错误</th>
+                    <th className="px-3 py-3 font-medium">状态 / 用户</th>
+                    <th className="px-3 py-3 font-medium">平台 / 来源</th>
+                    <th className="px-3 py-3 font-medium">号池 / 标签</th>
+                    <th className="px-3 py-3 font-medium">提示词</th>
+                    <th className="px-3 py-3 font-medium">执行 / 结果</th>
+                    <th className="px-3 py-3 font-medium">时间 / 错误</th>
                   </tr>
                 </thead>
                 <tbody className={adminTableBodyClass}>
@@ -797,59 +1211,101 @@ export default function OperationsPage() {
                     </tr>
                   ) : (
                     jobs.map((job) => (
-                      <tr key={job.id} className={cn(adminTableRowClass, "align-top text-[var(--app-text-secondary)]")}>
-                        <td className="px-4 py-3">
-                          <div className="space-y-1">
-                            <span className={cn("app-badge", badgeClass(jobStatusVariant(job.status)))}>{jobStatusLabel(job.status)}</span>
-                            <div className="font-mono text-[11px] text-[var(--app-text-muted)]">{job.stage || "-"}</div>
+                      <tr
+                          key={job.id}
+                          className={cn(adminTableRowClass, "cursor-pointer align-top text-[var(--app-text-secondary)]")}
+                          onClick={() => setSelectedJob(job)}
+                        >
+                        <td className="whitespace-normal px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className={cn("app-badge w-fit", badgeClass(jobStatusVariant(job.status)))}>{jobStatusLabel(job.status)}</span>
+                              <span className="truncate font-medium text-[var(--app-text-primary)]">
+                                {usernamesByID.get(job.userId) || job.userId}
+                              </span>
+                            </div>
+                            <div className="mt-0.5 truncate text-[11px] text-[var(--app-text-muted)]" title={`${job.userId} · ${job.stage || ""}`}>
+                              {job.userId} · {job.stage || "-"}
+                            </div>
                           </div>
                         </td>
-                        <td className="px-4 py-3">
-                          <div className="font-medium text-[var(--app-text-primary)]">
-                            {usernamesByID.get(job.userId) || job.userId}
-                          </div>
-                          <div className="font-mono text-[11px] text-[var(--app-text-muted)]">{job.userId}</div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div>{platformLabel(String(job.platform || ""))}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">{job.model || "-"}</div>
-                          <div className="mt-1 text-[11px] text-[var(--app-text-muted)]">{job.providerName || job.providerId || "-"}</div>
-                        </td>
-                        <td className="max-w-[260px] px-4 py-3">
-                          <div className="line-clamp-2">{job.prompt || "-"}</div>
-                          <div className="mt-1 space-y-0.5 font-mono text-[11px] text-[var(--app-text-muted)]">
-                            <div>job {job.id}</div>
-                            <div>gen {job.generationId || "-"}</div>
-                            <div>conv {job.conversationId || "-"}</div>
+                        <td className="whitespace-normal px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="truncate font-medium text-[var(--app-text-primary)]">
+                              {platformLabel(String(job.platform || ""))} · {job.model || "-"}
+                            </div>
+                            <div className="mt-1 flex items-center gap-1 overflow-hidden">
+                              <span className={cn("app-badge shrink-0", badgeClass(providerSourceVariant(job)))}>{providerSourceLabel(job)}</span>
+                              {dispatchStrategyLabel(job.dispatchStrategy) ? (
+                                <span className={cn("app-badge shrink-0", badgeClass(dispatchStrategyVariant(job.dispatchStrategy)))}>
+                                  {dispatchStrategyLabel(job.dispatchStrategy)}
+                                </span>
+                              ) : null}
+                            </div>
                           </div>
                         </td>
-                        <td className="px-4 py-3">
-                          <span className={cn("app-badge", badgeClass(upstreamJobVariant(job)))}>{upstreamJobLabel(job)}</span>
-                          <div className="mt-1 font-mono text-[11px] text-[var(--app-text-muted)]">{job.upstreamStatus || "pending"}</div>
+                        <td className="whitespace-normal px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="truncate font-medium text-[var(--app-text-primary)]" title={job.providerGroupName || job.providerGroupId || job.providerName || job.providerId || ""}>
+                              {job.providerSource === "provider_pool"
+                                ? job.providerGroupName || job.providerGroupId || "-"
+                                : job.providerName || job.providerId || "-"}
+                            </div>
+                            <div className="truncate text-[11px] text-[var(--app-text-muted)]" title={job.providerMemberName || job.providerName || job.providerMemberId || job.providerId || ""}>
+                              {job.providerSource === "provider_pool"
+                                ? `成员 ${job.providerMemberName || job.providerName || job.providerMemberId || job.providerId || "-"} · ${providerMatchModeLabel(job.providerGroupMatchMode) || "-"}`
+                                : "API 接入"}
+                            </div>
+                            {tagLine("池", job.providerGroupTags, 3)}
+                            {tagLine("用户", job.userDispatchTags, 3)}
+                            {tagLine("最终", job.dispatchTags, 4)}
+                          </div>
                         </td>
-                        <td className="px-4 py-3">
-                          <div>总计 {formatDurationMs(job.totalDurationMs)}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">排队 {formatDurationMs(job.queueWaitMs)}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">上游 {formatDurationMs(job.upstreamDurationMs)}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">落盘 {formatDurationMs(job.persistDurationMs)}</div>
+                        <td className="whitespace-normal px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-[var(--app-text-primary)]" title={job.prompt || ""}>{job.prompt || "-"}</div>
+                          </div>
                         </td>
-                        <td className="px-4 py-3">
-                          <div>{numberText(job.actualCount)}/{numberText(job.requestedCount)} 张</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">{formatBytes(job.storageBytes)}</div>
+                        <td className="whitespace-normal px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className={cn("app-badge shrink-0", badgeClass(upstreamJobVariant(job)))}>{upstreamJobLabel(job)}</span>
+                              <span className="truncate text-xs text-[var(--app-text-muted)]">
+                                {numberText(job.actualCount)}/{numberText(job.requestedCount)} 张 · {formatBytes(job.storageBytes)}
+                              </span>
+                            </div>
+                            <div className="mt-0.5 text-xs text-[var(--app-text-muted)]">
+                              点 {numberText(job.creditReserved)} / 退 {numberText(job.creditRefunded)}
+                            </div>
+                            <div className="mt-0.5 text-xs text-[var(--app-text-muted)]">
+                              总 {formatDurationMs(job.totalDurationMs)}
+                            </div>
+                            <div className="mt-0.5 text-xs text-[var(--app-text-muted)]">
+                              上游 {formatDurationMs(job.upstreamDurationMs)}
+                            </div>
+                          </div>
                         </td>
-                        <td className="px-4 py-3">
-                          <div>{numberText(job.creditReserved)}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">退 {numberText(job.creditRefunded)}</div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div>创建 {formatDateTime(job.createdAt)}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">开始 {formatDateTime(job.startedAt)}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">结束 {formatDateTime(job.finishedAt)}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">更新 {formatDateTime(job.updatedAt)}</div>
-                        </td>
-                        <td className="max-w-[220px] px-4 py-3">
-                          <div className="text-xs text-rose-300">{job.errorCode || "-"}</div>
-                          <div className="line-clamp-2 text-xs text-[var(--app-text-muted)]">{job.errorMessage || "-"}</div>
+                        <td className="whitespace-normal px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="text-xs text-[var(--app-text-muted)]">
+                              创建 {formatDateTime(job.createdAt)}
+                            </div>
+                            <div className="text-xs text-[var(--app-text-muted)]">
+                              结束 {formatDateTime(job.finishedAt)}
+                            </div>
+                            {job.userErrorType || job.errorCode || job.errorMessage ? (
+                              <div className="mt-1 flex min-w-0 items-center gap-1">
+                                {job.userErrorType ? (
+                                  <span className="app-badge fail shrink-0">{userErrorTypeLabel(job.userErrorType) || job.userErrorType}</span>
+                                ) : null}
+                                <span className="truncate text-xs text-rose-300" title={job.errorMessage || job.errorCode || ""}>
+                                  {job.errorCode || "-"} {job.errorMessage || ""}
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="mt-0.5 text-xs text-[var(--app-text-muted)]">-</div>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -889,6 +1345,7 @@ export default function OperationsPage() {
             </div>
           </div>
         </AdminPanel>
+        <JobDetailDrawer job={selectedJob} username={selectedJobUsername} onClose={() => setSelectedJob(null)} />
     </AdminPage>
   );
 }

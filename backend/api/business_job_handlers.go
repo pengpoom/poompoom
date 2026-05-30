@@ -13,17 +13,64 @@ import (
 
 type businessImageJobView struct {
 	businessjobs.Job
-	Payload map[string]any `json:"payload,omitempty"`
+	ProviderSource         string         `json:"providerSource,omitempty"`
+	ProviderGroupID        string         `json:"providerGroupId,omitempty"`
+	ProviderGroupName      string         `json:"providerGroupName,omitempty"`
+	ProviderGroupMatchMode string         `json:"providerGroupMatchMode,omitempty"`
+	ProviderGroupTags      []string       `json:"providerGroupTags,omitempty"`
+	ProviderMemberID       string         `json:"providerMemberId,omitempty"`
+	ProviderMemberName     string         `json:"providerMemberName,omitempty"`
+	DispatchStrategy       string         `json:"dispatchStrategy,omitempty"`
+	DispatchTrace          []string       `json:"dispatchTrace,omitempty"`
+	RequestDispatchTags    []string       `json:"requestDispatchTags,omitempty"`
+	UserDispatchTags       []string       `json:"userDispatchTags,omitempty"`
+	DispatchTags           []string       `json:"dispatchTags,omitempty"`
+	UserErrorType          string         `json:"userErrorType,omitempty"`
+	UserErrorMessage       string         `json:"userErrorMessage,omitempty"`
+	Payload                map[string]any `json:"payload,omitempty"`
 }
 
-func businessImageJobViewFromJob(job businessjobs.Job) businessImageJobView {
+func (s *Server) businessImageJobViewsFromJobs(ctx context.Context, jobs []businessjobs.Job) []businessImageJobView {
+	groupNames := s.businessProviderGroupNamesByID(ctx, jobs)
+	views := make([]businessImageJobView, 0, len(jobs))
+	for _, job := range jobs {
+		views = append(views, businessImageJobViewFromJob(job, groupNames))
+	}
+	return views
+}
+
+func businessImageJobViewFromJob(job businessjobs.Job, groupNames map[string]string) businessImageJobView {
+	payload := businessImageJobRawPayload(job)
+	source := strings.TrimSpace(stringValue(payload["providerSource"]))
+	groupID := strings.TrimSpace(stringValue(payload["providerGroupId"]))
+	memberID := strings.TrimSpace(firstNonEmpty(stringValue(payload["providerId"]), job.ProviderID))
+	memberName := strings.TrimSpace(firstNonEmpty(stringValue(payload["providerName"]), job.ProviderName))
+	if source == "" {
+		source = inferBusinessImageJobProviderSource(job, groupID)
+	}
 	return businessImageJobView{
-		Job:     job,
-		Payload: businessImageJobPublicPayload(job),
+		Job:               job,
+		ProviderSource:    source,
+		ProviderGroupID:   groupID,
+		ProviderGroupName: strings.TrimSpace(groupNames[groupID]),
+		ProviderGroupMatchMode: strings.TrimSpace(
+			stringValue(payload["providerGroupMatchMode"]),
+		),
+		ProviderGroupTags:   providerDispatchTagStrings(payload["providerGroupTags"]),
+		ProviderMemberID:    memberID,
+		ProviderMemberName:  memberName,
+		DispatchStrategy:    strings.TrimSpace(stringValue(payload["dispatchStrategy"])),
+		DispatchTrace:       providerDispatchTagStrings(payload["dispatchTrace"]),
+		RequestDispatchTags: providerDispatchTagStrings(payload["requestDispatchTags"]),
+		UserDispatchTags:    providerDispatchTagStrings(payload["userDispatchTags"]),
+		DispatchTags:        providerDispatchTagStrings(payload["dispatchTags"]),
+		UserErrorType:       businessjobs.JobUserErrorType(job),
+		UserErrorMessage:    businessjobs.JobUserErrorMessage(job),
+		Payload:             sanitizeBusinessImageJobPayload(payload),
 	}
 }
 
-func businessImageJobPublicPayload(job businessjobs.Job) map[string]any {
+func businessImageJobRawPayload(job businessjobs.Job) map[string]any {
 	if len(job.PayloadJSON) == 0 {
 		return nil
 	}
@@ -31,15 +78,24 @@ func businessImageJobPublicPayload(job businessjobs.Job) map[string]any {
 	if err := json.Unmarshal(job.PayloadJSON, &payload); err != nil {
 		return nil
 	}
-	if payload == nil {
-		return nil
-	}
-	return sanitizeBusinessImageJobPayload(payload)
+	return payload
+}
+
+func businessImageJobPublicPayload(job businessjobs.Job) map[string]any {
+	return sanitizeBusinessImageJobPayload(businessImageJobRawPayload(job))
 }
 
 func sanitizeBusinessImageJobPayload(payload map[string]any) map[string]any {
+	if payload == nil {
+		return nil
+	}
 	next := make(map[string]any, len(payload))
 	for key, value := range payload {
+		if key == "providerSource" || key == "providerId" || key == "providerName" || key == "providerGroupId" ||
+			key == "providerGroupMatchMode" || key == "providerGroupTags" || key == "dispatchStrategy" ||
+			key == "dispatchTrace" || key == "requestDispatchTags" || key == "userDispatchTags" || key == "dispatchTags" {
+			continue
+		}
 		if key == "sourceImages" {
 			next[key] = sanitizeBusinessImageJobSourceImages(value)
 			continue
@@ -47,6 +103,48 @@ func sanitizeBusinessImageJobPayload(payload map[string]any) map[string]any {
 		next[key] = value
 	}
 	return next
+}
+
+func inferBusinessImageJobProviderSource(job businessjobs.Job, groupID string) string {
+	if strings.TrimSpace(groupID) != "" {
+		return imageProviderSourcePool
+	}
+	if strings.TrimSpace(job.ProviderID) != "" {
+		return imageProviderSourceLegacy
+	}
+	if strings.TrimSpace(job.ProviderName) == "API 接入配置" {
+		return imageProviderSourceAPIAccess
+	}
+	if strings.TrimSpace(job.ProviderName) == "环境变量 API" {
+		return imageProviderSourceEnv
+	}
+	return ""
+}
+
+func (s *Server) businessProviderGroupNamesByID(ctx context.Context, jobs []businessjobs.Job) map[string]string {
+	ids := make(map[string]struct{})
+	for _, job := range jobs {
+		payload := businessImageJobRawPayload(job)
+		if groupID := strings.TrimSpace(stringValue(payload["providerGroupId"])); groupID != "" {
+			ids[groupID] = struct{}{}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	store, err := s.newBusinessProviderStore()
+	if err != nil {
+		return nil
+	}
+	defer store.Close()
+	names := make(map[string]string, len(ids))
+	for id := range ids {
+		group, ok, err := store.GetGroup(ctx, id)
+		if err == nil && ok {
+			names[id] = group.Name
+		}
+	}
+	return names
 }
 
 func sanitizeBusinessImageJobSourceImages(value any) any {
@@ -97,10 +195,7 @@ func (s *Server) handleListBusinessImageJobs(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	views := make([]businessImageJobView, 0, len(items))
-	for _, item := range items {
-		views = append(views, businessImageJobViewFromJob(item))
-	}
+	views := s.businessImageJobViewsFromJobs(r.Context(), items)
 	writeJSON(w, http.StatusOK, map[string]any{"items": views})
 }
 
@@ -116,22 +211,20 @@ func (s *Server) handleAdminListBusinessImageJobs(w http.ResponseWriter, r *http
 	page, pageSize, offset := paginationFromQuery(r, "", 20, 100)
 	from, to := usageTimeRangeFromQuery(r)
 	items, total, err := store.AdminList(r.Context(), businessjobs.AdminListFilter{
-		UserID:   r.URL.Query().Get("userId"),
-		Status:   r.URL.Query().Get("status"),
-		Platform: r.URL.Query().Get("platform"),
-		From:     from,
-		To:       to,
-		Limit:    pageSize,
-		Offset:   offset,
+		UserID:    r.URL.Query().Get("userId"),
+		Status:    r.URL.Query().Get("status"),
+		Platform:  r.URL.Query().Get("platform"),
+		ErrorType: r.URL.Query().Get("errorType"),
+		From:      from,
+		To:        to,
+		Limit:     pageSize,
+		Offset:    offset,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	views := make([]businessImageJobView, 0, len(items))
-	for _, item := range items {
-		views = append(views, businessImageJobViewFromJob(item))
-	}
+	views := s.businessImageJobViewsFromJobs(r.Context(), items)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"items": views,
 		"page": paginationMeta{
@@ -160,7 +253,7 @@ func (s *Server) handleGetBusinessImageJob(w http.ResponseWriter, r *http.Reques
 		writeAPIError(w, http.StatusNotFound, "business_job_not_found", "job not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"item": businessImageJobViewFromJob(item)})
+	writeJSON(w, http.StatusOK, map[string]any{"item": businessImageJobViewFromJob(item, s.businessProviderGroupNamesByID(r.Context(), []businessjobs.Job{item}))})
 }
 
 func (s *Server) handleCancelBusinessImageJob(w http.ResponseWriter, r *http.Request) {
@@ -203,7 +296,7 @@ func (s *Server) handleCancelBusinessImageJob(w http.ResponseWriter, r *http.Req
 	}
 	s.markBusinessImageGenerationCancelled(context.Background(), userID, item.GenerationID)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"item":            businessImageJobViewFromJob(item),
+		"item":            businessImageJobViewFromJob(item, s.businessProviderGroupNamesByID(r.Context(), []businessjobs.Job{item})),
 		"activeCancelled": activeCancelled,
 	})
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"imagestudio/internal/businesspayments"
+	"imagestudio/internal/businesssettings"
 )
 
 type paymentPackagePayload struct {
@@ -18,6 +19,7 @@ type paymentPackagePayload struct {
 	AmountCents  int64  `json:"amountCents"`
 	Credits      int64  `json:"credits"`
 	DurationDays int    `json:"durationDays"`
+	LevelTag     string `json:"levelTag"`
 	Currency     string `json:"currency"`
 	Enabled      bool   `json:"enabled"`
 	SortOrder    int    `json:"sortOrder"`
@@ -30,6 +32,12 @@ type paymentProviderPayload struct {
 	SupportedMethods []string          `json:"supportedMethods"`
 	Config           map[string]string `json:"config"`
 	SortOrder        int               `json:"sortOrder"`
+}
+
+type businessBillingLevelView struct {
+	Name        string `json:"name"`
+	Tag         string `json:"tag"`
+	Description string `json:"description"`
 }
 
 func (s *Server) handleListPaymentPackages(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +53,23 @@ func (s *Server) handleListPaymentPackages(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) handleGetBusinessBillingLevels(w http.ResponseWriter, r *http.Request) {
+	userID := businessUserIDForRequest(r)
+	settings := s.businessSystemSettingsForContext(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{
+		"subscription": businessBillingLevelViewFromTag(
+			s.businessSubscriptionLevelDispatchTag(r.Context(), userID, settings),
+			settings.Billing.SubscriptionLevels,
+			defaultSubscriptionDispatchTag,
+		),
+		"wallet": businessBillingLevelViewFromTag(
+			s.businessWalletLevelDispatchTag(r.Context(), userID, settings),
+			settings.Billing.WalletLevels,
+			defaultWalletDispatchTag,
+		),
+	})
 }
 
 func (s *Server) handleGetBusinessSubscription(w http.ResponseWriter, r *http.Request) {
@@ -470,9 +495,37 @@ func paymentPackageInput(body paymentPackagePayload) businesspayments.PackageInp
 		AmountCents:  body.AmountCents,
 		Credits:      body.Credits,
 		DurationDays: body.DurationDays,
+		LevelTag:     body.LevelTag,
 		Currency:     body.Currency,
 		Enabled:      body.Enabled,
 		SortOrder:    body.SortOrder,
+	}
+}
+
+func businessBillingLevelViewFromTag(tag string, levels []businesssettings.BillingLevelSettings, fallback string) businessBillingLevelView {
+	tag = normalizeProviderDispatchTag(tag)
+	if tag == "" {
+		tag = normalizeProviderDispatchTag(fallback)
+	}
+	for _, level := range levels {
+		if normalizeProviderDispatchTag(level.Tag) == tag {
+			return businessBillingLevelView{
+				Name:        strings.TrimSpace(level.Name),
+				Tag:         tag,
+				Description: strings.TrimSpace(level.Description),
+			}
+		}
+	}
+	name := tag
+	if index := strings.Index(name, ":"); index >= 0 {
+		name = name[index+1:]
+	}
+	if name != "" {
+		name = strings.ToUpper(name[:1]) + name[1:]
+	}
+	return businessBillingLevelView{
+		Name: name,
+		Tag:  tag,
 	}
 }
 

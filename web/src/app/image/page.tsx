@@ -347,6 +347,8 @@ function buildBusinessJobSignature(job: BusinessImageJob) {
     job.stage || "",
     job.errorCode || "",
     job.errorMessage || "",
+    job.userErrorType || "",
+    job.userErrorMessage || "",
     job.actualCount,
     job.storageBytes,
     job.updatedAt,

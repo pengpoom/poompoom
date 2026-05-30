@@ -9,6 +9,7 @@ import { AppModal, AppSelect } from "@/components/app-controls";
 import { BUSINESS_CREDIT_CHANGED_EVENT } from "@/components/app-shell-nav";
 import {
   fetchBusinessAffiliateSummary,
+  fetchBusinessBillingLevels,
   fetchBusinessCredit,
   fetchBusinessCreditLedger,
   fetchBusinessPaymentMethods,
@@ -18,6 +19,7 @@ import {
   createBusinessPaymentOrder,
   redeemBusinessCode,
   type BusinessAffiliateSummary,
+  type BusinessBillingLevelsResponse,
   type BusinessCreditLedgerEntry,
   type BusinessCreditSummary,
   type BusinessPaymentOrder,
@@ -143,6 +145,19 @@ function subscriptionStatusText(subscription?: BusinessSubscription | null) {
   return "未订阅";
 }
 
+function billingLevelName(level?: { name?: string; tag?: string } | null, fallback = "-") {
+  const name = String(level?.name || "").trim();
+  if (name) {
+    return name;
+  }
+  const tag = String(level?.tag || "").trim();
+  if (!tag) {
+    return fallback;
+  }
+  const value = tag.includes(":") ? tag.split(":").pop() || tag : tag;
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
 function isSubscriptionPackage(item: Pick<BusinessPaymentPackage, "packageType">) {
   return item.packageType === "subscription" || item.packageType === "monthly";
 }
@@ -179,6 +194,7 @@ export default function CreditsPage() {
   const [credit, setCredit] = useState<BusinessCreditSummary | null>(null);
   const [affiliate, setAffiliate] = useState<BusinessAffiliateSummary | null>(null);
   const [subscription, setSubscription] = useState<BusinessSubscription | null>(null);
+  const [billingLevels, setBillingLevels] = useState<BusinessBillingLevelsResponse | null>(null);
   const [packages, setPackages] = useState<BusinessPaymentPackage[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<BusinessPaymentMethod[]>([]);
   const [orders, setOrders] = useState<BusinessPaymentOrder[]>([]);
@@ -199,10 +215,11 @@ export default function CreditsPage() {
   const loadData = async (nextLedgerPage = ledgerPage.page) => {
     setLoading(true);
     try {
-      const [creditPayload, affiliatePayload, subscriptionPayload, packagePayload, methodPayload, orderPayload, ledgerPayload] = await Promise.all([
+      const [creditPayload, affiliatePayload, subscriptionPayload, levelPayload, packagePayload, methodPayload, orderPayload, ledgerPayload] = await Promise.all([
         fetchBusinessCredit(),
         fetchBusinessAffiliateSummary().catch(() => null),
         fetchBusinessSubscription().catch(() => ({ subscription: {} })),
+        fetchBusinessBillingLevels().catch(() => null),
         fetchBusinessPaymentPackages().catch(() => ({ items: [] })),
         fetchBusinessPaymentMethods().catch(() => ({ items: [{ key: "manual", label: "人工确认", providerKey: "manual" }] })),
         fetchBusinessPaymentOrders({ limit: 10 }).catch(() => ({ items: [] })),
@@ -211,6 +228,7 @@ export default function CreditsPage() {
       setCredit(creditPayload);
       setAffiliate(affiliatePayload);
       setSubscription(subscriptionPayload.subscription || null);
+      setBillingLevels(levelPayload);
       setPackages(packagePayload.items || []);
       setPaymentMethods(methodPayload.items?.length ? methodPayload.items : [{ key: "manual", label: "人工确认", providerKey: "manual" }]);
       setOrders(orderPayload.items || []);
@@ -387,7 +405,16 @@ export default function CreditsPage() {
                     {loading ? "-" : numberText(subscription?.active ? subscription.creditsLeft : 0)}
                   </div>
                   <div style={{ marginTop: 4, fontSize: 11, color: "var(--app-text-muted)" }}>
-                    {subscription?.active ? `当前周期可用 ${numberText(subscription.creditsLeft)} 点` : "未订阅"}
+                    当前订阅等级：{loading ? "-" : billingLevelName(billingLevels?.subscription, "Free")}
+                  </div>
+                </div>
+                <div style={subPanelStyle}>
+                  <div style={{ fontSize: 12, color: "var(--app-text-muted)" }}>充值等级</div>
+                  <div style={{ marginTop: 8, fontSize: 22, fontWeight: 600, color: "var(--app-text-primary)" }}>
+                    {loading ? "-" : billingLevelName(billingLevels?.wallet, "None")}
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 11, color: "var(--app-text-muted)" }}>
+                    {billingLevels?.wallet?.description || "按已完成充值套餐自动计算"}
                   </div>
                 </div>
                 <div style={subPanelStyle}>
@@ -410,9 +437,12 @@ export default function CreditsPage() {
             <div className="cr-sub">
               <div className="cr-sub-top">
                 <b>{subscription?.packageName || "未订阅"}</b>
-                <span className={`app-badge ${subscription?.active ? "ok" : "off"}`}>
-                  {subscriptionStatusText(subscription)}
-                </span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "flex-end" }}>
+                  <span className={`app-badge ${subscription?.active ? "ok" : "off"}`}>
+                    {subscriptionStatusText(subscription)}
+                  </span>
+                  <span className="app-badge off">当前等级 {loading ? "-" : billingLevelName(billingLevels?.subscription, "Free")}</span>
+                </div>
               </div>
               {subscription?.active ? (
                 <>

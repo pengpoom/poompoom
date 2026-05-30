@@ -70,6 +70,8 @@ func resetDatabaseServerTestData(t *testing.T, cfg *config.Config) {
 		business_notifications,
 		business_credit_ledger,
 		business_user_credits,
+		business_provider_members,
+		business_provider_groups,
 		business_api_providers,
 		business_system_settings,
 		email_verification_codes,
@@ -1780,6 +1782,21 @@ func TestAdminCanListBusinessImageJobsWithFilters(t *testing.T) {
 			RequestedCount: 1,
 			CreatedAt:      "2026-05-17T00:00:00Z",
 		},
+		{
+			ID:             "job-user-credit",
+			UserID:         businessauth.DefaultTestUserID,
+			ConversationID: "conv-user",
+			GenerationID:   "gen-user-credit",
+			TurnID:         "turn-user-credit",
+			Platform:       "gpt-image",
+			Status:         businessjobs.StatusFailed,
+			Stage:          "credit",
+			ErrorCode:      "insufficient_credits",
+			ErrorMessage:   "点数余额不足",
+			Prompt:         "user prompt credit",
+			RequestedCount: 1,
+			CreatedAt:      "2026-05-18T00:00:00Z",
+		},
 	}
 	for _, job := range jobs {
 		if _, err := store.Save(context.Background(), job); err != nil {
@@ -1798,8 +1815,12 @@ func TestAdminCanListBusinessImageJobsWithFilters(t *testing.T) {
 		t.Fatalf("admin list jobs status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	var payload struct {
-		Items []businessjobs.Job `json:"items"`
-		Page  paginationMeta     `json:"page"`
+		Items []struct {
+			businessjobs.Job
+			UserErrorType    string `json:"userErrorType"`
+			UserErrorMessage string `json:"userErrorMessage"`
+		} `json:"items"`
+		Page paginationMeta `json:"page"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode admin job payload: %v", err)
@@ -1811,6 +1832,34 @@ func TestAdminCanListBusinessImageJobsWithFilters(t *testing.T) {
 		!payload.Items[0].UpstreamSent ||
 		payload.Items[0].UpstreamStatus != "sent" {
 		t.Fatalf("admin job payload = %#v", payload)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/business/admin/jobs?userId="+businessauth.DefaultTestUserID+"&errorType=credit&page=1&pageSize=10", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin list jobs by error type status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	payload = struct {
+		Items []struct {
+			businessjobs.Job
+			UserErrorType    string `json:"userErrorType"`
+			UserErrorMessage string `json:"userErrorMessage"`
+		} `json:"items"`
+		Page paginationMeta `json:"page"`
+	}{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode admin job error type payload: %v", err)
+	}
+	if payload.Page.Total != 1 || len(payload.Items) != 1 || payload.Items[0].ID != "job-user-credit" {
+		t.Fatalf("admin job error type payload = %#v", payload)
+	}
+	if payload.Items[0].UserErrorType != businessjobs.ErrorTypeCredit ||
+		payload.Items[0].UserErrorMessage != "点数余额不足，请充值后再试。" ||
+		payload.Items[0].ErrorCode != "insufficient_credits" ||
+		payload.Items[0].ErrorMessage != "点数余额不足" {
+		t.Fatalf("admin job normalized error payload = %#v", payload.Items[0])
 	}
 }
 

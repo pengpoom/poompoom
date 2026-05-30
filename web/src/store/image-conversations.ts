@@ -604,7 +604,12 @@ function businessGenerationImages(
   while (images.length < expected) {
     images.push({
       id: `${turnID}-${images.length}`,
-      status: statusOverride === "error" ? "error" : "loading",
+      status:
+        statusOverride === "queued" ||
+        statusOverride === "running" ||
+        statusOverride === "generating"
+          ? "loading"
+          : "error",
       error: errorOverride || generation.error || "接口返回的图片数量不足",
     });
   }
@@ -622,14 +627,15 @@ export function businessImageConversationDetailToConversation(
       const turnID = businessGenerationTurnID(generation);
       const job = jobsByGenerationID.get(String(generation.id || "").trim());
       const status = mergeBusinessGenerationStatus(generation, job);
-      const error = job?.errorMessage || generation.error || undefined;
+      const error = job?.userErrorMessage || job?.errorMessage || generation.error || undefined;
       const mode = businessTurnModeFromJob(job);
       const sourceImages = businessSourceImagesFromJob(job);
+      const prompt = generation.prompt || job?.prompt || "";
       return {
         id: turnID,
-        title: buildBusinessImageTitle(generation.prompt),
+        title: buildBusinessImageTitle(prompt),
         mode,
-        prompt: generation.prompt || "",
+        prompt,
         model: normalizeImageModel(generation.model),
         count: Math.max(1, generation.count || 1),
         size: generation.size?.trim() || undefined,
@@ -654,7 +660,7 @@ export function businessImageConversationDetailToConversation(
 
   return normalizeConversation({
     id: conversation.id,
-    title: conversation.title || "新建生图会话",
+    title: conversation.title || turns[turns.length - 1]?.title || "新建生图会话",
     mode: "generate",
     prompt: turns[turns.length - 1]?.prompt || "",
     model: turns[turns.length - 1]?.model || "gpt-image-2",

@@ -18,9 +18,11 @@ import {
   fetchAdminBusinessPaymentPackages,
   fetchAdminBusinessPaymentProviders,
   fetchAdminBusinessSubscriptions,
+  fetchBusinessSystemSettings,
   refundAdminBusinessPaymentOrder,
   updateAdminBusinessPaymentProvider,
   updateAdminBusinessPaymentPackage,
+  type BusinessBillingLevel,
   type BusinessPaymentAuditLog,
   type BusinessPaymentOrder,
   type BusinessPaymentOrderStatus,
@@ -183,6 +185,7 @@ const emptyPackageForm = {
   credits: "100",
   durationDays: "30",
   currency: "CNY",
+  levelTag: "",
   enabled: true,
   sortOrder: "100",
 };
@@ -216,6 +219,8 @@ export default function PaymentsPage() {
   const [orderPage, setOrderPage] = useState<PaginationMeta>(defaultOrderPage());
   const [subscriptions, setSubscriptions] = useState<BusinessSubscription[]>([]);
   const [subscriptionPage, setSubscriptionPage] = useState<PaginationMeta>(defaultSubscriptionPage());
+  const [subscriptionLevels, setSubscriptionLevels] = useState<BusinessBillingLevel[]>([]);
+  const [walletLevels, setWalletLevels] = useState<BusinessBillingLevel[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingPackage, setSavingPackage] = useState(false);
   const [savingProvider, setSavingProvider] = useState(false);
@@ -262,7 +267,7 @@ export default function PaymentsPage() {
   const loadData = async (nextOrderPage = orderPage.page, nextSubscriptionPage = subscriptionPage.page) => {
     setLoading(true);
     try {
-      const [packagePayload, providerPayload, orderPayload, subscriptionPayload] = await Promise.all([
+      const [packagePayload, providerPayload, orderPayload, subscriptionPayload, settingsPayload] = await Promise.all([
         fetchAdminBusinessPaymentPackages(),
         fetchAdminBusinessPaymentProviders(),
         fetchAdminBusinessPaymentOrders({
@@ -279,6 +284,7 @@ export default function PaymentsPage() {
           activeWindow: subscriptionWindowFilter,
           search: subscriptionSearch.trim() || undefined,
         }),
+        fetchBusinessSystemSettings(),
       ]);
       setPackages(packagePayload.items || []);
       setProviders(providerPayload.items || []);
@@ -286,6 +292,8 @@ export default function PaymentsPage() {
       setOrderPage(orderPayload.page || { ...orderPage, page: nextOrderPage });
       setSubscriptions(subscriptionPayload.items || []);
       setSubscriptionPage(subscriptionPayload.page || { ...subscriptionPage, page: nextSubscriptionPage });
+      setSubscriptionLevels((settingsPayload.settings.billing.subscriptionLevels || []).filter((level) => level.enabled));
+      setWalletLevels((settingsPayload.settings.billing.walletLevels || []).filter((level) => level.enabled));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "读取支付数据失败");
     } finally {
@@ -336,6 +344,7 @@ export default function PaymentsPage() {
       credits: String(item.credits || 0),
       durationDays: String(item.durationDays || 30),
       currency: item.currency || "CNY",
+      levelTag: item.levelTag || "",
       enabled: item.enabled,
       sortOrder: String(item.sortOrder || 0),
     });
@@ -364,6 +373,7 @@ export default function PaymentsPage() {
       amountCents: Math.max(0, Math.floor(Number(packageForm.amountCents) || 0)),
       credits: Math.max(0, Math.floor(Number(packageForm.credits) || 0)),
       durationDays: packageForm.packageType === "subscription" ? Math.max(1, Math.floor(Number(packageForm.durationDays) || 30)) : 0,
+      levelTag: packageForm.levelTag,
       currency: packageForm.currency || "CNY",
       enabled: packageForm.enabled,
       sortOrder: Math.floor(Number(packageForm.sortOrder) || 0),
@@ -539,6 +549,7 @@ export default function PaymentsPage() {
                     <div style={{ marginTop: 2, fontSize: 11, color: "var(--app-text-muted)" }}>
                       {item.description || "-"}
                       {item.packageType === "subscription" || item.packageType === "monthly" ? ` · ${Number(item.durationDays || 30).toLocaleString()} 天` : ""}
+                      {item.levelTag ? ` · ${item.levelTag}` : ""}
                     </div>
                   </td>
                   <td><span className={`app-badge ${packageTypeBadgeClass(item.packageType)}`}>{packageTypeText(item.packageType)}</span></td>
@@ -925,6 +936,20 @@ export default function PaymentsPage() {
               />
             </div>
           ) : null}
+          <div className="app-fld">
+            <span className="fl">{packageForm.packageType === "subscription" ? "订阅等级" : "充值等级"}</span>
+            <AppSelect
+              value={packageForm.levelTag}
+              onChange={(value) => setPackageForm((current) => ({ ...current, levelTag: value }))}
+              options={[
+                { value: "", label: "不绑定等级" },
+                ...(packageForm.packageType === "subscription" ? subscriptionLevels : walletLevels).map((level) => ({
+                  value: level.tag,
+                  label: `${level.name} · ${level.tag}`,
+                })),
+              ]}
+            />
+          </div>
           <div className="app-fld">
             <span className="fl">点数</span>
             <input

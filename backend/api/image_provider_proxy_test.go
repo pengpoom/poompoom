@@ -67,6 +67,8 @@ func resetBusinessImageProxyTestData(t *testing.T, cfg *config.Config) {
 		business_notifications,
 		business_credit_ledger,
 		business_user_credits,
+		business_provider_members,
+		business_provider_groups,
 		business_api_providers,
 		business_system_settings,
 		email_verification_codes,
@@ -942,6 +944,111 @@ func TestCreateQueuedProviderImageJobEnforcesGlobalQueuedCapacity(t *testing.T) 
 	}
 }
 
+func TestCreateQueuedProviderImageJobPersistsTaggedFallbackDispatchTrace(t *testing.T) {
+	cfg := newBusinessImageTestConfig(t)
+	store, err := businessproviders.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open provider store: %v", err)
+	}
+	fallbackGroup, err := store.CreateGroup(context.Background(), businessproviders.GroupInput{
+		Name:      "fallback-pool",
+		Platform:  businessproviders.PlatformGPTImage,
+		Enabled:   true,
+		IsDefault: true,
+		Priority:  1,
+		MatchMode: businessproviders.GroupMatchFallback,
+	})
+	if err != nil {
+		t.Fatalf("create fallback group: %v", err)
+	}
+	taggedGroup, err := store.CreateGroup(context.Background(), businessproviders.GroupInput{
+		Name:      "high-pool",
+		Platform:  businessproviders.PlatformGPTImage,
+		Tags:      "quality:high",
+		MatchMode: businessproviders.GroupMatchAll,
+		Enabled:   true,
+		Priority:  1,
+	})
+	if err != nil {
+		t.Fatalf("create tagged group: %v", err)
+	}
+	fallbackMember, err := store.CreateMember(context.Background(), businessproviders.MemberInput{
+		GroupID:      fallbackGroup.ID,
+		Name:         "fallback-member",
+		Platform:     businessproviders.PlatformGPTImage,
+		BaseURL:      "http://127.0.0.1:1",
+		APIKey:       "fallback-key",
+		DefaultModel: "gpt-image-fallback",
+		Enabled:      true,
+	})
+	if err != nil {
+		t.Fatalf("create fallback member: %v", err)
+	}
+	if _, err := store.CreateMember(context.Background(), businessproviders.MemberInput{
+		GroupID:      taggedGroup.ID,
+		Name:         "unavailable-member",
+		Platform:     businessproviders.PlatformGPTImage,
+		BaseURL:      "http://127.0.0.1:1",
+		APIKey:       "tagged-key",
+		DefaultModel: "gpt-image-tagged",
+		Enabled:      true,
+		Status:       businessproviders.MemberStatusUnavailable,
+	}); err != nil {
+		t.Fatalf("create unavailable tagged member: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close provider store: %v", err)
+	}
+
+	server := NewServer(cfg, nil, nil)
+	job, err := server.createQueuedProviderImageJob(context.Background(), businessimage.DevUserID, map[string]any{
+		"prompt":         "cat",
+		"conversationId": "conv-tagged-fallback-trace",
+		"turnId":         "turn-tagged-fallback-trace",
+		"jobId":          "job-tagged-fallback-trace",
+		"quality":        "high",
+		"dispatchTags":   []string{"quality:high"},
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("createQueuedProviderImageJob() returned error: %v", err)
+	}
+	if job.ProviderID != fallbackMember.ID || job.ProviderName != fallbackMember.Name {
+		t.Fatalf("job provider = %q/%q, want %q/%q", job.ProviderID, job.ProviderName, fallbackMember.ID, fallbackMember.Name)
+	}
+
+	var savedPayload map[string]any
+	if err := json.Unmarshal(job.PayloadJSON, &savedPayload); err != nil {
+		t.Fatalf("decode job payload: %v", err)
+	}
+	if savedPayload["providerSource"] != imageProviderSourcePool {
+		t.Fatalf("providerSource = %#v, want %q", savedPayload["providerSource"], imageProviderSourcePool)
+	}
+	if savedPayload["providerGroupId"] != fallbackGroup.ID {
+		t.Fatalf("providerGroupId = %#v, want %q", savedPayload["providerGroupId"], fallbackGroup.ID)
+	}
+	if savedPayload["dispatchStrategy"] != businessproviders.SelectionStrategyTaggedFallback {
+		t.Fatalf("dispatchStrategy = %#v, want %q", savedPayload["dispatchStrategy"], businessproviders.SelectionStrategyTaggedFallback)
+	}
+	trace := providerDispatchTagStrings(savedPayload["dispatchTrace"])
+	joinedTrace := strings.Join(trace, "\n")
+	for _, want := range []string{"请求标签命中标签池", "标签池无可用成员", "fallback 池命中成员：fallback-member"} {
+		if !strings.Contains(joinedTrace, want) {
+			t.Fatalf("dispatchTrace = %#v, missing %q", trace, want)
+		}
+	}
+
+	view := businessImageJobViewFromJob(job, map[string]string{fallbackGroup.ID: fallbackGroup.Name})
+	if view.DispatchStrategy != businessproviders.SelectionStrategyTaggedFallback {
+		t.Fatalf("view dispatchStrategy = %q", view.DispatchStrategy)
+	}
+	if !strings.Contains(strings.Join(view.DispatchTrace, "\n"), "标签池无可用成员") {
+		t.Fatalf("view dispatchTrace = %#v", view.DispatchTrace)
+	}
+	if _, ok := view.Payload["dispatchTrace"]; ok {
+		t.Fatalf("public payload should hide dispatchTrace: %#v", view.Payload)
+	}
+}
+
 func TestProviderImageGenerateEnforcesProviderRunningCapacity(t *testing.T) {
 	upstreamCalls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1159,6 +1266,344 @@ func TestProviderImageGeneratePrefersProviderStoreOverLegacyAPIAccess(t *testing
 	}
 	if gotAuth != "Bearer db-key" {
 		t.Fatalf("Authorization = %q, want db provider key", gotAuth)
+	}
+}
+
+func TestProviderImageGeneratePrefersProviderPoolOverLegacyProvider(t *testing.T) {
+	var gotAuth string
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data": []map[string]any{
+				{"b64_json": base64.StdEncoding.EncodeToString([]byte("pool-image"))},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := newBusinessImageTestConfig(t)
+	seedBusinessAPIProvider(t, cfg, businessproviders.MutationInput{
+		Name:         "legacy-provider",
+		Platform:     businessproviders.PlatformGPTImage,
+		BaseURL:      "http://127.0.0.1:1",
+		APIKey:       "legacy-key",
+		DefaultModel: "gpt-image-legacy",
+		Enabled:      true,
+		IsDefault:    true,
+	})
+	group, member := seedBusinessProviderPoolMember(t, cfg, upstream.URL, "pool-key")
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 5)
+
+	server := NewServer(cfg, nil, nil)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/image/generate",
+		strings.NewReader(`{"prompt":"cat","conversationId":"conv-pool-provider","turnId":"turn-pool-provider","jobId":"job-pool-provider"}`),
+	)
+	rec := httptest.NewRecorder()
+
+	server.handleProviderImageGenerate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/v1/images/generations" {
+		t.Fatalf("upstream path = %q, want /v1/images/generations", gotPath)
+	}
+	if gotAuth != "Bearer pool-key" {
+		t.Fatalf("Authorization = %q, want pool key", gotAuth)
+	}
+	store, err := businessproviders.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open provider store: %v", err)
+	}
+	defer store.Close()
+	savedMember, ok, err := store.GetMember(context.Background(), member.ID)
+	if err != nil || !ok {
+		t.Fatalf("get pool member ok=%v err=%v", ok, err)
+	}
+	if savedMember.SuccessCount != 1 || savedMember.FailCount != 0 || savedMember.Status != businessproviders.MemberStatusActive {
+		t.Fatalf("pool member health = %#v", savedMember)
+	}
+	if savedMember.GroupID != group.ID {
+		t.Fatalf("pool member group = %q, want %q", savedMember.GroupID, group.ID)
+	}
+}
+
+func TestProviderImageGenerateMarksProviderPoolFailure(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{
+			"error": map[string]any{"message": "rate limit"},
+		})
+	}))
+	defer upstream.Close()
+
+	cfg := newBusinessImageTestConfig(t)
+	_, member := seedBusinessProviderPoolMember(t, cfg, upstream.URL, "pool-key")
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 5)
+
+	server := NewServer(cfg, nil, nil)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/image/generate",
+		strings.NewReader(`{"prompt":"cat","conversationId":"conv-pool-failure","turnId":"turn-pool-failure","jobId":"job-pool-failure"}`),
+	)
+	rec := httptest.NewRecorder()
+
+	server.handleProviderImageGenerate(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	store, err := businessproviders.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open provider store: %v", err)
+	}
+	defer store.Close()
+	savedMember, ok, err := store.GetMember(context.Background(), member.ID)
+	if err != nil || !ok {
+		t.Fatalf("get pool member ok=%v err=%v", ok, err)
+	}
+	if savedMember.FailCount != 1 || savedMember.Status != businessproviders.MemberStatusLimited || savedMember.CooldownUntil == "" {
+		t.Fatalf("pool member health = %#v", savedMember)
+	}
+}
+
+func TestProviderImageGenerateFallsBackToAPIAccessAfterPoolFailure(t *testing.T) {
+	poolCalls := 0
+	poolUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		poolCalls++
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"error": map[string]any{"message": "pool upstream failed"},
+		})
+	}))
+	defer poolUpstream.Close()
+
+	var fallbackAuth string
+	fallbackCalls := 0
+	fallbackUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackCalls++
+		fallbackAuth = r.Header.Get("Authorization")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data": []map[string]any{
+				{"b64_json": base64.StdEncoding.EncodeToString([]byte("fallback-image"))},
+			},
+		})
+	}))
+	defer fallbackUpstream.Close()
+
+	cfg := newBusinessImageTestConfig(t)
+	cfg.APIAccess.Platform = businessproviders.PlatformGPTImage
+	cfg.APIAccess.BaseURL = fallbackUpstream.URL
+	cfg.APIAccess.APIKey = "fallback-key"
+	_, member := seedBusinessProviderPoolMember(t, cfg, poolUpstream.URL, "pool-key")
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 5)
+
+	server := NewServer(cfg, nil, nil)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/image/generate",
+		strings.NewReader(`{"prompt":"cat","conversationId":"conv-pool-fallback","turnId":"turn-pool-fallback","jobId":"job-pool-fallback"}`),
+	)
+	rec := httptest.NewRecorder()
+
+	server.handleProviderImageGenerate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if poolCalls != 2 || fallbackCalls != 1 {
+		t.Fatalf("calls pool=%d fallback=%d, want pool retry twice then fallback once", poolCalls, fallbackCalls)
+	}
+	if fallbackAuth != "Bearer fallback-key" {
+		t.Fatalf("fallback Authorization = %q, want fallback key", fallbackAuth)
+	}
+	store, err := businessproviders.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open provider store: %v", err)
+	}
+	defer store.Close()
+	savedMember, ok, err := store.GetMember(context.Background(), member.ID)
+	if err != nil || !ok {
+		t.Fatalf("get pool member ok=%v err=%v", ok, err)
+	}
+	if savedMember.FailCount != 1 || savedMember.Status != businessproviders.MemberStatusLimited {
+		t.Fatalf("pool member health = %#v", savedMember)
+	}
+	jobStore, err := businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open job store: %v", err)
+	}
+	defer jobStore.Close()
+	job, ok, err := jobStore.Get(context.Background(), "job-pool-fallback", businessimage.DevUserID)
+	if err != nil || !ok {
+		t.Fatalf("get fallback job ok=%v err=%v", ok, err)
+	}
+	if job.Status != businessjobs.StatusSucceeded || job.ProviderID != "api_access" || job.ProviderName != "API 接入配置" {
+		t.Fatalf("fallback job = %#v", job)
+	}
+	var savedPayload map[string]any
+	if err := json.Unmarshal(job.PayloadJSON, &savedPayload); err != nil {
+		t.Fatalf("decode job payload: %v", err)
+	}
+	if savedPayload["providerSource"] != imageProviderSourceAPIAccess || savedPayload["providerGroupId"] != nil {
+		t.Fatalf("saved provider payload = %#v", savedPayload)
+	}
+}
+
+func TestProviderImageGenerateReportsUnavailablePoolWithoutRequiredAPIAccess(t *testing.T) {
+	cfg := newBusinessImageTestConfig(t)
+	_, member := seedBusinessProviderPoolMember(t, cfg, "http://127.0.0.1:1", "pool-key")
+	store, err := businessproviders.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open provider store: %v", err)
+	}
+	_, found, err := store.UpdateMember(context.Background(), member.ID, businessproviders.MemberInput{
+		GroupID:       member.GroupID,
+		Name:          member.Name,
+		Platform:      member.Platform,
+		BaseURL:       member.BaseURL,
+		APIKey:        member.APIKey,
+		DefaultModel:  member.DefaultModel,
+		Enabled:       false,
+		Priority:      member.Priority,
+		Weight:        member.Weight,
+		MaxConcurrent: member.MaxConcurrent,
+		Status:        businessproviders.MemberStatusActive,
+	})
+	if err != nil || !found {
+		t.Fatalf("disable pool member found=%v err=%v", found, err)
+	}
+	_ = store.Close()
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 5)
+
+	server := NewServer(cfg, nil, nil)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/image/generate",
+		strings.NewReader(`{"prompt":"cat","conversationId":"conv-pool-unavailable","turnId":"turn-pool-unavailable","jobId":"job-pool-unavailable"}`),
+	)
+	rec := httptest.NewRecorder()
+
+	server.handleProviderImageGenerate(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "当前平台没有可用号池成员") {
+		t.Fatalf("response should explain unavailable pool, got: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "IMAGE_BASE_URL") {
+		t.Fatalf("response should not require API access when pool is configured: %s", rec.Body.String())
+	}
+}
+
+func TestProviderImageGenerateFailsPoolWithoutFallbackConfig(t *testing.T) {
+	poolCalls := 0
+	poolUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		poolCalls++
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"error": map[string]any{"message": "pool upstream failed"},
+		})
+	}))
+	defer poolUpstream.Close()
+
+	cfg := newBusinessImageTestConfig(t)
+	_, member := seedBusinessProviderPoolMember(t, cfg, poolUpstream.URL, "pool-key")
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 5)
+
+	server := NewServer(cfg, nil, nil)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/image/generate",
+		strings.NewReader(`{"prompt":"cat","conversationId":"conv-pool-no-fallback","turnId":"turn-pool-no-fallback","jobId":"job-pool-no-fallback"}`),
+	)
+	rec := httptest.NewRecorder()
+
+	server.handleProviderImageGenerate(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusBadGateway, rec.Body.String())
+	}
+	if poolCalls != 2 {
+		t.Fatalf("poolCalls = %d, want retry twice", poolCalls)
+	}
+	if !strings.Contains(rec.Body.String(), "provider_pool_failed_no_fallback") {
+		t.Fatalf("response missing provider_pool_failed_no_fallback: %s", rec.Body.String())
+	}
+	store, err := businessproviders.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open provider store: %v", err)
+	}
+	defer store.Close()
+	savedMember, ok, err := store.GetMember(context.Background(), member.ID)
+	if err != nil || !ok {
+		t.Fatalf("get pool member ok=%v err=%v", ok, err)
+	}
+	if savedMember.FailCount != 1 || savedMember.Status != businessproviders.MemberStatusLimited {
+		t.Fatalf("pool member health = %#v", savedMember)
+	}
+}
+
+func TestProviderImageGenerateFailsEmptySuccessfulResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data":    []map[string]any{},
+		})
+	}))
+	defer upstream.Close()
+
+	t.Setenv("IMAGE_PROVIDER", "openai_compatible")
+	t.Setenv("IMAGE_BASE_URL", upstream.URL)
+	t.Setenv("IMAGE_API_KEY", "provider-key")
+	t.Setenv("IMAGE_MODEL", "gpt-image-test")
+
+	cfg := newBusinessImageTestConfig(t)
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 5)
+	server := NewServer(cfg, nil, nil)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/image/generate",
+		strings.NewReader(`{"prompt":"cat","conversationId":"conv-empty-response","turnId":"turn-empty-response","jobId":"job-empty-response"}`),
+	)
+	rec := httptest.NewRecorder()
+
+	server.handleProviderImageGenerate(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusBadGateway, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "provider_empty_response") {
+		t.Fatalf("response missing provider_empty_response: %s", rec.Body.String())
+	}
+	imageStore, err := businessimage.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open business image store: %v", err)
+	}
+	defer imageStore.Close()
+	generations, err := imageStore.ListGenerations(context.Background(), "conv-empty-response", businessimage.DevUserID, 10)
+	if err != nil {
+		t.Fatalf("list generations: %v", err)
+	}
+	if len(generations) != 1 || generations[0].Status != businessjobs.StatusFailed || generations[0].Error == "" {
+		t.Fatalf("generations = %#v", generations)
+	}
+	jobStore, err := businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open job store: %v", err)
+	}
+	defer jobStore.Close()
+	job, ok, err := jobStore.Get(context.Background(), "job-empty-response", businessimage.DevUserID)
+	if err != nil || !ok {
+		t.Fatalf("get job ok=%v err=%v", ok, err)
+	}
+	if job.Status != businessjobs.StatusFailed || job.ErrorCode != "provider_empty_response" || job.ActualCount != 0 {
+		t.Fatalf("job = %#v", job)
 	}
 }
 
@@ -2836,6 +3281,39 @@ func seedBusinessAPIProvider(t *testing.T, cfg *config.Config, input businesspro
 		t.Fatalf("seed provider: %v", err)
 	}
 	return provider
+}
+
+func seedBusinessProviderPoolMember(t *testing.T, cfg *config.Config, baseURL string, apiKey string) (businessproviders.Group, businessproviders.Member) {
+	t.Helper()
+	store, err := businessproviders.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open provider store: %v", err)
+	}
+	defer store.Close()
+	group, err := store.CreateGroup(context.Background(), businessproviders.GroupInput{
+		Name:      "Pool Test Group",
+		Platform:  businessproviders.PlatformGPTImage,
+		Enabled:   true,
+		IsDefault: true,
+		Priority:  10,
+	})
+	if err != nil {
+		t.Fatalf("seed provider group: %v", err)
+	}
+	member, err := store.CreateMember(context.Background(), businessproviders.MemberInput{
+		GroupID:      group.ID,
+		Name:         "Pool Test Member",
+		Platform:     businessproviders.PlatformGPTImage,
+		BaseURL:      baseURL,
+		APIKey:       apiKey,
+		DefaultModel: "gpt-image-pool",
+		Enabled:      true,
+		Priority:     10,
+	})
+	if err != nil {
+		t.Fatalf("seed provider member: %v", err)
+	}
+	return group, member
 }
 
 func providerSubmitErrorCodeIs(err error, code string) bool {

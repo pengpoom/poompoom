@@ -18,6 +18,7 @@ import {
 import { clearCachedSyncStatus } from "@/store/sync-status-cache";
 import { APIAccessSection } from "@/app/settings/components/api-access-section";
 import { IntegrationSection } from "@/app/settings/components/integration-section";
+import { ProviderPoolSection } from "@/app/settings/components/provider-pool-section";
 
 export default function AccountsPage() {
   const [config, setConfig] = useState<ConfigPayload>(defaultConfigPayload);
@@ -111,6 +112,7 @@ export default function AccountsPage() {
         />
 
         <APIAccessSection />
+        <ProviderPoolSection />
         <IntegrationSection config={config} setSection={setSection} />
     </AdminPage>
   );

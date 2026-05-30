@@ -263,11 +263,7 @@ type GeneratedImageCardProps = {
   index: number;
   modeLabelMap: Record<ImageMode, string>;
   turnProcessing: boolean;
-  processingStatus: ProcessingStatus | null;
-  waitingDots: string;
-  submitElapsedSeconds: number;
   formatConversationTime: (value: string) => string;
-  formatProcessingDuration: (seconds: number) => string;
   onOpenSelectionEditor: (
     conversationId: string,
     turn: { model?: ImageModel; providerPlatform?: APIAccessPlatform },
@@ -289,11 +285,7 @@ function GeneratedImageCard({
   index,
   modeLabelMap,
   turnProcessing,
-  processingStatus,
-  waitingDots,
-  submitElapsedSeconds,
   formatConversationTime,
-  formatProcessingDuration,
   onOpenSelectionEditor,
   onRetryTurn,
   onCancelTurn,
@@ -394,8 +386,7 @@ function GeneratedImageCard({
             <div className="rounded-full bg-[var(--app-img-fail-ic-bg)] p-3">
               <X className="size-5" />
             </div>
-            <p className="text-sm font-bold">图片加载失败</p>
-            <p className="text-xs leading-6 text-[var(--app-img-fail-sub)]">图片地址不可用或文件暂时无法访问。</p>
+            <p className="text-sm font-semibold leading-7">图片地址暂时不可用，请稍后刷新或重试。</p>
             <button
               type="button"
               className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
@@ -429,20 +420,12 @@ function GeneratedImageCard({
             <p className="text-sm font-bold text-[var(--app-text-primary)]">
               {cancelRequested
                 ? "正在取消任务"
-                : showQueuedState
-                  ? "已加入等候队列"
-                  : turnProcessing && processingStatus
-                    ? `${processingStatus.title}${waitingDots}`
-                    : "正在处理图片..."}
+                : "绘制画面中..."}
             </p>
             <p className="text-xs leading-6">
               {cancelRequested
                 ? "正在等待当前请求结束，取消后将丢弃本次结果"
-                : showQueuedState
-                  ? `${turn.waitingDetail || "等待后端准入和上游处理"}${(turn.queuePosition ?? 0) > 1 ? ` · 前面还有 ${turn.queuePosition! - 1} 个` : ""}`
-                  : turnProcessing && processingStatus
-                    ? `${processingStatus.detail} · 已等待 ${formatProcessingDuration(submitElapsedSeconds)}`
-                    : "图片处理通常需要几分钟，请稍候"}
+                : "请保持页面开启，结果完成后会自动显示"}
             </p>
           </div>
         )}
@@ -555,19 +538,23 @@ export const ConversationTurns = memo(function ConversationTurns({
                   </div>
                 ) : null}
 
-                <div className="max-w-full whitespace-pre-wrap break-words rounded-[28px] border border-[var(--app-border)] bg-[var(--app-bg-surface)] px-5 py-3.5 text-[14px] font-semibold leading-6 text-[var(--app-text-primary)] sm:px-9">
-                  {turn.prompt || "无额外提示词"}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void copyPromptToClipboard(turn.prompt || "")}
-                  className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full bg-[var(--app-bg-surface)] px-2.5 text-xs font-semibold text-[var(--app-text-muted)] opacity-0 transition hover:text-[var(--app-text-primary)] focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100"
-                  title="复制提示词"
-                  aria-label="复制提示词"
-                >
-                  <Copy className="size-3.5" />
-                  复制
-                </button>
+                {turn.prompt ? (
+                  <>
+                    <div className="max-w-full whitespace-pre-wrap break-words rounded-[28px] border border-[var(--app-border)] bg-[var(--app-bg-surface)] px-5 py-3.5 text-[14px] font-semibold leading-6 text-[var(--app-text-primary)] sm:px-9">
+                      {turn.prompt}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void copyPromptToClipboard(turn.prompt || "")}
+                      className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full bg-[var(--app-bg-surface)] px-2.5 text-xs font-semibold text-[var(--app-text-muted)] opacity-0 transition hover:text-[var(--app-text-primary)] focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100"
+                      title="复制提示词"
+                      aria-label="复制提示词"
+                    >
+                      <Copy className="size-3.5" />
+                      复制
+                    </button>
+                  </>
+                ) : null}
               </div>
             </div>
 
@@ -590,11 +577,7 @@ export const ConversationTurns = memo(function ConversationTurns({
                       index={index}
                       modeLabelMap={modeLabelMap}
                       turnProcessing={turnProcessing}
-                      processingStatus={processingStatus}
-                      waitingDots={waitingDots}
-                      submitElapsedSeconds={submitElapsedSeconds}
                       formatConversationTime={formatConversationTime}
-                      formatProcessingDuration={formatProcessingDuration}
                       onOpenSelectionEditor={onOpenSelectionEditor}
                       onRetryTurn={onRetryTurn}
                       onCancelTurn={onCancelTurn}

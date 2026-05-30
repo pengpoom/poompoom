@@ -41,6 +41,147 @@ export type BusinessAPIProviderInput = {
   enabled: boolean;
   isDefault: boolean;
 };
+export type BusinessProviderMemberStatus = "active" | "limited" | "unavailable";
+export type BusinessProviderGroup = {
+  id: string;
+  name: string;
+  platform: APIAccessPlatform;
+  description: string;
+  tags: string;
+  matchMode: "fallback" | "any" | "all";
+  enabled: boolean;
+  isDefault: boolean;
+  priority: number;
+  createdAt: string;
+  updatedAt: string;
+};
+export type BusinessProviderGroupInput = {
+  name: string;
+  platform: APIAccessPlatform;
+  description: string;
+  tags: string;
+  matchMode: "fallback" | "any" | "all";
+  enabled: boolean;
+  isDefault: boolean;
+  priority: number;
+};
+export type BusinessProviderMember = {
+  id: string;
+  groupId: string;
+  name: string;
+  platform: APIAccessPlatform;
+  baseUrl: string;
+  apiKey: string;
+  defaultModel: string;
+  enabled: boolean;
+  priority: number;
+  weight: number;
+  maxConcurrent: number;
+  cooldownSeconds: number;
+  failureThreshold: number;
+  consecutiveFailures: number;
+  status: BusinessProviderMemberStatus;
+  cooldownUntil: string;
+  successCount: number;
+  failCount: number;
+  lastUsedAt: string;
+  lastError: string;
+  lastErrorAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+export type BusinessProviderMemberInput = {
+  groupId: string;
+  name: string;
+  platform: APIAccessPlatform;
+  baseUrl: string;
+  apiKey: string;
+  defaultModel: string;
+  enabled: boolean;
+  priority: number;
+  weight: number;
+  maxConcurrent: number;
+  cooldownSeconds: number;
+  failureThreshold: number;
+  status: BusinessProviderMemberStatus;
+};
+export type BusinessProviderPool = BusinessProviderGroup & {
+  members: BusinessProviderMember[];
+};
+export type BusinessProviderDispatchPreviewInput = {
+  platform: APIAccessPlatform;
+  role: string;
+  subscriptionTag: string;
+  walletTag: string;
+  mode: string;
+  quality: string;
+  size: string;
+  model: string;
+  extraTags?: string[];
+};
+export type BusinessProviderDispatchPreviewResponse = {
+  ok: boolean;
+  message: string;
+  platform: APIAccessPlatform | string;
+  requestTags: string[];
+  userTags: string[];
+  dispatchTags: string[];
+  strategy?: string;
+  group?: BusinessProviderGroup;
+  member?: BusinessProviderMember;
+  fallbackAvailable?: boolean;
+  fallbackSource?: string;
+  fallbackName?: string;
+  trace?: string[];
+  pools?: BusinessProviderDispatchPreviewPool[];
+  issues?: BusinessProviderDispatchPreviewIssue[];
+};
+export type BusinessProviderDispatchPreviewPool = {
+  id: string;
+  name: string;
+  platform: APIAccessPlatform | string;
+  enabled: boolean;
+  isDefault: boolean;
+  priority: number;
+  matchMode: "fallback" | "any" | "all" | string;
+  tags?: string[];
+  role: "tagged" | "fallback" | "ignored" | string;
+  matched: boolean;
+  considered: boolean;
+  reasonCode: string;
+  reason: string;
+  memberTotal: number;
+  availableMembers: number;
+  disabledMembers: number;
+  unavailableMembers: number;
+  limitedMembers: number;
+  coolingMembers: number;
+  concurrencyFullMembers: number;
+  platformMismatchMembers: number;
+  members?: BusinessProviderDispatchPreviewMember[];
+};
+export type BusinessProviderDispatchPreviewMember = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  status: BusinessProviderMemberStatus | string;
+  priority: number;
+  weight: number;
+  maxConcurrent: number;
+  running: number;
+  cooldownUntil?: string;
+  available: boolean;
+  reasonCode: string;
+  reason: string;
+  lastError?: string;
+  lastErrorAt?: string;
+};
+export type BusinessProviderDispatchPreviewIssue = {
+  code: string;
+  label: string;
+  count: number;
+  detail?: string;
+};
 export type BusinessNotificationLevel = "info" | "warning" | "success";
 export type BusinessNotificationStatus = "draft" | "published" | "archived";
 export type BusinessNotificationNotifyMode = "silent" | "popup";
@@ -126,6 +267,8 @@ export type BusinessSystemSettings = {
     geminiBananaCost: number;
     refundOnFailure: boolean;
     refundPartialCount: boolean;
+    subscriptionLevels: BusinessBillingLevel[];
+    walletLevels: BusinessBillingLevel[];
   };
   runtime: {
     maxImageConcurrency: number;
@@ -143,6 +286,13 @@ export type BusinessSystemSettings = {
     registrationRewardEnabled: boolean;
     registrationRewardCredits: number;
   };
+};
+export type BusinessBillingLevel = {
+  name: string;
+  tag: string;
+  description: string;
+  enabled: boolean;
+  sortOrder: number;
 };
 export type BusinessSystemRuntime = {
   databaseDriver: string;
@@ -557,6 +707,29 @@ export type RuntimeStatusResponse = {
     queuedJobs: number;
     error?: string;
   };
+  providerPool?: {
+    groups: number;
+    members: number;
+    availableMembers: number;
+    coolingMembers: number;
+    unavailableMembers: number;
+    limitedMembers: number;
+    concurrencyLimitedMembers?: number;
+    disabledGroups?: number;
+    disabledMembers?: number;
+    noFallbackConfigured?: boolean;
+    fallbackMissingPlatforms?: string[];
+    dispatchIssues?: Array<{
+      code: string;
+      label: string;
+      count: number;
+      detail?: string;
+    }>;
+    lastError?: string;
+    lastErrorAt?: string;
+    lastErrorMember?: string;
+    error?: string;
+  };
   recent: {
     windowSeconds: number;
     failureCount: number;
@@ -630,12 +803,26 @@ type BusinessAPIProviderMutationResponse = {
   item: BusinessAPIProvider;
 };
 
+type BusinessProviderPoolListResponse = {
+  items: BusinessProviderPool[];
+};
+
+type BusinessProviderGroupMutationResponse = {
+  item: BusinessProviderGroup;
+};
+
+type BusinessProviderMemberMutationResponse = {
+  item: BusinessProviderMember;
+};
+
 export type BusinessAPIProviderTestResponse = {
   ok: boolean;
   message: string;
   code?: string;
   durationMs: number;
   imageCount: number;
+  group?: BusinessProviderGroup;
+  member?: BusinessProviderMember;
 };
 
 let cachedImageAccountPolicy: StoredImageAccountPolicy | null = null;
@@ -934,6 +1121,7 @@ export type BusinessPaymentPackage = {
   amountCents: number;
   credits: number;
   durationDays?: number;
+  levelTag?: string;
   currency: string;
   enabled: boolean;
   sortOrder: number;
@@ -947,6 +1135,7 @@ export type BusinessPaymentPackageInput = {
   amountCents: number;
   credits: number;
   durationDays?: number;
+  levelTag?: string;
   currency?: string;
   enabled: boolean;
   sortOrder?: number;
@@ -1018,6 +1207,15 @@ export type BusinessSubscription = {
   cancelledAt?: string;
   createdAt?: string;
   updatedAt?: string;
+};
+export type BusinessBillingLevelView = {
+  name: string;
+  tag: string;
+  description?: string;
+};
+export type BusinessBillingLevelsResponse = {
+  subscription: BusinessBillingLevelView;
+  wallet: BusinessBillingLevelView;
 };
 export type BusinessPaymentProvider = {
   id: string;
@@ -1352,6 +1550,18 @@ export type BusinessImageJob = {
   platform?: APIAccessPlatform | string;
   providerId?: string;
   providerName?: string;
+  providerSource?: string;
+  providerGroupId?: string;
+  providerGroupName?: string;
+  providerGroupMatchMode?: string;
+  providerGroupTags?: string[];
+  providerMemberId?: string;
+  providerMemberName?: string;
+  dispatchStrategy?: string;
+  dispatchTrace?: string[];
+  requestDispatchTags?: string[];
+  userDispatchTags?: string[];
+  dispatchTags?: string[];
   model?: string;
   prompt?: string;
   size?: string;
@@ -1364,6 +1574,8 @@ export type BusinessImageJob = {
   upstreamStatus: "pending" | "sent" | string;
   errorCode?: string;
   errorMessage?: string;
+  userErrorType?: string;
+  userErrorMessage?: string;
   queueWaitMs: number;
   upstreamDurationMs: number;
   persistDurationMs: number;
@@ -1394,6 +1606,7 @@ export type BusinessImageJobQuery = {
   userId?: string;
   status?: string;
   platform?: string;
+  errorType?: string;
   from?: string;
   to?: string;
   timeRange?: string;
@@ -1744,6 +1957,10 @@ export async function fetchBusinessSubscription() {
   return httpRequest<{ subscription: BusinessSubscription }>("/api/business/subscription");
 }
 
+export async function fetchBusinessBillingLevels() {
+  return httpRequest<BusinessBillingLevelsResponse>("/api/business/billing-levels");
+}
+
 export async function fetchBusinessAffiliateSummary() {
   return httpRequest<BusinessAffiliateSummary>("/api/business/affiliate");
 }
@@ -1848,6 +2065,93 @@ export async function deleteBusinessAPIProvider(id: string) {
 export async function testBusinessAPIProvider(id: string) {
   return httpRequest<BusinessAPIProviderTestResponse>(
     `/api/business/api-providers/${encodeURIComponent(id)}/test`,
+    { method: "POST" },
+  );
+}
+
+export async function fetchBusinessProviderPools() {
+  return httpRequest<BusinessProviderPoolListResponse>("/api/business/provider-pools");
+}
+
+export async function createBusinessProviderGroup(payload: BusinessProviderGroupInput) {
+  return httpRequest<BusinessProviderGroupMutationResponse>("/api/business/provider-pools", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateBusinessProviderGroup(id: string, payload: BusinessProviderGroupInput) {
+  return httpRequest<BusinessProviderGroupMutationResponse>(
+    `/api/business/provider-pools/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      body: payload,
+    },
+  );
+}
+
+export async function setDefaultBusinessProviderGroup(id: string) {
+  return httpRequest<BusinessProviderGroupMutationResponse>(
+    `/api/business/provider-pools/${encodeURIComponent(id)}/default`,
+    { method: "POST" },
+  );
+}
+
+export async function deleteBusinessProviderGroup(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/provider-pools/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function testBusinessProviderGroup(id: string) {
+  return httpRequest<BusinessAPIProviderTestResponse>(
+    `/api/business/provider-pools/${encodeURIComponent(id)}/test`,
+    { method: "POST" },
+  );
+}
+
+export async function previewBusinessProviderDispatch(payload: BusinessProviderDispatchPreviewInput) {
+  return httpRequest<BusinessProviderDispatchPreviewResponse>("/api/business/provider-pools/preview", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function createBusinessProviderMember(payload: BusinessProviderMemberInput) {
+  return httpRequest<BusinessProviderMemberMutationResponse>("/api/business/provider-pool-members", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateBusinessProviderMember(id: string, payload: BusinessProviderMemberInput) {
+  return httpRequest<BusinessProviderMemberMutationResponse>(
+    `/api/business/provider-pool-members/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      body: payload,
+    },
+  );
+}
+
+export async function deleteBusinessProviderMember(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/provider-pool-members/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function testBusinessProviderMember(id: string) {
+  return httpRequest<BusinessAPIProviderTestResponse>(
+    `/api/business/provider-pool-members/${encodeURIComponent(id)}/test`,
+    { method: "POST" },
+  );
+}
+
+export async function recoverBusinessProviderMember(id: string) {
+  return httpRequest<BusinessProviderMemberMutationResponse>(
+    `/api/business/provider-pool-members/${encodeURIComponent(id)}/recover`,
     { method: "POST" },
   );
 }
@@ -2399,6 +2703,28 @@ export async function generateImage(
   return generateImageWithOptions(prompt, { model, count });
 }
 
+function buildImageDispatchTags(options: {
+  mode?: "generate" | "edit";
+  model?: ImageModel;
+  size?: string;
+  quality?: ImageQuality;
+  dispatchTags?: string[];
+}) {
+  const tags = new Set<string>();
+  const add = (value: string | undefined) => {
+    const normalized = value?.trim().toLowerCase();
+    if (normalized) {
+      tags.add(normalized);
+    }
+  };
+  options.dispatchTags?.forEach(add);
+  add(`mode:${options.mode || "generate"}`);
+  add(options.quality ? `quality:${options.quality}` : undefined);
+  add(options.size ? `size:${options.size}` : undefined);
+  add(options.model ? `model:${options.model}` : undefined);
+  return Array.from(tags);
+}
+
 export async function generateImageWithOptions(
   prompt: string,
   options: {
@@ -2414,6 +2740,7 @@ export async function generateImageWithOptions(
     title?: string;
     sourceImages?: ImageSourcePayload[];
     sourceReference?: InpaintSourceReference;
+    dispatchTags?: string[];
   } = {},
 ) {
   const { model = "gpt-image-2", count = 1, size, quality = "high" } = options;
@@ -2436,6 +2763,7 @@ export async function generateImageWithOptions(
     conversationId: options.conversationId?.trim() || undefined,
     turnId: options.turnId?.trim() || undefined,
     title: options.title?.trim() || undefined,
+    dispatchTags: buildImageDispatchTags(options),
   };
   if (options.sourceImages?.length) {
     body.sourceImages = options.sourceImages;

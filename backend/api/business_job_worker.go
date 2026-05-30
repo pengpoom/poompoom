@@ -188,6 +188,8 @@ func payloadForRecoveredBusinessImageJob(job businessjobs.Job) map[string]any {
 	setIfMissing("size", job.Size)
 	setIfMissing("quality", job.Quality)
 	setIfMissing("n", job.RequestedCount)
+	setIfMissing("providerId", job.ProviderID)
+	setIfMissing("providerName", job.ProviderName)
 	if strings.TrimSpace(stringValue(payload["response_format"])) == "" {
 		payload["response_format"] = "url"
 	}

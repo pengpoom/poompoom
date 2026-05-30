@@ -8,6 +8,8 @@ Image Studio 是一个图片生成 Web 项目，包含 React 前端和 Go 后端
 
 服务器只需要 Docker 和 Docker Compose，不需要在服务器上安装 Node.js 或 Go。
 
+Provider 号池、标签调度、套餐等级和排障说明见 [ProviderPool.md](ProviderPool.md)。
+
 推荐使用部署脚本初始化目录：
 
 ```bash

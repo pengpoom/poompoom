@@ -93,6 +93,7 @@ type Package struct {
 	AmountCents  int64  `json:"amountCents"`
 	Credits      int64  `json:"credits"`
 	DurationDays int    `json:"durationDays"`
+	LevelTag     string `json:"levelTag"`
 	Currency     string `json:"currency"`
 	Enabled      bool   `json:"enabled"`
 	SortOrder    int    `json:"sortOrder"`
@@ -107,6 +108,7 @@ type PackageInput struct {
 	AmountCents  int64
 	Credits      int64
 	DurationDays int
+	LevelTag     string
 	Currency     string
 	Enabled      bool
 	SortOrder    int
@@ -668,7 +670,7 @@ func (s *Store) AvailablePaymentMethods(ctx context.Context) ([]PaymentMethod, e
 }
 
 func (s *Store) ListPackages(ctx context.Context, includeDisabled bool) ([]Package, error) {
-	query := `SELECT id, package_type, name, description, amount_cents, credits, duration_days, currency, enabled, sort_order, created_at, updated_at
+	query := `SELECT id, package_type, name, description, amount_cents, credits, duration_days, level_tag, currency, enabled, sort_order, created_at, updated_at
 		FROM business_payment_packages`
 	args := []any{}
 	if !includeDisabled {
@@ -702,8 +704,8 @@ func (s *Store) CreatePackage(ctx context.Context, input PackageInput) (Package,
 	item.CreatedAt = now.Format(time.RFC3339Nano)
 	item.UpdatedAt = item.CreatedAt
 	_, err = s.db.ExecContext(ctx, s.rebind(`INSERT INTO business_payment_packages(
-			id, package_type, name, description, amount_cents, credits, duration_days, currency, enabled, sort_order, created_at, updated_at
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+			id, package_type, name, description, amount_cents, credits, duration_days, level_tag, currency, enabled, sort_order, created_at, updated_at
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		item.ID,
 		item.PackageType,
 		item.Name,
@@ -711,6 +713,7 @@ func (s *Store) CreatePackage(ctx context.Context, input PackageInput) (Package,
 		item.AmountCents,
 		item.Credits,
 		item.DurationDays,
+		item.LevelTag,
 		item.Currency,
 		boolInt(item.Enabled),
 		item.SortOrder,
@@ -734,7 +737,7 @@ func (s *Store) UpdatePackage(ctx context.Context, id string, input PackageInput
 	}
 	now := time.Now().UTC()
 	result, err := s.db.ExecContext(ctx, s.rebind(`UPDATE business_payment_packages
-		SET package_type = ?, name = ?, description = ?, amount_cents = ?, credits = ?, duration_days = ?, currency = ?, enabled = ?, sort_order = ?, updated_at = ?
+		SET package_type = ?, name = ?, description = ?, amount_cents = ?, credits = ?, duration_days = ?, level_tag = ?, currency = ?, enabled = ?, sort_order = ?, updated_at = ?
 		WHERE id = ?`),
 		item.PackageType,
 		item.Name,
@@ -742,6 +745,7 @@ func (s *Store) UpdatePackage(ctx context.Context, id string, input PackageInput
 		item.AmountCents,
 		item.Credits,
 		item.DurationDays,
+		item.LevelTag,
 		item.Currency,
 		boolInt(item.Enabled),
 		item.SortOrder,
@@ -767,7 +771,7 @@ func (s *Store) GetPackage(ctx context.Context, id string, includeDisabled bool)
 	if id == "" {
 		return Package{}, false, nil
 	}
-	query := `SELECT id, package_type, name, description, amount_cents, credits, duration_days, currency, enabled, sort_order, created_at, updated_at
+	query := `SELECT id, package_type, name, description, amount_cents, credits, duration_days, level_tag, currency, enabled, sort_order, created_at, updated_at
 		FROM business_payment_packages
 		WHERE id = ?`
 	args := []any{id}
@@ -785,6 +789,7 @@ func (s *Store) GetPackage(ctx context.Context, id string, includeDisabled bool)
 		&item.AmountCents,
 		&item.Credits,
 		&item.DurationDays,
+		&item.LevelTag,
 		&item.Currency,
 		&enabled,
 		&item.SortOrder,
@@ -799,8 +804,46 @@ func (s *Store) GetPackage(ctx context.Context, id string, includeDisabled bool)
 	}
 	item.PackageType = normalizePackageType(item.PackageType)
 	item.DurationDays = normalizeDurationDays(item.PackageType, item.DurationDays)
+	item.LevelTag = normalizeLevelTag(item.LevelTag)
 	item.Enabled = enabled != 0
 	return item, true, nil
+}
+
+func (s *Store) UserPaidPackageLevelTags(ctx context.Context, userID string, packageType string) ([]string, error) {
+	userID = strings.TrimSpace(userID)
+	packageType = normalizePackageType(packageType)
+	if userID == "" || packageType == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, s.rebind(`SELECT DISTINCT p.level_tag
+		FROM business_payment_orders o
+		JOIN business_payment_packages p ON p.id = o.package_id
+		WHERE o.user_id = ?
+		  AND o.package_type = ?
+		  AND o.status = ?
+		  AND p.level_tag <> ''`), userID, packageType, StatusCompleted)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	seen := map[string]struct{}{}
+	for rows.Next() {
+		var tag string
+		if err := rows.Scan(&tag); err != nil {
+			return nil, err
+		}
+		tag = normalizeLevelTag(tag)
+		if tag == "" {
+			continue
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		items = append(items, tag)
+	}
+	return items, rows.Err()
 }
 
 func (s *Store) DeletePackage(ctx context.Context, id string) (bool, error) {
@@ -2505,6 +2548,7 @@ func scanPackage(row interface{ Scan(dest ...any) error }) (Package, error) {
 		&item.AmountCents,
 		&item.Credits,
 		&item.DurationDays,
+		&item.LevelTag,
 		&item.Currency,
 		&enabled,
 		&item.SortOrder,
@@ -2515,6 +2559,7 @@ func scanPackage(row interface{ Scan(dest ...any) error }) (Package, error) {
 	}
 	item.PackageType = normalizePackageType(item.PackageType)
 	item.DurationDays = normalizeDurationDays(item.PackageType, item.DurationDays)
+	item.LevelTag = normalizeLevelTag(item.LevelTag)
 	item.Enabled = enabled != 0
 	return item, nil
 }
@@ -2694,6 +2739,7 @@ func normalizePackageInput(input PackageInput) (Package, error) {
 		AmountCents:  input.AmountCents,
 		Credits:      input.Credits,
 		DurationDays: normalizeDurationDays(packageType, input.DurationDays),
+		LevelTag:     normalizeLevelTag(input.LevelTag),
 		Currency:     currency,
 		Enabled:      input.Enabled,
 		SortOrder:    input.SortOrder,
@@ -3163,6 +3209,27 @@ func cleanText(value string, maxRunes int) string {
 		return string(runes[:maxRunes])
 	}
 	return value
+}
+
+func normalizeLevelTag(value string) string {
+	tag := strings.ToLower(strings.TrimSpace(value))
+	if tag == "" {
+		return ""
+	}
+	var builder strings.Builder
+	for _, r := range tag {
+		switch {
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r == ':', r == '-', r == '_':
+			builder.WriteRune(r)
+		default:
+			builder.WriteRune('-')
+		}
+	}
+	return strings.Trim(builder.String(), "-")
 }
 
 func cleanID(id string) string {
