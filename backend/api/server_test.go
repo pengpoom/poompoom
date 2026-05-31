@@ -677,6 +677,33 @@ func TestAdminCanManageBusinessUsers(t *testing.T) {
 		t.Fatalf("guest credit = %#v", guestCredit)
 	}
 
+	billingReq := httptest.NewRequest(http.MethodPatch, "/api/business/users/"+createPayload.Item.ID+"/billing-levels", strings.NewReader(`{"subscriptionLevelTag":"tier:atelier","walletLevelTag":"wallet:glow"}`))
+	billingReq.SetPathValue("id", createPayload.Item.ID)
+	billingReq.Header.Set("Content-Type", "application/json")
+	billingReq.Header.Set("Authorization", "Bearer "+adminToken)
+	billingRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(billingRec, billingReq)
+	if billingRec.Code != http.StatusOK {
+		t.Fatalf("update billing levels status = %d, body = %s", billingRec.Code, billingRec.Body.String())
+	}
+	var billingPayload struct {
+		Item struct {
+			businessauth.User
+			Billing businessUserBillingSummary `json:"billing"`
+		} `json:"item"`
+	}
+	if err := json.Unmarshal(billingRec.Body.Bytes(), &billingPayload); err != nil {
+		t.Fatalf("decode billing levels payload: %v", err)
+	}
+	if billingPayload.Item.SubscriptionLevelTag != "tier:atelier" ||
+		billingPayload.Item.WalletLevelTag != "wallet:glow" ||
+		billingPayload.Item.Billing.SubscriptionLevel.Tag != "tier:atelier" ||
+		billingPayload.Item.Billing.WalletLevel.Tag != "wallet:glow" ||
+		!billingPayload.Item.Billing.SubscriptionLevelOverride ||
+		!billingPayload.Item.Billing.WalletLevelOverride {
+		t.Fatalf("billing levels payload = %#v", billingPayload.Item)
+	}
+
 	guestToken := loginForTest(t, server, "guest", "guest-pass")
 
 	selfCreditReq := httptest.NewRequest(http.MethodGet, "/api/business/credit", nil)

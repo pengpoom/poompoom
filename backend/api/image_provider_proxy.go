@@ -126,6 +126,19 @@ func newProviderImageGenerateSubmitError(result providerImageGenerateResult) err
 	return &providerImageGenerateSubmitError{result: result}
 }
 
+type providerImageGenerateJobSubmitError struct {
+	result providerImageGenerateResult
+	job    businessjobs.Job
+}
+
+func (e *providerImageGenerateJobSubmitError) Error() string {
+	return strings.TrimSpace(e.result.ErrorMessage)
+}
+
+func newProviderImageGenerateJobSubmitError(result providerImageGenerateResult, job businessjobs.Job) error {
+	return &providerImageGenerateJobSubmitError{result: result, job: job}
+}
+
 func providerImageGenerateSuccess(body []byte, contentType string) providerImageGenerateResult {
 	if strings.TrimSpace(contentType) == "" {
 		contentType = "application/json"
@@ -239,6 +252,12 @@ func (s *Server) handleProviderImageGenerateSubmit(w http.ResponseWriter, r *htt
 
 	job, err := s.createQueuedProviderImageJob(r.Context(), userID, payload, startedAt)
 	if err != nil {
+		var jobSubmitErr *providerImageGenerateJobSubmitError
+		if errors.As(err, &jobSubmitErr) {
+			s.notifyBusinessImageJob(jobSubmitErr.job)
+			jobSubmitErr.result.write(w)
+			return
+		}
 		s.recordFailedProviderImageSubmit(r.Context(), userID, payload, err, startedAt)
 		var submitErr *providerImageGenerateSubmitError
 		if errors.As(err, &submitErr) {
@@ -429,7 +448,11 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 	providerRequest := append([]string{metadata.Platform}, metadata.DispatchTags...)
 	providerCfg, err := s.imageProviderProxyConfig(providerRequest...)
 	if err != nil {
-		return businessjobs.Job{}, newProviderImageGenerateSubmitError(providerImageGenerateError(http.StatusInternalServerError, "provider_not_configured", err.Error()))
+		result := providerImageGenerateError(http.StatusInternalServerError, "provider_not_configured", err.Error())
+		if job, saveErr := s.saveFailedProviderImageSubmitJob(ctx, userID, payload, metadata, result, startedAt); saveErr == nil && job.ID != "" {
+			return businessjobs.Job{}, newProviderImageGenerateJobSubmitError(result, job)
+		}
+		return businessjobs.Job{}, newProviderImageGenerateSubmitError(result)
 	}
 	systemSettings := s.businessSystemSettingsForContext(ctx)
 	prompt := strings.TrimSpace(stringValue(payload["prompt"]))
@@ -527,6 +550,79 @@ func (s *Server) recordFailedProviderImageSubmit(ctx context.Context, userID str
 		message = firstNonEmpty(strings.TrimSpace(err.Error()), message)
 	}
 	s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", message, startedAt)
+}
+
+func (s *Server) saveFailedProviderImageSubmitJob(ctx context.Context, userID string, payload map[string]any, metadata providerImageGenerateMetadata, result providerImageGenerateResult, startedAt time.Time) (businessjobs.Job, error) {
+	if payload == nil {
+		return businessjobs.Job{}, fmt.Errorf("payload is required")
+	}
+	if strings.TrimSpace(metadata.JobID) == "" {
+		metadata.JobID = businessjobs.NewJobID()
+		payload["jobId"] = metadata.JobID
+	}
+	if strings.TrimSpace(metadata.TurnID) == "" {
+		metadata.TurnID = metadata.JobID
+		payload["turnId"] = metadata.TurnID
+	}
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+	}
+	platform := businessproviders.NormalizePlatform(metadata.Platform)
+	if platform == "" {
+		platform = businessproviders.PlatformGPTImage
+	}
+	prompt := strings.TrimSpace(stringValue(payload["prompt"]))
+	requestedCount := normalizePositiveInt(payload["n"])
+	if requestedCount <= 0 {
+		requestedCount = 1
+	}
+	finishedAt := time.Now().UTC()
+	job := businessjobs.Job{
+		ID:              metadata.JobID,
+		UserID:          userID,
+		ConversationID:  metadata.ConversationID,
+		GenerationID:    firstNonEmpty(metadata.JobID, metadata.TurnID),
+		TurnID:          metadata.TurnID,
+		Platform:        platform,
+		Model:           strings.TrimSpace(stringValue(payload["model"])),
+		Prompt:          prompt,
+		Size:            strings.TrimSpace(stringValue(payload["size"])),
+		Quality:         strings.TrimSpace(stringValue(payload["quality"])),
+		RequestedCount:  requestedCount,
+		Status:          businessjobs.StatusFailed,
+		Stage:           "dispatch",
+		ErrorCode:       strings.TrimSpace(result.ErrorCode),
+		ErrorMessage:    strings.TrimSpace(result.ErrorMessage),
+		PayloadJSON:     providerImagePayloadJSON(payload),
+		CreatedAt:       startedAt.Format(time.RFC3339Nano),
+		QueuedAt:        startedAt.Format(time.RFC3339Nano),
+		FinishedAt:      finishedAt.Format(time.RFC3339Nano),
+		TotalDurationMS: finishedAt.Sub(startedAt).Milliseconds(),
+	}
+	store, err := s.newBusinessJobStore()
+	if err != nil {
+		return businessjobs.Job{}, err
+	}
+	defer store.Close()
+	saved, err := store.Save(ctx, job)
+	if err != nil {
+		return businessjobs.Job{}, err
+	}
+	s.recordFailedProviderImageSubmit(ctx, userID, payload, newProviderImageGenerateSubmitError(result), startedAt)
+	s.saveBusinessImageTracker(context.Background(), businesstracker.Record{
+		ID:              businesstracker.NewRecordID(),
+		UserID:          userID,
+		Platform:        platform,
+		Model:           job.Model,
+		Status:          businesstracker.StatusFailed,
+		Stage:           job.Stage,
+		ErrorCode:       job.ErrorCode,
+		ErrorMessage:    job.ErrorMessage,
+		CreatedAt:       startedAt.Format(time.RFC3339Nano),
+		FinishedAt:      finishedAt.Format(time.RFC3339Nano),
+		TotalDurationMS: job.TotalDurationMS,
+	})
+	return saved, nil
 }
 
 func (s *Server) runProviderImageGenerateJob(userID string, payload map[string]any, startedAt time.Time) {
@@ -2627,10 +2723,7 @@ func providerPoolFailureCooldownSeconds(providerErr providerGenerationError) int
 	if providerErr.UpstreamStatus == http.StatusTooManyRequests {
 		return 600
 	}
-	if providerErr.UpstreamStatus >= http.StatusInternalServerError || providerErr.UpstreamStatus == 0 {
-		return 120
-	}
-	return 60
+	return 0
 }
 
 func cooldownUntilAfterNow(value string) bool {

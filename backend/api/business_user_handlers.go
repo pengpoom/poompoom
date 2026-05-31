@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"imagestudio/internal/businessauth"
 	"imagestudio/internal/businesscredits"
 	"imagestudio/internal/businessimage"
+	"imagestudio/internal/businesspayments"
+	"imagestudio/internal/businesssettings"
 )
 
 func paginationFromQuery(r *http.Request, prefix string, defaultPageSize int, maxPageSize int) (int, int, int) {
@@ -130,8 +133,22 @@ type paginationMeta struct {
 
 type businessUserWithUsage struct {
 	businessauth.User
-	Usage  businessimage.UserUsage `json:"usage"`
-	Credit businesscredits.Summary `json:"credit"`
+	Usage   businessimage.UserUsage    `json:"usage"`
+	Credit  businesscredits.Summary    `json:"credit"`
+	Billing businessUserBillingSummary `json:"billing"`
+}
+
+type businessUserWithBilling struct {
+	businessauth.User
+	Billing businessUserBillingSummary `json:"billing"`
+}
+
+type businessUserBillingSummary struct {
+	SubscriptionLevel         businessBillingLevelView      `json:"subscriptionLevel"`
+	WalletLevel               businessBillingLevelView      `json:"walletLevel"`
+	Subscription              businesspayments.Subscription `json:"subscription,omitempty"`
+	SubscriptionLevelOverride bool                          `json:"subscriptionLevelOverride"`
+	WalletLevelOverride       bool                          `json:"walletLevelOverride"`
 }
 
 type businessUsageRecordWithUser struct {
@@ -399,18 +416,79 @@ func (s *Server) handleListBusinessUsers(w http.ResponseWriter, r *http.Request)
 	}
 
 	items := make([]businessUserWithUsage, 0, len(users))
+	settings := s.businessSystemSettingsForContext(r.Context())
+	paymentStore, _ := s.newBusinessPaymentStore()
+	if paymentStore != nil {
+		defer paymentStore.Close()
+	}
 	for _, user := range users {
 		usage := usages[user.ID]
 		usage.UserID = user.ID
 		credit := credits[user.ID]
 		credit.UserID = user.ID
 		items = append(items, businessUserWithUsage{
-			User:   user,
-			Usage:  usage,
-			Credit: credit,
+			User:    user,
+			Usage:   usage,
+			Credit:  credit,
+			Billing: s.businessUserBillingSummary(r.Context(), paymentStore, user, settings),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) businessUserBillingSummary(ctx context.Context, store *businesspayments.Store, user businessauth.User, settings businesssettings.Settings) businessUserBillingSummary {
+	subscriptionOverrideTag := configuredBillingLevelTag(user.SubscriptionLevelTag, settings.Billing.SubscriptionLevels, "tier:")
+	walletOverrideTag := configuredBillingLevelTag(user.WalletLevelTag, settings.Billing.WalletLevels, "wallet:")
+	subscriptionTag := subscriptionOverrideTag
+	if subscriptionTag == "" {
+		subscriptionTag = businessSubscriptionLevelDispatchTagFromStore(ctx, store, user.ID, settings)
+	}
+	walletTag := walletOverrideTag
+	if walletTag == "" {
+		walletTag = businessWalletLevelDispatchTagFromStore(ctx, store, user.ID, settings)
+	}
+	summary := businessUserBillingSummary{
+		SubscriptionLevel:         businessBillingLevelViewFromTag(subscriptionTag, settings.Billing.SubscriptionLevels, defaultSubscriptionDispatchTag),
+		WalletLevel:               businessBillingLevelViewFromTag(walletTag, settings.Billing.WalletLevels, defaultWalletDispatchTag),
+		SubscriptionLevelOverride: subscriptionOverrideTag != "",
+		WalletLevelOverride:       walletOverrideTag != "",
+	}
+	if store == nil {
+		return summary
+	}
+	subscription, err := store.GetCurrentSubscription(ctx, strings.TrimSpace(user.ID))
+	if err == nil && subscription.ID != "" {
+		summary.Subscription = subscription
+	}
+	return summary
+}
+
+func businessSubscriptionLevelDispatchTagFromStore(ctx context.Context, store *businesspayments.Store, userID string, settings businesssettings.Settings) string {
+	fallback := fallbackBillingLevelTag(settings.Billing.SubscriptionLevels, defaultSubscriptionDispatchTag)
+	if store == nil {
+		return fallback
+	}
+	subscription, err := store.GetCurrentSubscription(ctx, strings.TrimSpace(userID))
+	if err != nil || !subscription.Active || subscription.Status != businesspayments.SubscriptionStatusActive || strings.TrimSpace(subscription.PackageID) == "" {
+		return fallback
+	}
+	pkg, ok, err := store.GetPackage(ctx, subscription.PackageID, true)
+	if err != nil || !ok {
+		return fallback
+	}
+	return selectConfiguredBillingLevelTag([]string{pkg.LevelTag}, settings.Billing.SubscriptionLevels, fallback)
+}
+
+func businessWalletLevelDispatchTagFromStore(ctx context.Context, store *businesspayments.Store, userID string, settings businesssettings.Settings) string {
+	fallback := fallbackBillingLevelTag(settings.Billing.WalletLevels, defaultWalletDispatchTag)
+	if store == nil {
+		return fallback
+	}
+	tags, err := store.UserPaidPackageLevelTags(ctx, strings.TrimSpace(userID), businesspayments.PackageTypeBalance)
+	if err != nil {
+		return fallback
+	}
+	return selectConfiguredBillingLevelTag(tags, settings.Billing.WalletLevels, fallback)
 }
 
 func (s *Server) purgeExpiredDeletedBusinessUsers(r *http.Request, userStore *businessauth.Store) error {
@@ -904,6 +982,70 @@ func (s *Server) handleUpdateBusinessUser(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"item": user})
+}
+
+func (s *Server) handleUpdateBusinessUserBillingLevels(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		SubscriptionLevelTag string `json:"subscriptionLevelTag"`
+		WalletLevelTag       string `json:"walletLevelTag"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		return
+	}
+	settings := s.businessSystemSettings(r)
+	subscriptionLevelTag := normalizeProviderDispatchTag(body.SubscriptionLevelTag)
+	walletLevelTag := normalizeProviderDispatchTag(body.WalletLevelTag)
+	if subscriptionLevelTag != "" {
+		subscriptionLevelTag = configuredBillingLevelTag(subscriptionLevelTag, settings.Billing.SubscriptionLevels, "tier:")
+		if subscriptionLevelTag == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid subscription level"})
+			return
+		}
+	}
+	if walletLevelTag != "" {
+		walletLevelTag = configuredBillingLevelTag(walletLevelTag, settings.Billing.WalletLevels, "wallet:")
+		if walletLevelTag == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid wallet level"})
+			return
+		}
+	}
+
+	store, err := s.newBusinessAuthStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
+		return
+	}
+	defer store.Close()
+	if err := s.purgeExpiredDeletedBusinessUsers(r, store); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	user, ok, err := store.UpdateUserBillingLevels(r.Context(), r.PathValue("id"), subscriptionLevelTag, walletLevelTag)
+	if errors.Is(err, businessauth.ErrUserDeleted) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "deleted user cannot be edited"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "user not found"})
+		return
+	}
+
+	paymentStore, _ := s.newBusinessPaymentStore()
+	if paymentStore != nil {
+		defer paymentStore.Close()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"item": businessUserWithBilling{
+			User:    user,
+			Billing: s.businessUserBillingSummary(r.Context(), paymentStore, user, settings),
+		},
+	})
 }
 
 func (s *Server) handleUpdateBusinessUserStatus(w http.ResponseWriter, r *http.Request) {

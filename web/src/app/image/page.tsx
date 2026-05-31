@@ -255,6 +255,16 @@ function isBusinessProxyMode() {
 }
 
 const COMPOSER_SAFE_BOTTOM_OFFSET = 188;
+const IMAGE_COMPOSER_SETTINGS_KEY = "image-studio.composer.settings.v1";
+
+type StoredImageComposerSettings = {
+  mode?: ImageMode;
+  count?: string;
+  aspectRatio?: ImageAspectRatio;
+  resolutionTier?: ImageResolutionTier;
+  quality?: ImageQuality;
+  providerPlatform?: APIAccessPlatform;
+};
 
 function hasAvailablePaidImageAccount(
   accounts: Account[],
@@ -278,6 +288,62 @@ function makeId() {
     return crypto.randomUUID();
   }
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function loadStoredImageComposerSettings(): StoredImageComposerSettings {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const raw = window.localStorage.getItem(IMAGE_COMPOSER_SETTINGS_KEY);
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as StoredImageComposerSettings;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveStoredImageComposerSettings(settings: StoredImageComposerSettings) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(IMAGE_COMPOSER_SETTINGS_KEY, JSON.stringify(settings));
+}
+
+function normalizeStoredImageMode(value: unknown): ImageMode | undefined {
+  return value === "generate" || value === "edit" ? value : undefined;
+}
+
+function normalizeStoredImageCount(value: unknown) {
+  const count = Math.max(1, Math.min(8, Number(value) || 1));
+  return String(count);
+}
+
+function normalizeStoredImageAspectRatio(value: unknown): ImageAspectRatio | undefined {
+  const next = String(value || "");
+  return imageAspectRatioOptions.some((item) => item.value === next)
+    ? (next as ImageAspectRatio)
+    : undefined;
+}
+
+function normalizeStoredImageResolutionTier(value: unknown): ImageResolutionTier | undefined {
+  const next = String(value || "");
+  return ["auto-free", "auto-paid", "sd", "2k", "4k"].includes(next)
+    ? (next as ImageResolutionTier)
+    : undefined;
+}
+
+function normalizeStoredImageQuality(value: unknown): ImageQuality | undefined {
+  return value === "low" || value === "medium" || value === "high"
+    ? value
+    : undefined;
+}
+
+function normalizeStoredProviderPlatform(value: unknown): APIAccessPlatform | undefined {
+  return value === "gpt-image" || value === "gemini-banana" ? value : undefined;
 }
 
 function formatProcessingDuration(totalSeconds: number) {
@@ -445,17 +511,29 @@ export default function ImagePage() {
   const previousTurnCountRef = useRef(0);
   const previousLastTurnKeyRef = useRef("");
   const jobPollingSignaturesRef = useRef<Map<string, string>>(new Map());
+  const initialComposerSettingsRef = useRef(loadStoredImageComposerSettings());
+  const didApplyServerComposerDefaultsRef = useRef(false);
 
-  const [mode, setMode] = useState<ImageMode>("generate");
+  const [mode, setMode] = useState<ImageMode>(
+    () => normalizeStoredImageMode(initialComposerSettingsRef.current.mode) ?? "generate",
+  );
   const [imagePrompt, setImagePrompt] = useState("");
-  const [imageCount, setImageCount] = useState("1");
-  const [imageAspectRatio, setImageAspectRatio] =
-    useState<ImageAspectRatio>("1:1");
-  const [imageResolutionTier, setImageResolutionTier] =
-    useState<ImageResolutionTier>("sd");
-  const [imageQuality, setImageQuality] = useState<ImageQuality>("high");
+  const [imageCount, setImageCount] = useState(
+    () => normalizeStoredImageCount(initialComposerSettingsRef.current.count),
+  );
+  const [imageAspectRatio, setImageAspectRatio] = useState<ImageAspectRatio>(
+    () => normalizeStoredImageAspectRatio(initialComposerSettingsRef.current.aspectRatio) ?? "1:1",
+  );
+  const [imageResolutionTier, setImageResolutionTier] = useState<ImageResolutionTier>(
+    () => normalizeStoredImageResolutionTier(initialComposerSettingsRef.current.resolutionTier) ?? "2k",
+  );
+  const [imageQuality, setImageQuality] = useState<ImageQuality>(
+    () => normalizeStoredImageQuality(initialComposerSettingsRef.current.quality) ?? "high",
+  );
   const [providerPlatform, setProviderPlatform] =
-    useState<APIAccessPlatform>("gpt-image");
+    useState<APIAccessPlatform>(
+      () => normalizeStoredProviderPlatform(initialComposerSettingsRef.current.providerPlatform) ?? "gpt-image",
+    );
   const [selectionEditorProviderPlatform, setSelectionEditorProviderPlatform] =
     useState<APIAccessPlatform>("gpt-image");
   const [composerResetKey, setComposerResetKey] = useState(0);
@@ -892,9 +970,12 @@ export default function ImagePage() {
           try {
             const settingsData = await fetchBusinessSystemSettings();
             const generation = settingsData.settings.generation;
-            setProviderPlatform(generation.defaultPlatform);
-            setImageQuality(generation.defaultQuality);
-            setImageCount(String(Math.max(1, Math.min(8, generation.defaultCount || 1))));
+            if (Object.keys(initialComposerSettingsRef.current).length === 0) {
+              didApplyServerComposerDefaultsRef.current = true;
+              setProviderPlatform(generation.defaultPlatform);
+              setImageQuality(generation.defaultQuality);
+              setImageCount(String(Math.max(1, Math.min(8, generation.defaultCount || 1))));
+            }
           } catch {
             // 系统设置读取失败不阻塞工作台基础加载。
           }
@@ -937,6 +1018,28 @@ export default function ImagePage() {
       setImageQuality("high");
     }
   }, [imageQuality, isImageQualityEnabled]);
+
+  useEffect(() => {
+    if (didApplyServerComposerDefaultsRef.current) {
+      didApplyServerComposerDefaultsRef.current = false;
+      return;
+    }
+    saveStoredImageComposerSettings({
+      mode,
+      count: imageCount,
+      aspectRatio: imageAspectRatio,
+      resolutionTier: imageResolutionTier,
+      quality: imageQuality,
+      providerPlatform,
+    });
+  }, [
+    mode,
+    imageCount,
+    imageAspectRatio,
+    imageResolutionTier,
+    imageQuality,
+    providerPlatform,
+  ]);
 
   const scrollToBottom = useCallback(
     (behavior: ScrollBehavior = "smooth") => {
@@ -1295,7 +1398,6 @@ export default function ImagePage() {
     (nextMode: ImageMode = mode) => {
       setMode(nextMode);
       setImagePrompt("");
-      setImageCount("1");
       setSourceImages([]);
       setComposerResetKey((value) => value + 1);
     },

@@ -1087,6 +1087,8 @@ export type BusinessUser = {
   role: BusinessUserRole;
   status: BusinessUserStatus;
   avatarUrl?: string;
+  subscriptionLevelTag?: string;
+  walletLevelTag?: string;
   deleted_at?: string;
   created_at: string;
   updated_at: string;
@@ -1100,6 +1102,13 @@ export type BusinessUser = {
     last_generated_at?: string;
   };
   credit?: BusinessCreditSummary;
+  billing?: {
+    subscriptionLevel?: BusinessBillingLevelView;
+    walletLevel?: BusinessBillingLevelView;
+    subscription?: BusinessSubscription;
+    subscriptionLevelOverride?: boolean;
+    walletLevelOverride?: boolean;
+  };
 };
 
 export type BusinessMe = {
@@ -2356,6 +2365,19 @@ export async function updateBusinessUser(id: string, payload: {
 }) {
   return httpRequest<BusinessUserMutationResponse>(
     `/api/business/users/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      body: payload,
+    },
+  );
+}
+
+export async function updateBusinessUserBillingLevels(id: string, payload: {
+  subscriptionLevelTag?: string;
+  walletLevelTag?: string;
+}) {
+  return httpRequest<BusinessUserMutationResponse>(
+    `/api/business/users/${encodeURIComponent(id)}/billing-levels`,
     {
       method: "PATCH",
       body: payload,

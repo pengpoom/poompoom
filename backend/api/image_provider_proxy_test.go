@@ -1367,7 +1367,7 @@ func TestProviderImageGenerateMarksProviderPoolFailure(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("get pool member ok=%v err=%v", ok, err)
 	}
-	if savedMember.FailCount != 1 || savedMember.Status != businessproviders.MemberStatusLimited || savedMember.CooldownUntil == "" {
+	if savedMember.FailCount != 1 || savedMember.Status != businessproviders.MemberStatusLimited || savedMember.CooldownUntil != "" {
 		t.Fatalf("pool member health = %#v", savedMember)
 	}
 }

@@ -1114,14 +1114,8 @@ func (s *Store) ReportMemberFailure(ctx context.Context, id string, failure Memb
 		status = MemberStatusUnavailable
 	}
 	cooldownUntil := ""
-	if status != MemberStatusUnavailable {
+	if status == MemberStatusLimited && failure.CooldownSeconds > 0 {
 		cooldownSeconds := failure.CooldownSeconds
-		if cooldownSeconds <= 0 {
-			cooldownSeconds = member.CooldownSeconds
-		}
-		if cooldownSeconds <= 0 {
-			cooldownSeconds = defaultMemberCooldownSeconds
-		}
 		cooldownUntil = time.Now().UTC().Add(time.Duration(cooldownSeconds) * time.Second).Format(time.RFC3339Nano)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)

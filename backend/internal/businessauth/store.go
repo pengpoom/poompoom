@@ -47,17 +47,19 @@ var ErrVerificationInvalid = errors.New("verification code is invalid")
 var ErrVerificationExpired = errors.New("verification code is expired")
 
 type User struct {
-	ID           string `json:"id"`
-	UID          int64  `json:"uid"`
-	Username     string `json:"username"`
-	Email        string `json:"email"`
-	PasswordHash string `json:"-"`
-	Role         string `json:"role"`
-	Status       string `json:"status"`
-	DeletedAt    string `json:"deleted_at,omitempty"`
-	AvatarURL    string `json:"avatarUrl,omitempty"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
+	ID                   string `json:"id"`
+	UID                  int64  `json:"uid"`
+	Username             string `json:"username"`
+	Email                string `json:"email"`
+	PasswordHash         string `json:"-"`
+	Role                 string `json:"role"`
+	Status               string `json:"status"`
+	DeletedAt            string `json:"deleted_at,omitempty"`
+	AvatarURL            string `json:"avatarUrl,omitempty"`
+	SubscriptionLevelTag string `json:"subscriptionLevelTag,omitempty"`
+	WalletLevelTag       string `json:"walletLevelTag,omitempty"`
+	CreatedAt            string `json:"created_at"`
+	UpdatedAt            string `json:"updated_at"`
 }
 
 type Session struct {
@@ -152,6 +154,8 @@ func (s *Store) init() error {
 			status TEXT NOT NULL,
 			deleted_at TEXT NOT NULL DEFAULT '',
 			avatar_url TEXT NOT NULL DEFAULT '',
+			subscription_level_tag TEXT NOT NULL DEFAULT '',
+			wallet_level_tag TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);`,
@@ -194,6 +198,9 @@ func (s *Store) init() error {
 		return err
 	}
 	if err := s.migrateBusinessUsersAvatarURL(); err != nil {
+		return err
+	}
+	if err := s.migrateBusinessUsersBillingLevels(); err != nil {
 		return err
 	}
 	return nil
@@ -272,6 +279,16 @@ func (s *Store) migrateBusinessUsersUID() error {
 
 func (s *Store) migrateBusinessUsersAvatarURL() error {
 	if _, err := s.db.Exec(`ALTER TABLE business_users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''`); err != nil && !isDuplicateColumnError(err) {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) migrateBusinessUsersBillingLevels() error {
+	if _, err := s.db.Exec(`ALTER TABLE business_users ADD COLUMN subscription_level_tag TEXT NOT NULL DEFAULT ''`); err != nil && !isDuplicateColumnError(err) {
+		return err
+	}
+	if _, err := s.db.Exec(`ALTER TABLE business_users ADD COLUMN wallet_level_tag TEXT NOT NULL DEFAULT ''`); err != nil && !isDuplicateColumnError(err) {
 		return err
 	}
 	return nil
@@ -419,7 +436,7 @@ func (s *Store) GetUserByEmail(ctx context.Context, email string) (User, bool, e
 	var user User
 	err := s.db.QueryRowContext(
 		ctx,
-		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, avatar_url, created_at, updated_at
+		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, avatar_url, subscription_level_tag, wallet_level_tag, created_at, updated_at
 		 FROM business_users
 		 WHERE email = ?`),
 		email,
@@ -445,7 +462,7 @@ func (s *Store) GetUserByUsername(ctx context.Context, username string) (User, b
 	var user User
 	err := s.db.QueryRowContext(
 		ctx,
-		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, avatar_url, created_at, updated_at
+		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, avatar_url, subscription_level_tag, wallet_level_tag, created_at, updated_at
 		 FROM business_users
 		 WHERE username = ?`),
 		username,
@@ -468,7 +485,7 @@ func (s *Store) ListUsers(ctx context.Context, options ...ListUsersOptions) ([]U
 	if len(options) > 0 {
 		includeDeleted = options[0].IncludeDeleted
 	}
-	query := `SELECT id, uid, username, email, password_hash, role, status, deleted_at, avatar_url, created_at, updated_at
+	query := `SELECT id, uid, username, email, password_hash, role, status, deleted_at, avatar_url, subscription_level_tag, wallet_level_tag, created_at, updated_at
 		 FROM business_users`
 	args := []any{}
 	if !includeDeleted {
@@ -901,6 +918,44 @@ func (s *Store) UpdateUser(ctx context.Context, id, username, password string) (
 	return user, ok, err
 }
 
+func (s *Store) UpdateUserBillingLevels(ctx context.Context, id, subscriptionLevelTag, walletLevelTag string) (User, bool, error) {
+	id = cleanID(id)
+	subscriptionLevelTag = strings.ToLower(strings.TrimSpace(subscriptionLevelTag))
+	walletLevelTag = strings.ToLower(strings.TrimSpace(walletLevelTag))
+	if id == "" {
+		return User{}, false, nil
+	}
+	user, ok, err := s.GetUserByID(ctx, id)
+	if err != nil || !ok {
+		return User{}, ok, err
+	}
+	if user.Status == StatusDeleted {
+		return user, true, ErrUserDeleted
+	}
+	result, err := s.db.ExecContext(
+		ctx,
+		s.rebind(`UPDATE business_users
+		 SET subscription_level_tag = ?, wallet_level_tag = ?, updated_at = ?
+		 WHERE id = ?`),
+		subscriptionLevelTag,
+		walletLevelTag,
+		s.dbTime(time.Now().UTC()),
+		id,
+	)
+	if err != nil {
+		return User{}, false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return User{}, false, err
+	}
+	if affected == 0 {
+		return User{}, false, nil
+	}
+	user, ok, err = s.GetUserByID(ctx, id)
+	return user, ok, err
+}
+
 func (s *Store) ChangeUserPassword(ctx context.Context, id, currentPassword, newPassword string) (User, bool, error) {
 	id = cleanID(id)
 	currentPassword = strings.TrimSpace(currentPassword)
@@ -952,7 +1007,7 @@ func (s *Store) GetUserByID(ctx context.Context, id string) (User, bool, error) 
 	var user User
 	err := s.db.QueryRowContext(
 		ctx,
-		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, avatar_url, created_at, updated_at
+		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, avatar_url, subscription_level_tag, wallet_level_tag, created_at, updated_at
 		 FROM business_users
 		 WHERE id = ?`),
 		id,
@@ -1099,7 +1154,7 @@ func (s *Store) RestoreUser(ctx context.Context, id string) (User, bool, error) 
 func (s *Store) DeletedUsersBefore(ctx context.Context, cutoff time.Time) ([]User, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, avatar_url, created_at, updated_at
+		s.rebind(`SELECT id, uid, username, email, password_hash, role, status, deleted_at, avatar_url, subscription_level_tag, wallet_level_tag, created_at, updated_at
 		 FROM business_users
 		 WHERE status = ? AND deleted_at IS NOT NULL AND deleted_at <= ?
 		 ORDER BY deleted_at ASC`),
@@ -1225,7 +1280,7 @@ func (s *Store) GetSessionByToken(ctx context.Context, token string) (Session, b
 		ctx,
 		s.rebind(`SELECT
 			s.id, s.user_id, s.token_hash, s.expires_at, s.revoked_at, s.created_at, s.last_seen_at,
-			u.id, u.uid, u.username, u.email, u.password_hash, u.role, u.status, u.deleted_at, u.avatar_url, u.created_at, u.updated_at
+			u.id, u.uid, u.username, u.email, u.password_hash, u.role, u.status, u.deleted_at, u.avatar_url, u.subscription_level_tag, u.wallet_level_tag, u.created_at, u.updated_at
 		 FROM user_sessions s
 		 JOIN business_users u ON u.id = s.user_id
 		 WHERE s.token_hash = ?`),
@@ -1492,6 +1547,8 @@ func (s *Store) userScanDest(user *User) []any {
 			&user.Status,
 			nullableStringDest(&user.DeletedAt),
 			&user.AvatarURL,
+			&user.SubscriptionLevelTag,
+			&user.WalletLevelTag,
 			&timeString{target: &user.CreatedAt},
 			&timeString{target: &user.UpdatedAt},
 		}
@@ -1506,6 +1563,8 @@ func (s *Store) userScanDest(user *User) []any {
 		&user.Status,
 		&user.DeletedAt,
 		&user.AvatarURL,
+		&user.SubscriptionLevelTag,
+		&user.WalletLevelTag,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 	}

@@ -415,12 +415,11 @@ export function APIAccessSection() {
         </div>
 
         <div className={settingsTableWrapClass}>
-          <div className="grid min-w-[1050px] grid-cols-[minmax(100px,0.85fr)_140px_minmax(120px,1.05fr)_minmax(120px,1.3fr)_140px_260px] border-b border-[var(--app-border)] bg-[var(--app-bg-surface)] px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--app-text-muted)]">
+          <div className="grid min-w-[950px] grid-cols-[minmax(100px,0.85fr)_140px_minmax(120px,1.1fr)_minmax(120px,1.3fr)_260px] border-b border-[var(--app-border)] bg-[var(--app-bg-surface)] px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--app-text-muted)]">
             <div>名称</div>
             <div>平台</div>
             <div>Base URL</div>
             <div>模型</div>
-            <div>状态</div>
             <div className="text-right">操作</div>
           </div>
           {isLoading ? (
@@ -440,7 +439,7 @@ export function APIAccessSection() {
                 key={provider.id}
                 className="border-b border-[var(--app-border)] last:border-b-0 transition-colors hover:bg-[var(--app-bg-surface-hover)]"
               >
-                <div className="grid min-w-[1050px] grid-cols-[minmax(100px,0.85fr)_140px_minmax(120px,1.05fr)_minmax(120px,1.3fr)_140px_260px] items-center px-4 py-3 text-sm">
+                <div className="grid min-w-[950px] grid-cols-[minmax(100px,0.85fr)_140px_minmax(120px,1.1fr)_minmax(120px,1.3fr)_260px] items-center px-4 py-3 text-sm">
                   <div className="min-w-0">
                     <div className="truncate font-medium text-[var(--app-text-primary)]">{provider.name}</div>
                     <div className="mt-1 text-xs text-[var(--app-text-muted)]">
@@ -459,18 +458,13 @@ export function APIAccessSection() {
                     <div className="truncate text-xs text-[var(--app-text-secondary)]">{provider.defaultModel}</div>
                     <div className="mt-1 text-xs text-[var(--app-text-muted)]">Key {maskSecret(provider.apiKey)}</div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <span className={cn("app-badge", provider.enabled ? "ok" : "off")}>
-                      {provider.enabled ? "启用" : "禁用"}
-                    </span>
+                  <div className="flex items-center justify-end gap-1">
                     {provider.isDefault ? (
-                      <span className="app-badge warn">
+                      <span className="app-badge warn mr-1">
                         <Star className="size-3" />
                         默认
                       </span>
                     ) : null}
-                  </div>
-                  <div className="flex items-center justify-end gap-1">
                     <button
                       type="button"
                       className="app-btn"
@@ -504,8 +498,12 @@ export function APIAccessSection() {
                     </button>
                     <button
                       type="button"
-                      className="app-btn"
+                      className={cn(
+                        "app-btn api-access-power",
+                        provider.enabled ? "is-disable-action" : "is-enable-action",
+                      )}
                       title={provider.enabled ? "禁用" : "启用"}
+                      aria-label={provider.enabled ? "禁用 API 接入" : "启用 API 接入"}
                       onClick={() => void handleToggleEnabled(provider)}
                       disabled={busyId === provider.id}
                     >

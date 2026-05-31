@@ -475,6 +475,54 @@ func TestStoreReportsProviderPoolMemberHealth(t *testing.T) {
 	}
 }
 
+func TestStoreRecordsSinglePoolMemberFailureWithoutCooldown(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newTestStore(t)
+	defer store.Close()
+
+	group, err := store.CreateGroup(ctx, GroupInput{
+		Name:      "pool",
+		Platform:  PlatformGPTImage,
+		Enabled:   true,
+		IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	member, err := store.CreateMember(ctx, MemberInput{
+		GroupID:  group.ID,
+		Name:     "member",
+		Platform: PlatformGPTImage,
+		BaseURL:  "https://member.example/v1",
+		APIKey:   "member-key",
+		Enabled:  true,
+	})
+	if err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+
+	if err := store.ReportMemberFailure(ctx, member.ID, MemberFailure{
+		Status:       MemberStatusLimited,
+		ErrorMessage: "temporary upstream failure",
+	}); err != nil {
+		t.Fatalf("report failure: %v", err)
+	}
+	failed, ok, err := store.GetMember(ctx, member.ID)
+	if err != nil || !ok {
+		t.Fatalf("get failed member ok=%v err=%v", ok, err)
+	}
+	if failed.FailCount != 1 || failed.ConsecutiveFailures != 1 || failed.Status != MemberStatusLimited || failed.CooldownUntil != "" {
+		t.Fatalf("failed member = %#v", failed)
+	}
+	selection, ok, err := store.SelectDefaultMemberForPlatform(ctx, PlatformGPTImage)
+	if err != nil {
+		t.Fatalf("select pool member: %v", err)
+	}
+	if !ok || selection.Member.ID != member.ID {
+		t.Fatalf("selection ok=%v member=%#v, want failed member still selectable", ok, selection.Member)
+	}
+}
+
 func TestStoreAutoDisablesAndRecoversFailingPoolMember(t *testing.T) {
 	ctx := context.Background()
 	store, _ := newTestStore(t)

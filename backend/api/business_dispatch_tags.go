@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"imagestudio/internal/businessauth"
 	"imagestudio/internal/businesspayments"
 	"imagestudio/internal/businesssettings"
 )
@@ -59,6 +60,11 @@ func (s *Server) businessUserRoleDispatchTag(ctx context.Context, userID string)
 
 func (s *Server) businessSubscriptionLevelDispatchTag(ctx context.Context, userID string, settings businesssettings.Settings) string {
 	fallback := fallbackBillingLevelTag(settings.Billing.SubscriptionLevels, defaultSubscriptionDispatchTag)
+	if override := s.businessUserBillingLevelOverrideTag(ctx, userID, settings.Billing.SubscriptionLevels, "tier:", func(user businessauth.User) string {
+		return user.SubscriptionLevelTag
+	}); override != "" {
+		return override
+	}
 	store, err := s.newBusinessPaymentStore()
 	if err != nil {
 		return fallback
@@ -77,6 +83,11 @@ func (s *Server) businessSubscriptionLevelDispatchTag(ctx context.Context, userI
 
 func (s *Server) businessWalletLevelDispatchTag(ctx context.Context, userID string, settings businesssettings.Settings) string {
 	fallback := fallbackBillingLevelTag(settings.Billing.WalletLevels, defaultWalletDispatchTag)
+	if override := s.businessUserBillingLevelOverrideTag(ctx, userID, settings.Billing.WalletLevels, "wallet:", func(user businessauth.User) string {
+		return user.WalletLevelTag
+	}); override != "" {
+		return override
+	}
 	store, err := s.newBusinessPaymentStore()
 	if err != nil {
 		return fallback
@@ -87,6 +98,29 @@ func (s *Server) businessWalletLevelDispatchTag(ctx context.Context, userID stri
 		return fallback
 	}
 	return selectConfiguredBillingLevelTag(tags, settings.Billing.WalletLevels, fallback)
+}
+
+func (s *Server) businessUserBillingLevelOverrideTag(
+	ctx context.Context,
+	userID string,
+	levels []businesssettings.BillingLevelSettings,
+	requiredPrefix string,
+	pick func(businessauth.User) string,
+) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return ""
+	}
+	store, err := s.newBusinessAuthStore()
+	if err != nil {
+		return ""
+	}
+	defer store.Close()
+	user, ok, err := store.GetUserByID(ctx, userID)
+	if err != nil || !ok {
+		return ""
+	}
+	return configuredBillingLevelTag(pick(user), levels, requiredPrefix)
 }
 
 func persistProviderDispatchTagsInPayload(payload map[string]any, requestTags []string, userTags []string, dispatchTags []string) {
@@ -193,6 +227,23 @@ func selectConfiguredBillingLevelTag(candidateTags []string, levels []businessse
 		return bestTag
 	}
 	return fallback
+}
+
+func configuredBillingLevelTag(raw string, levels []businesssettings.BillingLevelSettings, requiredPrefix string) string {
+	tag := normalizeProviderDispatchTag(raw)
+	requiredPrefix = normalizeProviderDispatchTag(requiredPrefix)
+	if tag == "" || (requiredPrefix != "" && !strings.HasPrefix(tag, requiredPrefix)) {
+		return ""
+	}
+	for _, level := range levels {
+		if !level.Enabled {
+			continue
+		}
+		if normalizeProviderDispatchTag(level.Tag) == tag {
+			return tag
+		}
+	}
+	return ""
 }
 
 func fallbackBillingLevelTag(levels []businesssettings.BillingLevelSettings, fallback string) string {

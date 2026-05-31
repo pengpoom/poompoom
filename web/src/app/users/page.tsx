@@ -19,11 +19,14 @@ import {
   clearBusinessUserData,
   createBusinessUser,
   deleteBusinessUser,
+  fetchBusinessSystemSettings,
   fetchBusinessUsers,
   purgeBusinessUser,
   restoreBusinessUser,
   updateBusinessUser,
+  updateBusinessUserBillingLevels,
   updateBusinessUserStatus,
+  type BusinessBillingLevel,
   type BusinessUser,
   type BusinessUserDetail,
   type BusinessUserRole,
@@ -32,7 +35,7 @@ import {
 
 const roleLabel: Record<BusinessUserRole, string> = {
   admin: "管理员",
-  user: "测试用户",
+  user: "用户",
 };
 
 const statusLabel: Record<BusinessUserStatus, string> = {
@@ -81,6 +84,22 @@ function usageNumber(value: number | undefined) {
   return Number(value || 0).toLocaleString();
 }
 
+function billingLevelName(level: { name?: string } | undefined, fallback: string) {
+  const name = String(level?.name || "").trim();
+  return name || fallback;
+}
+
+function subscriptionSummary(user: BusinessUser) {
+  const subscription = user.billing?.subscription;
+  if (subscription?.active && subscription.packageName) {
+    return subscription.packageName;
+  }
+  if (subscription?.active) {
+    return "订阅中";
+  }
+  return "无订阅";
+}
+
 function userStatusVariant(status: BusinessUserStatus) {
   if (status === "active") {
     return "success";
@@ -119,6 +138,7 @@ export default function UsersPage() {
   const [submitting, setSubmitting] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<BusinessUser | null>(null);
+  const [billingTarget, setBillingTarget] = useState<BusinessUser | null>(null);
   const [creditTarget, setCreditTarget] = useState<BusinessUser | null>(null);
   const [clearDataTarget, setClearDataTarget] = useState<BusinessUser | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<BusinessUser | null>(null);
@@ -132,6 +152,9 @@ export default function UsersPage() {
     balance: "",
   });
   const [editUser, setEditUser] = useState({ username: "", password: "" });
+  const [billingDraft, setBillingDraft] = useState({ subscriptionLevelTag: "", walletLevelTag: "" });
+  const [subscriptionLevels, setSubscriptionLevels] = useState<BusinessBillingLevel[]>([]);
+  const [walletLevels, setWalletLevels] = useState<BusinessBillingLevel[]>([]);
   const [creditOperation, setCreditOperation] = useState<"recharge" | "refund">("recharge");
   const [creditAmount, setCreditAmount] = useState("");
   const includeDeleted = statusFilter === "all" || statusFilter === "deleted";
@@ -171,11 +194,38 @@ export default function UsersPage() {
     );
   }, [filteredUsers]);
 
+  const subscriptionLevelOptions = useMemo(
+    () => [
+      { value: "", label: "自动（按订阅套餐）" },
+      ...subscriptionLevels.map((level) => ({
+        value: level.tag,
+        label: `${level.name || level.tag} · ${level.tag}`,
+      })),
+    ],
+    [subscriptionLevels],
+  );
+
+  const walletLevelOptions = useMemo(
+    () => [
+      { value: "", label: "自动（按充值记录）" },
+      ...walletLevels.map((level) => ({
+        value: level.tag,
+        label: `${level.name || level.tag} · ${level.tag}`,
+      })),
+    ],
+    [walletLevels],
+  );
+
   const loadUsers = async () => {
     setLoading(true);
     try {
-      const payload = await fetchBusinessUsers({ includeDeleted });
+      const [payload, settingsPayload] = await Promise.all([
+        fetchBusinessUsers({ includeDeleted }),
+        fetchBusinessSystemSettings(),
+      ]);
       setUsers(payload.items);
+      setSubscriptionLevels((settingsPayload.settings.billing.subscriptionLevels || []).filter((level) => level.enabled));
+      setWalletLevels((settingsPayload.settings.billing.walletLevels || []).filter((level) => level.enabled));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "读取用户失败");
     } finally {
@@ -320,6 +370,14 @@ export default function UsersPage() {
     setEditUser({ username: user.username, password: "" });
   };
 
+  const openBillingDialog = (user: BusinessUser) => {
+    setBillingTarget(user);
+    setBillingDraft({
+      subscriptionLevelTag: user.subscriptionLevelTag || "",
+      walletLevelTag: user.walletLevelTag || "",
+    });
+  };
+
   const handleUpdateUser = async () => {
     if (!editTarget) {
       return;
@@ -342,6 +400,31 @@ export default function UsersPage() {
       toast.success("用户已更新");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "更新用户失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleUpdateBillingLevels = async () => {
+    if (!billingTarget) {
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const payload = await updateBusinessUserBillingLevels(billingTarget.id, {
+        subscriptionLevelTag: billingDraft.subscriptionLevelTag,
+        walletLevelTag: billingDraft.walletLevelTag,
+      });
+      setUsers((current) => current.map((item) => (
+        item.id === billingTarget.id
+          ? { ...item, ...payload.item, usage: item.usage, credit: item.credit }
+          : item
+      )));
+      setBillingTarget(null);
+      setBillingDraft({ subscriptionLevelTag: "", walletLevelTag: "" });
+      toast.success("等级已更新");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "更新等级失败");
     } finally {
       setSubmitting(false);
     }
@@ -430,6 +513,7 @@ export default function UsersPage() {
                   <th>用户</th>
                   <th>角色</th>
                   <th>状态</th>
+                  <th>等级 / 订阅</th>
                   <th>点数</th>
                   <th>生成</th>
                   <th>图片</th>
@@ -441,13 +525,13 @@ export default function UsersPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={9} style={{ padding: "48px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
+                    <td colSpan={10} style={{ padding: "48px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
                       <LoaderCircle className="mx-auto mb-2 size-5 animate-spin" /> 读取中
                     </td>
                   </tr>
                 ) : filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan={9} style={{ padding: "48px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
+                    <td colSpan={10} style={{ padding: "48px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
                       暂无匹配用户
                     </td>
                   </tr>
@@ -467,6 +551,16 @@ export default function UsersPage() {
                       </td>
                       <td><span className={`app-badge ${user.role === "admin" ? "role-admin" : "role-user"}`}>{roleLabel[user.role]}</span></td>
                       <td><span className={user.status === "active" ? "app-badge ok" : user.status === "deleted" ? "app-badge fail" : "app-badge warn"}>{statusLabel[user.status]}</span></td>
+                      <td>
+                        <div className="strong" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          <span>{billingLevelName(user.billing?.subscriptionLevel, "Free")}</span>
+                          {user.billing?.subscriptionLevelOverride ? <span className="app-badge warn">手动</span> : null}
+                        </div>
+                        <small style={{ color: "var(--app-text-muted)", fontSize: 11 }}>
+                          {subscriptionSummary(user)} · 充值 {billingLevelName(user.billing?.walletLevel, "None")}
+                          {user.billing?.walletLevelOverride ? " · 手动" : ""}
+                        </small>
+                      </td>
                       <td className="strong">{usageNumber(user.credit?.balance)}<br /><small style={{ color: "var(--app-text-muted)", fontSize: 11 }}>消耗 {usageNumber(user.credit?.spent)}</small></td>
                       <td className="strong">{usageNumber(user.usage?.generation_count)}<br /><small style={{ color: "var(--app-text-muted)", fontSize: 11 }}>成功 {usageNumber(user.usage?.success_count)}</small></td>
                       <td>{usageNumber(user.usage?.image_count)}</td>
@@ -485,6 +579,7 @@ export default function UsersPage() {
                               <>
                                 <button type="button" onClick={() => openEditDialog(user)} disabled={submitting}>编辑</button>
                                 <button type="button" onClick={() => openCreditDialog(user)} disabled={submitting}>余额</button>
+                                <button type="button" onClick={() => openBillingDialog(user)} disabled={submitting}>等级</button>
                                 <button type="button" className={user.status === "active" ? "warn" : ""} onClick={() => void handleToggleStatus(user)} disabled={submitting}>{user.status === "active" ? "禁用" : "启用"}</button>
                                 <button type="button" className="danger" onClick={() => setDeleteTarget(user)} disabled={submitting}>删除</button>
                               </>
@@ -561,6 +656,59 @@ export default function UsersPage() {
             <span className="fl">新密码</span>
             <input className="app-input" id="edit-password" name="password" type="password" autoComplete="new-password" value={editUser.password} onChange={(event) => setEditUser((current) => ({ ...current, password: event.target.value }))} placeholder="留空则不修改密码" />
           </label>
+        </div>
+      </AppModal>
+
+      <AppModal
+        open={Boolean(billingTarget)}
+        onClose={() => {
+          setBillingTarget(null);
+          setBillingDraft({ subscriptionLevelTag: "", walletLevelTag: "" });
+        }}
+        title="编辑等级"
+        footer={
+          <>
+            <button
+              className="app-btn"
+              type="button"
+              onClick={() => {
+                setBillingTarget(null);
+                setBillingDraft({ subscriptionLevelTag: "", walletLevelTag: "" });
+              }}
+              disabled={submitting}
+            >
+              取消
+            </button>
+            <button className="app-btn-primary" type="button" onClick={() => void handleUpdateBillingLevels()} disabled={submitting}>
+              {submitting ? <LoaderCircle className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
+              保存
+            </button>
+          </>
+        }
+      >
+        <div className="app-form-grid" style={{ padding: 0 }}>
+          <div className="full" style={{ gridColumn: "1 / -1", fontSize: 13, color: "var(--app-text-muted)" }}>
+            {billingTarget?.username ?? "-"} · {billingTarget?.email || "-"}
+          </div>
+          <label className="app-fld full">
+            <span className="fl">订阅等级</span>
+            <AppSelect
+              value={billingDraft.subscriptionLevelTag}
+              onChange={(value) => setBillingDraft((current) => ({ ...current, subscriptionLevelTag: value }))}
+              options={subscriptionLevelOptions}
+            />
+          </label>
+          <label className="app-fld full">
+            <span className="fl">充值等级</span>
+            <AppSelect
+              value={billingDraft.walletLevelTag}
+              onChange={(value) => setBillingDraft((current) => ({ ...current, walletLevelTag: value }))}
+              options={walletLevelOptions}
+            />
+          </label>
+          <div className="full" style={{ gridColumn: "1 / -1", fontSize: 12, lineHeight: 1.6, color: "var(--app-text-muted)" }}>
+            选择“自动”会恢复为按真实订阅和充值记录计算；手动等级只影响展示和号池调度标签。
+          </div>
         </div>
       </AppModal>
 
