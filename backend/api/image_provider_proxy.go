@@ -943,6 +943,21 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		}
 		return totalRefunded
 	}
+	syncReservedCredits := func() int64 {
+		balanceTotals, err := creditStore.GenerationTotals(context.Background(), userID, generationID)
+		if err != nil {
+			balanceTotals = businesscredits.GenerationTotals{}
+		}
+		subscriptionTotals, err := paymentStore.SubscriptionGenerationTotals(context.Background(), userID, generationID)
+		if err != nil {
+			subscriptionTotals = businesspayments.SubscriptionTotals{}
+		}
+		totalReserved := balanceTotals.Reserved + subscriptionTotals.Reserved
+		syncRefundedCredits()
+		tracker.CreditReserved = totalReserved
+		job.CreditReserved = totalReserved
+		return totalReserved
+	}
 	refundReservedCredits := func(amount int64) {
 		if amount <= 0 {
 			return
@@ -988,6 +1003,29 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 			return
 		}
 		refundReservedCredits(amount)
+	}
+	reserveAdditionalCredits := func(amount int64) error {
+		if amount <= 0 {
+			syncReservedCredits()
+			return nil
+		}
+		subscriptionReserve, err := paymentStore.ReserveSubscriptionCredits(context.Background(), userID, amount, generationID)
+		if err != nil {
+			syncReservedCredits()
+			return err
+		}
+		remaining := amount - subscriptionReserve.Reserved
+		if remaining > 0 {
+			if _, _, err := creditStore.Reserve(context.Background(), userID, remaining, generationID); err != nil {
+				if subscriptionReserve.Reserved > 0 {
+					_, _ = paymentStore.RefundSubscriptionCredits(context.Background(), userID, subscriptionReserve.Reserved, generationID)
+				}
+				syncReservedCredits()
+				return err
+			}
+		}
+		syncReservedCredits()
+		return nil
 	}
 	if strings.TrimSpace(stringValue(payload["response_format"])) == "" {
 		payload["response_format"] = "b64_json"
@@ -1131,6 +1169,11 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		return providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, errorMessage)
 	}
 	actualCount := countProviderImageItems(body)
+	maxReturnCount := systemSettings.Generation.MaxCount
+	if maxReturnCount > 0 && actualCount > maxReturnCount {
+		body = limitProviderImageResponseItems(body, maxReturnCount)
+		actualCount = countProviderImageItems(body)
+	}
 	if actualCount <= 0 {
 		providerErr := providerGenerationError{
 			HTTPStatus:   http.StatusBadGateway,
@@ -1146,12 +1189,33 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		finishTracker(businesstracker.StatusFailed, "upstream", providerErr.Code, providerErr.Message)
 		return providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, providerErr.Message)
 	}
-	tracker.ActualCount = actualCount
-	job.ActualCount = actualCount
 	if actualCount < requestedCount && systemSettings.Billing.RefundPartialCount {
 		actualCost := businesssettings.CreditCostForPlatform(systemSettings, providerCfg.Platform, actualCount)
 		refundCredits(creditCost - actualCost)
 	}
+	if actualCount > requestedCount {
+		billedCount := requestedCount
+		for billedCount < actualCount {
+			currentCost := businesssettings.CreditCostForPlatform(systemSettings, providerCfg.Platform, billedCount)
+			nextCost := businesssettings.CreditCostForPlatform(systemSettings, providerCfg.Platform, billedCount+1)
+			if err := reserveAdditionalCredits(nextCost - currentCost); err != nil {
+				if errors.Is(err, businesscredits.ErrInsufficientBalance) {
+					body = limitProviderImageResponseItems(body, billedCount)
+					actualCount = countProviderImageItems(body)
+					break
+				}
+				refundCredits(syncReservedCredits())
+				job.CreditRefunded = refundedCredits
+				s.recordProviderImageGeneration(ctx, userID, metadata, providerPayload, nil, "failed", err.Error(), startedAt)
+				finishJob(businessjobs.StatusFailed, "credit", "credit_reserve_failed", err.Error())
+				finishTracker(businesstracker.StatusFailed, "credit", "credit_reserve_failed", err.Error())
+				return providerImageGenerateError(http.StatusInternalServerError, "credit_reserve_failed", err.Error())
+			}
+			billedCount++
+		}
+	}
+	tracker.ActualCount = actualCount
+	job.ActualCount = actualCount
 	if latestJob, ok := s.businessImageJobByID(job.ID, userID); ok && businessJobCancelled(latestJob) {
 		if upstreamStarted {
 			syncRefundedCredits()
@@ -1167,6 +1231,7 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	tracker.StorageBytes = recordResult.StorageBytes
 	job.PersistDurationMS = recordResult.PersistDurationMS
 	job.StorageBytes = recordResult.StorageBytes
+	syncReservedCredits()
 	job.CreditRefunded = refundedCredits
 	s.reportProviderPoolSuccess(context.Background(), providerCfg)
 	finishJob(businessjobs.StatusSucceeded, "finished", "", "")
@@ -1353,16 +1418,16 @@ func buildProviderImageGeneratePayload(payload map[string]any) map[string]any {
 		if _, ok := allowed[key]; !ok {
 			continue
 		}
+		if (key == "sourceImages" || key == "sourceReference") && !providerPayloadIsEdit(payload) {
+			continue
+		}
 		next[key] = value
 	}
 	return next
 }
 
 func providerPayloadIsEdit(payload map[string]any) bool {
-	if strings.EqualFold(strings.TrimSpace(stringValue(payload["mode"])), "edit") {
-		return true
-	}
-	return len(providerImageSourcesFromPayload(payload["sourceImages"])) > 0
+	return strings.EqualFold(strings.TrimSpace(stringValue(payload["mode"])), "edit")
 }
 
 func providerImageSourcesFromPayload(raw any) []providerImageSource {
@@ -2110,6 +2175,26 @@ func countProviderImageItems(responseBody []byte) int {
 		}
 	}
 	return count
+}
+
+func limitProviderImageResponseItems(responseBody []byte, limit int) []byte {
+	if limit < 0 {
+		limit = 0
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(responseBody, &payload); err != nil {
+		return responseBody
+	}
+	rawItems, ok := payload["data"].([]any)
+	if !ok || len(rawItems) <= limit {
+		return responseBody
+	}
+	payload["data"] = rawItems[:limit]
+	nextBody, err := json.Marshal(payload)
+	if err != nil {
+		return responseBody
+	}
+	return nextBody
 }
 
 func (s *Server) saveBusinessImageBase64(ctx context.Context, raw, userID, conversationID, generationID string, index int) (string, int64, error) {

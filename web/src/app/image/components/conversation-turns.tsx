@@ -1,6 +1,6 @@
 "use client";
 
-import { type CSSProperties, memo, useEffect, useState } from "react";
+import { Fragment, type CSSProperties, memo, useEffect, useMemo, useState } from "react";
 import Zoom from "react-medium-image-zoom";
 import {
   Brush,
@@ -35,6 +35,12 @@ type ActiveRequestState = {
   mode: ImageMode;
   count: number;
   variant: "standard" | "selection-edit";
+};
+
+type TurnRenderGroup = {
+  id: string;
+  turns: ImageConversationTurn[];
+  compare: boolean;
 };
 
 type ProcessingStatus = {
@@ -248,13 +254,104 @@ type ConversationTurnsProps = {
   onCancelTurn: (conversationId: string, turn: ImageConversationTurn) => Promise<void>;
 };
 
-const metaPillClass =
-  "inline-flex shrink-0 items-center gap-1 text-[12px] font-semibold leading-5 text-[var(--app-text-secondary)]";
+const metaTextClass =
+  "min-w-0 text-[12px] font-semibold leading-5 text-[var(--app-text-secondary)]";
 
-const metaLabelClass = "shrink-0 text-[var(--app-text-muted)]";
+const metaMutedClass = "text-[var(--app-text-muted)]";
 
 const iconButtonClass =
   "inline-flex size-9 items-center justify-center rounded-lg border border-white/15 bg-black/55 text-white shadow-[0_8px_24px_rgba(0,0,0,0.24)] backdrop-blur transition hover:bg-black/70";
+
+function buildTurnRenderGroups(turns: ImageConversationTurn[]): TurnRenderGroup[] {
+  const groups: TurnRenderGroup[] = [];
+  const compareGroupIndexes = new Map<string, number>();
+
+  for (const turn of turns) {
+    const compareGroupId = String(turn.compareGroupId || "").trim();
+    if (!compareGroupId) {
+      groups.push({
+        id: turn.id,
+        turns: [turn],
+        compare: false,
+      });
+      continue;
+    }
+
+    const existingIndex = compareGroupIndexes.get(compareGroupId);
+    if (existingIndex === undefined) {
+      compareGroupIndexes.set(compareGroupId, groups.length);
+      groups.push({
+        id: compareGroupId,
+        turns: [turn],
+        compare: true,
+      });
+      continue;
+    }
+
+    groups[existingIndex] = {
+      ...groups[existingIndex],
+      turns: [...groups[existingIndex].turns, turn],
+    };
+  }
+
+  return groups.map((group) =>
+    group.compare
+      ? {
+          ...group,
+          turns: [...group.turns].sort(
+            (left, right) =>
+              (left.compareModelIndex ?? 0) - (right.compareModelIndex ?? 0),
+          ),
+        }
+      : group,
+  );
+}
+
+function isTurnProcessing(
+  activeRequest: ActiveRequestState | null,
+  conversationId: string,
+  turnId: string,
+) {
+  return Boolean(
+    activeRequest &&
+      activeRequest.conversationId === conversationId &&
+      activeRequest.turnId === turnId,
+  );
+}
+
+function compareGridClass(count: number) {
+  if (count >= 4) {
+    return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-3";
+  }
+  if (count === 3) {
+    return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-3";
+  }
+  if (count === 2) {
+    return "grid-cols-1 sm:grid-cols-2";
+  }
+  return "grid-cols-[minmax(180px,350px)]";
+}
+
+function compareGroupMetaItems(
+  turn: ImageConversationTurn,
+  modeLabelMap: Record<ImageMode, string>,
+  formatConversationTime: (value: string) => string,
+) {
+  const items = [modeLabelMap[turn.mode]];
+  const dimensions = parseSizeDimensions(turn.size);
+  const aspectRatioLabel = formatAspectRatioLabel(dimensions, turn.size);
+  if (aspectRatioLabel) {
+    items.push(aspectRatioLabel);
+  }
+  if (turn.quality) {
+    items.push(turn.quality);
+  }
+  const time = formatConversationTime(turn.createdAt);
+  if (time) {
+    items.push(time);
+  }
+  return items.filter(Boolean);
+}
 
 type GeneratedImageCardProps = {
   conversationId: string;
@@ -263,6 +360,7 @@ type GeneratedImageCardProps = {
   index: number;
   modeLabelMap: Record<ImageMode, string>;
   turnProcessing: boolean;
+  compactMeta?: boolean;
   formatConversationTime: (value: string) => string;
   onOpenSelectionEditor: (
     conversationId: string,
@@ -285,6 +383,7 @@ function GeneratedImageCard({
   index,
   modeLabelMap,
   turnProcessing,
+  compactMeta = false,
   formatConversationTime,
   onOpenSelectionEditor,
   onRetryTurn,
@@ -312,7 +411,7 @@ function GeneratedImageCard({
   return (
     <div
       data-generated-image-card
-      className="w-full max-w-full"
+      className="w-full min-w-0 max-w-full"
       style={{ maxWidth: frameMetrics.style.maxWidth }}
     >
       <div
@@ -431,36 +530,56 @@ function GeneratedImageCard({
         )}
       </div>
 
-      <div className="mt-4 flex w-full flex-wrap items-center gap-2 text-[12px]">
-        <span className={metaPillClass}>
-          <span className={metaLabelClass}>模型</span>
-          <span>{turn.providerPlatform || turn.model}</span>
+      <div
+        className={cn(
+          "mt-3 flex min-h-6 min-w-0 items-center gap-x-2 gap-y-1 overflow-hidden text-[12px]",
+          compactMeta
+            ? "w-full flex-wrap"
+            : "w-max max-w-[min(760px,calc(100vw-2rem))] flex-nowrap",
+        )}
+      >
+        <span className={cn(metaTextClass, "max-w-full truncate")}>
+          <span className={metaMutedClass}>模型</span>{" "}
+          {turn.compareModelLabel || turn.providerPlatform || turn.model}
         </span>
-        <span className={metaPillClass}>
-          <span className={metaLabelClass}>模式</span>
-          {modeLabelMap[turn.mode]}
-        </span>
-        {aspectRatioLabel ? (
-          <span className={metaPillClass}>
-            <span className={metaLabelClass}>尺寸</span>
-            {aspectRatioLabel}
-          </span>
+        {!compactMeta ? (
+          <>
+            <span className="text-[var(--app-text-muted)]">·</span>
+            <span className={cn(metaTextClass, "shrink-0")}>
+              <span className={metaMutedClass}>模式</span> {modeLabelMap[turn.mode]}
+            </span>
+          </>
         ) : null}
-        {turn.quality ? (
-          <span className={metaPillClass}>
-            <span className={metaLabelClass}>清晰度</span>
-            {turn.quality}
-          </span>
+        {!compactMeta && aspectRatioLabel ? (
+          <>
+            <span className="text-[var(--app-text-muted)]">·</span>
+            <span className={cn(metaTextClass, "shrink-0")}>
+              <span className={metaMutedClass}>尺寸</span> {aspectRatioLabel}
+            </span>
+          </>
         ) : null}
-        <span className={metaPillClass}>
-          <Clock3 className="size-3.5 shrink-0 text-[var(--app-text-muted)]" />
-          {formatConversationTime(turn.createdAt)}
-        </span>
+        {!compactMeta && turn.quality ? (
+          <>
+            <span className="text-[var(--app-text-muted)]">·</span>
+            <span className={cn(metaTextClass, "shrink-0")}>
+              <span className={metaMutedClass}>清晰度</span> {turn.quality}
+            </span>
+          </>
+        ) : null}
+        {!compactMeta ? (
+          <>
+            <span className="text-[var(--app-text-muted)]">·</span>
+            <span className={cn(metaTextClass, "inline-flex shrink-0 items-center gap-1")}>
+              <Clock3 className="size-3.5 shrink-0 text-[var(--app-text-muted)]" />
+              {formatConversationTime(turn.createdAt)}
+            </span>
+          </>
+        ) : null}
 
         {image.status === "error" ? (
           <button
             type="button"
-            className={cn(metaPillClass, "text-rose-300 disabled:cursor-not-allowed disabled:opacity-60")}
+            className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-rose-300 transition hover:bg-[var(--app-bg-surface-hover)] disabled:cursor-not-allowed disabled:opacity-60"
             onClick={() => void onRetryTurn(conversationId, turn, index)}
             disabled={turnProcessing}
             title={turnProcessing ? "处理中" : "重试"}
@@ -475,7 +594,7 @@ function GeneratedImageCard({
             type="button"
             onClick={() => void onCancelTurn(conversationId, turn)}
             disabled={cancelRequested}
-            className={cn(metaPillClass, "text-rose-300 disabled:cursor-not-allowed disabled:opacity-60")}
+            className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-rose-300 transition hover:bg-[var(--app-bg-surface-hover)] disabled:cursor-not-allowed disabled:opacity-60"
             title={cancelRequested ? "取消中" : "取消任务"}
             aria-label={cancelRequested ? "取消中" : "取消任务"}
           >
@@ -501,21 +620,43 @@ export const ConversationTurns = memo(function ConversationTurns({
   onRetryTurn,
   onCancelTurn,
 }: ConversationTurnsProps) {
+  const renderGroups = useMemo(() => buildTurnRenderGroups(turns), [turns]);
+
   return (
     <div className="mx-auto flex w-full max-w-[920px] flex-col gap-10 px-4 pb-10 pt-0 sm:px-6 lg:px-0">
-      {turns.map((turn) => {
-        const turnProcessing = Boolean(
-          activeRequest &&
-            activeRequest.conversationId === conversationId &&
-            activeRequest.turnId === turn.id,
-        );
+      {renderGroups.map((group) => {
+        const primaryTurn = group.turns[0];
+        const groupMetaItems = group.compare
+          ? compareGroupMetaItems(
+              primaryTurn,
+              modeLabelMap,
+              formatConversationTime,
+            )
+          : [];
         return (
-          <div key={turn.id} data-image-turn={turn.id} className="space-y-10">
+          <div key={group.id} data-image-turn={primaryTurn.id} className="space-y-10">
             <div className="flex justify-end">
-              <div className="group flex w-full max-w-[560px] flex-col items-end gap-3">
-                {turn.sourceImages && turn.sourceImages.length > 0 ? (
+              <div className="group flex w-full max-w-[560px] flex-col items-end gap-2.5">
+                {primaryTurn.prompt ? (
+                  <div className="flex max-w-full flex-row-reverse items-start justify-end gap-2">
+                    <div className="max-w-full whitespace-pre-wrap break-words rounded-[28px] border border-[var(--app-border)] bg-[var(--app-bg-surface)] px-5 py-3.5 text-[14px] font-semibold leading-6 text-[var(--app-text-primary)] sm:px-9">
+                      {primaryTurn.prompt}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void copyPromptToClipboard(primaryTurn.prompt || "")}
+                      className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full bg-[var(--app-bg-surface)] px-2.5 text-xs font-semibold text-[var(--app-text-muted)] opacity-0 transition hover:text-[var(--app-text-primary)] focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100"
+                      title="复制提示词"
+                      aria-label="复制提示词"
+                    >
+                      <Copy className="size-3.5" />
+                      复制
+                    </button>
+                  </div>
+                ) : null}
+                {primaryTurn.sourceImages && primaryTurn.sourceImages.length > 0 ? (
                   <div className="flex flex-wrap justify-end gap-2.5">
-                    {turn.sourceImages.map((source) => (
+                    {primaryTurn.sourceImages.map((source) => (
                       <div
                         key={source.id}
                         className="w-[136px] overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-bg-surface)]"
@@ -537,54 +678,55 @@ export const ConversationTurns = memo(function ConversationTurns({
                     ))}
                   </div>
                 ) : null}
-
-                {turn.prompt ? (
-                  <>
-                    <div className="max-w-full whitespace-pre-wrap break-words rounded-[28px] border border-[var(--app-border)] bg-[var(--app-bg-surface)] px-5 py-3.5 text-[14px] font-semibold leading-6 text-[var(--app-text-primary)] sm:px-9">
-                      {turn.prompt}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => void copyPromptToClipboard(turn.prompt || "")}
-                      className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full bg-[var(--app-bg-surface)] px-2.5 text-xs font-semibold text-[var(--app-text-muted)] opacity-0 transition hover:text-[var(--app-text-primary)] focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100"
-                      title="复制提示词"
-                      aria-label="复制提示词"
-                    >
-                      <Copy className="size-3.5" />
-                      复制
-                    </button>
-                  </>
-                ) : null}
               </div>
             </div>
 
-            <div className="w-full max-w-[760px] space-y-5" data-image-result-group>
-              {turn.images.length > 0 ? (
-                <div
-                  className={cn(
-                    "grid w-full justify-items-start gap-5",
-                    turn.images.length === 1
-                      ? "grid-cols-[minmax(180px,350px)]"
-                      : "grid-cols-[minmax(180px,350px)] xl:grid-cols-[minmax(180px,350px)_minmax(180px,350px)]",
-                  )}
-                >
-                  {turn.images.map((image, index) => (
-                    <GeneratedImageCard
-                      key={image.id}
-                      conversationId={conversationId}
-                      turn={turn}
-                      image={image}
-                      index={index}
-                      modeLabelMap={modeLabelMap}
-                      turnProcessing={turnProcessing}
-                      formatConversationTime={formatConversationTime}
-                      onOpenSelectionEditor={onOpenSelectionEditor}
-                      onRetryTurn={onRetryTurn}
-                      onCancelTurn={onCancelTurn}
-                    />
+            <div className="w-full space-y-5" data-image-result-group>
+              {group.compare ? (
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-bold text-[var(--app-text-muted)]">
+                  <span className="rounded-full bg-[var(--app-bg-surface)] px-2.5 py-1">
+                    模型对比
+                  </span>
+                  <span>{group.turns.length} 个结果</span>
+                  {groupMetaItems.map((item) => (
+                    <Fragment key={item}>
+                      <span className="text-[var(--app-text-muted)]">·</span>
+                      <span>{item}</span>
+                    </Fragment>
                   ))}
                 </div>
               ) : null}
+              <div
+                className={cn(
+                  "grid w-full justify-items-start gap-5",
+                  group.compare
+                    ? compareGridClass(group.turns.length)
+                    : primaryTurn.images.length === 1
+                      ? "grid-cols-[minmax(180px,350px)]"
+                      : "grid-cols-[minmax(180px,350px)] xl:grid-cols-[minmax(180px,350px)_minmax(180px,350px)]",
+                )}
+              >
+                {group.turns.map((turn) => (
+                  <Fragment key={turn.id}>
+                    {turn.images.map((image, index) => (
+                      <GeneratedImageCard
+                        key={image.id}
+                        conversationId={conversationId}
+                        turn={turn}
+                        image={image}
+                        index={index}
+                        modeLabelMap={modeLabelMap}
+                        turnProcessing={isTurnProcessing(activeRequest, conversationId, turn.id)}
+                        compactMeta={group.compare}
+                        formatConversationTime={formatConversationTime}
+                        onOpenSelectionEditor={onOpenSelectionEditor}
+                        onRetryTurn={onRetryTurn}
+                        onCancelTurn={onCancelTurn}
+                      />
+                    ))}
+                  </Fragment>
+                ))}
+              </div>
             </div>
           </div>
         );

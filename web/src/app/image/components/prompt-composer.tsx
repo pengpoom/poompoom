@@ -13,11 +13,12 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import Zoom from "react-medium-image-zoom";
-import { ArrowUp, Brain, Brush, Check, ChevronDown, Cpu, Mic2, SquarePlus, Trash2 } from "lucide-react";
+import { ArrowUp, Brain, Brush, Check, ChevronDown, Columns3, Cpu, Mic2, SquarePlus, Trash2 } from "lucide-react";
 
 import { ChipSelect } from "@/components/chip-select";
 import { HtmlImage as Image } from "@/components/html-image";
 import type { APIAccessPlatform, ImageQuality } from "@/lib/api";
+import type { CompareModelSelection } from "../hooks/use-image-submit";
 import type { ImageMode, StoredSourceImage } from "@/store/image-conversations";
 import { cn } from "@/lib/utils";
 import { buildSourceImageUrl } from "../view-utils";
@@ -25,7 +26,6 @@ import { buildSourceImageUrl } from "../view-utils";
 type PromptComposerProps = {
   mode: ImageMode;
   modeOptions: Array<{ label: string; value: ImageMode; description: string }>;
-  imageCount: string;
   imageAspectRatio: string;
   imageAspectRatioOptions: Array<{ label: string; value: string }>;
   imageResolutionTier: string;
@@ -38,17 +38,21 @@ type PromptComposerProps = {
   imageQualityOptions: Array<{ label: string; value: ImageQuality; description: string }>;
   imageQualityDisabled: boolean;
   imageQualityDisabledReason: string;
+  compareEnabled: boolean;
+  compareModelOptions: CompareModelSelection[];
+  selectedCompareModelIds: string[];
   sourceImages: StoredSourceImage[];
   imagePrompt: string;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   uploadInputRef: RefObject<HTMLInputElement | null>;
   maskInputRef: RefObject<HTMLInputElement | null>;
   onModeChange: (mode: ImageMode) => void;
-  onImageCountChange: (value: string) => void;
   onImageAspectRatioChange: (value: string) => void;
   onImageResolutionTierChange: (value: string) => void;
   onProviderPlatformChange: (value: APIAccessPlatform) => void;
   onImageQualityChange: (value: string) => void;
+  onCompareEnabledChange: (value: boolean) => void;
+  onCompareModelToggle: (id: string) => void;
   onPromptChange: (value: string) => void;
   onPromptPaste: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
   onRemoveSourceImage: (id: string) => void;
@@ -280,7 +284,6 @@ function AspectResolutionPicker({
 export function PromptComposer({
   mode,
   modeOptions,
-  imageCount,
   imageAspectRatio,
   imageAspectRatioOptions,
   imageResolutionTier,
@@ -293,17 +296,21 @@ export function PromptComposer({
   imageQualityOptions,
   imageQualityDisabled,
   imageQualityDisabledReason,
+  compareEnabled,
+  compareModelOptions,
+  selectedCompareModelIds,
   sourceImages,
   imagePrompt,
   textareaRef,
   uploadInputRef,
   maskInputRef,
   onModeChange,
-  onImageCountChange,
   onImageAspectRatioChange,
   onImageResolutionTierChange,
   onProviderPlatformChange,
   onImageQualityChange,
+  onCompareEnabledChange,
+  onCompareModelToggle,
   onPromptChange,
   onPromptPaste,
   onRemoveSourceImage,
@@ -378,15 +385,9 @@ export function PromptComposer({
   }, [isMobileComposerCollapsed, onMobileCollapsedChange]);
 
   const controlButtonClass = "app-btn";
-  const parsedImageCount = Number.parseInt(imageCount, 10);
-  const normalizedImageCount = Number.isFinite(parsedImageCount)
-    ? Math.min(8, Math.max(1, parsedImageCount))
-    : 1;
-  const setNormalizedImageCount = useCallback((value: number) => {
-    onImageCountChange(String(Math.min(8, Math.max(1, value))));
-  }, [onImageCountChange]);
 
   const inlinePlacement = placement === "inline";
+  const selectedCompareCount = selectedCompareModelIds.length;
 
   return (
     <div
@@ -540,10 +541,32 @@ export function PromptComposer({
                 value={providerPlatform}
                 options={providerPlatformOptions.map((item) => ({ value: item.value, label: item.label, disabled: item.disabled }))}
                 onChange={(value) => onProviderPlatformChange(value)}
-                triggerClassName={cn(controlButtonClass, "min-w-[156px]")}
+                triggerClassName={cn(controlButtonClass, "min-w-[156px]", compareEnabled && mode === "generate" && "is-disabled")}
                 triggerIcon={<Cpu className="size-4" />}
                 triggerLabel={providerLabel}
+                disabled={compareEnabled && mode === "generate"}
+                title={compareEnabled && mode === "generate" ? "多模型对比将使用下方选中的模型" : undefined}
               />
+
+              {mode === "generate" ? (
+                <button
+                  type="button"
+                  className={cn(
+                    controlButtonClass,
+                    "min-w-[146px] justify-center",
+                    compareEnabled && "border-[var(--app-accent-cyan)] text-[var(--app-text-primary)]",
+                  )}
+                  onClick={() => onCompareEnabledChange(!compareEnabled)}
+                  aria-pressed={compareEnabled}
+                  title="使用同一提示词同时生成多个模型结果"
+                >
+                  <Columns3 className="size-4" />
+                  <span>模型对比</span>
+                  <span className="rounded-full bg-[var(--app-bg-surface-hover)] px-1.5 text-[11px] font-bold text-[var(--app-text-muted)]">
+                    {selectedCompareCount}
+                  </span>
+                </button>
+              ) : null}
 
               <AspectResolutionPicker
                 aspectRatio={imageAspectRatio}
@@ -575,46 +598,6 @@ export function PromptComposer({
                 }
               />
 
-              {mode === "generate" ? (
-                <div className={cn(controlButtonClass, "inline-flex min-w-[132px] items-center justify-center gap-2")}>
-                  <span>数量</span>
-                  <div className="inline-flex items-center gap-1.5">
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      value={imageCount}
-                      onChange={(event) => {
-                        const nextValue = event.target.value.replace(/\D/g, "").slice(0, 1);
-                        onImageCountChange(nextValue);
-                      }}
-                      onBlur={() => setNormalizedImageCount(normalizedImageCount)}
-                      className="pc-count-input"
-                    />
-                    <div className="inline-flex flex-col items-center justify-center gap-0.5">
-                      <button
-                        type="button"
-                        className="grid h-3.5 w-5 place-items-center rounded-[3px] text-[var(--app-text-muted)] transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
-                        onClick={() => setNormalizedImageCount(normalizedImageCount + 1)}
-                        disabled={normalizedImageCount >= 8}
-                        aria-label="增加数量"
-                      >
-                        <span className="block size-0 border-x-[4px] border-b-[5px] border-x-transparent border-b-current" aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        className="grid h-3.5 w-5 place-items-center rounded-[3px] text-[var(--app-text-muted)] transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
-                        onClick={() => setNormalizedImageCount(normalizedImageCount - 1)}
-                        disabled={normalizedImageCount <= 1}
-                        aria-label="减少数量"
-                      >
-                        <span className="block size-0 border-x-[4px] border-t-[5px] border-x-transparent border-t-current" aria-hidden="true" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-
             </div>
 
             <button
@@ -626,6 +609,38 @@ export function PromptComposer({
               <ArrowUp className="size-6" />
             </button>
           </div>
+
+          {mode === "generate" && compareEnabled ? (
+            <div className="mt-3 flex flex-wrap gap-2 border-t border-[var(--app-border)] pt-3">
+              {compareModelOptions.map((item) => {
+                const active = selectedCompareModelIds.includes(item.id);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={cn(
+                      "inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg-surface)] px-3 text-[12px] font-bold text-[var(--app-text-secondary)] transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)]",
+                      active && "border-[var(--app-accent-cyan)] text-[var(--app-text-primary)]",
+                    )}
+                    onClick={() => onCompareModelToggle(item.id)}
+                    aria-pressed={active}
+                    title={`${item.platform} · ${item.model}`}
+                  >
+                    <span
+                      className={cn(
+                        "grid size-4 place-items-center rounded border border-[var(--app-border-strong)]",
+                        active && "border-[var(--app-accent-cyan)] bg-[var(--app-accent-cyan)] text-black",
+                      )}
+                      aria-hidden="true"
+                    >
+                      {active ? <Check className="size-3" /> : null}
+                    </span>
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
         </div>
 
         {isMobileComposerExpanded && !inlinePlacement ? (

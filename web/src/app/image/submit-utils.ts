@@ -44,7 +44,12 @@ export function createConversationTurn(payload: {
   quality?: ImageQuality;
   providerPlatform?: APIAccessPlatform;
   scale?: string;
+  compareGroupId?: string;
+  compareModelLabel?: string;
+  compareModelIndex?: number;
+  compareModelCount?: number;
   sourceImages?: StoredSourceImage[];
+  hasAttachment?: boolean;
   sourceReference?: InpaintSourceReference;
   images: StoredImage[];
   createdAt: string;
@@ -64,7 +69,12 @@ export function createConversationTurn(payload: {
     quality: payload.quality,
     providerPlatform: payload.providerPlatform,
     scale: payload.scale,
+    compareGroupId: payload.compareGroupId,
+    compareModelLabel: payload.compareModelLabel,
+    compareModelIndex: payload.compareModelIndex,
+    compareModelCount: payload.compareModelCount,
     sourceImages: payload.sourceImages ?? [],
+    hasAttachment: Boolean(payload.hasAttachment || payload.sourceImages?.length),
     sourceReference: payload.sourceReference,
     images: payload.images,
     createdAt: payload.createdAt,

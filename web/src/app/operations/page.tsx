@@ -333,33 +333,6 @@ function providerMatchModeLabel(value?: string) {
   }
 }
 
-function compactTags(tags?: string[], limit = 2) {
-  const normalized = (tags || []).map((tag) => tag.trim()).filter(Boolean);
-  return {
-    visible: normalized.slice(0, limit),
-    overflow: Math.max(0, normalized.length - limit),
-    title: normalized.join(", "),
-  };
-}
-
-function compactTagText(tags?: string[], limit = 2) {
-  const compact = compactTags(tags, limit);
-  if (compact.visible.length === 0) {
-    return "-";
-  }
-  return `${compact.visible.join(" · ")}${compact.overflow > 0 ? ` +${compact.overflow}` : ""}`;
-}
-
-function tagLine(title: string, tags?: string[], limit = 2) {
-  const compact = compactTags(tags, limit);
-  const text = compactTagText(tags, limit);
-  return (
-    <div className="min-w-0 truncate text-[11px] leading-4 text-[var(--app-text-muted)]" title={compact.title || undefined}>
-      {title} <span className="font-mono text-[var(--app-text-secondary)]">{text}</span>
-    </div>
-  );
-}
-
 function fullTagList(tags?: string[]) {
   const items = (tags || []).map((tag) => tag.trim()).filter(Boolean);
   return items.length > 0 ? items.join(" · ") : "-";
@@ -369,7 +342,11 @@ function prettyPayload(payload?: Record<string, unknown>) {
   if (!payload || Object.keys(payload).length === 0) {
     return "{}";
   }
-  return JSON.stringify(payload, null, 2);
+  const { sourceImages: _sourceImages, sourceReference: _sourceReference, ...safePayload } = payload;
+  if (Object.keys(safePayload).length === 0) {
+    return "{}";
+  }
+  return JSON.stringify(safePayload, null, 2);
 }
 
 function jobDispatchTrace(job: BusinessImageJob) {
@@ -519,6 +496,28 @@ function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
+function DetailBlock({
+  title,
+  children,
+  tone = "default",
+}: {
+  title: string;
+  children: ReactNode;
+  tone?: "default" | "danger";
+}) {
+  return (
+    <section className={cn(
+      "rounded-[var(--app-radius-md)] border p-4",
+      tone === "danger"
+        ? "border-rose-400/20 bg-rose-500/10"
+        : "border-[var(--app-border)] bg-[var(--app-bg-surface)]",
+    )}>
+      <h4 className="mb-3 text-sm font-semibold text-[var(--app-text-primary)]">{title}</h4>
+      {children}
+    </section>
+  );
+}
+
 function JobDetailDrawer({
   job,
   username,
@@ -539,8 +538,8 @@ function JobDetailDrawer({
         aria-label="关闭 Job 详情"
         onClick={onClose}
       />
-      <aside className="absolute right-0 top-0 h-full w-full max-w-[720px] overflow-y-auto border-l border-[var(--app-border)] bg-[var(--app-bg-panel)] shadow-2xl">
-        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-[var(--app-border)] bg-[var(--app-bg-panel)] px-5 py-4">
+      <aside className="absolute right-0 top-0 h-full w-full max-w-[760px] overflow-y-auto border-l border-[var(--app-border)] bg-[var(--app-bg-popover-solid)] shadow-2xl">
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-[var(--app-border)] bg-[var(--app-bg-popover-solid)] px-5 py-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className={cn("app-badge", badgeClass(jobStatusVariant(job.status)))}>{jobStatusLabel(job.status)}</span>
@@ -551,14 +550,17 @@ function JobDetailDrawer({
                 </span>
               ) : null}
             </div>
-            <h3 className="mt-3 truncate text-base font-semibold text-[var(--app-text-primary)]">{job.prompt || "无提示词"}</h3>
+            <div className="mt-3 flex min-w-0 items-center gap-2">
+              <h3 className="truncate text-base font-semibold text-[var(--app-text-primary)]">{job.prompt || "无提示词"}</h3>
+              {job.hasAttachment ? <span className="app-badge off shrink-0">含附件</span> : null}
+            </div>
             <div className="mt-1 truncate text-xs text-[var(--app-text-muted)]">{job.id}</div>
           </div>
           <button type="button" className="app-btn" onClick={onClose} aria-label="关闭">
             <X className="size-4" />
           </button>
         </div>
-        <div className="grid gap-4 p-5 text-sm text-[var(--app-text-secondary)]">
+        <div className="grid gap-4 bg-[var(--app-bg-root)]/35 p-5 text-sm text-[var(--app-text-secondary)]">
           <section className="grid gap-2 sm:grid-cols-2">
             <DetailRow label="用户" value={username || job.userId} />
             <DetailRow label="阶段" value={job.stage || "-"} />
@@ -568,8 +570,36 @@ function JobDetailDrawer({
             <DetailRow label="扣点" value={`${numberText(job.creditReserved)} / 退 ${numberText(job.creditRefunded)}`} />
           </section>
 
-          <section className={cn(adminSubPanelClass, "p-4")}>
-            <h4 className="mb-3 text-sm font-semibold text-[var(--app-text-primary)]">Provider</h4>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <DetailBlock title="用户看到的错误" tone={job.userErrorType || job.userErrorMessage ? "danger" : "default"}>
+              <div className="grid gap-2 text-xs leading-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  {job.userErrorType ? <span className="app-badge fail">{userErrorTypeLabel(job.userErrorType) || job.userErrorType}</span> : null}
+                  <span className="break-words text-[var(--app-text-secondary)]">{job.userErrorMessage || "-"}</span>
+                </div>
+              </div>
+            </DetailBlock>
+
+            <DetailBlock title="真实上游错误" tone={job.errorCode || job.errorMessage ? "danger" : "default"}>
+              <div className="grid gap-2 text-xs leading-5">
+                <div><span className="text-[var(--app-text-muted)]">错误码：</span>{job.errorCode || "-"}</div>
+                <div className="break-words text-rose-200">{job.errorMessage || "-"}</div>
+              </div>
+            </DetailBlock>
+          </div>
+
+          <DetailBlock title="调度链路">
+            <div className="grid gap-3 text-xs leading-5">
+              {jobDispatchTrace(job).map((item, index) => (
+                <div key={`${item}-${index}`} className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3">
+                  <span className="app-badge off">{index + 1}</span>
+                  <span className="min-w-0 break-words">{item}</span>
+                </div>
+              ))}
+            </div>
+          </DetailBlock>
+
+          <DetailBlock title="Provider">
             <div className="grid gap-2 text-xs leading-5 sm:grid-cols-2">
               <div>来源：{providerSourceLabel(job)}</div>
               <div>策略：{dispatchStrategyLabel(job.dispatchStrategy) || "-"}</div>
@@ -578,31 +608,17 @@ function JobDetailDrawer({
               <div>池匹配：{providerMatchModeLabel(job.providerGroupMatchMode) || "-"}</div>
               <div>池标签：{fullTagList(job.providerGroupTags)}</div>
             </div>
-          </section>
+          </DetailBlock>
 
-          <section className={cn(adminSubPanelClass, "p-4")}>
-            <h4 className="mb-3 text-sm font-semibold text-[var(--app-text-primary)]">标签</h4>
+          <DetailBlock title="标签">
             <div className="grid gap-2 text-xs leading-5">
               <div>请求：<span className="font-mono">{fullTagList(job.requestDispatchTags)}</span></div>
               <div>用户：<span className="font-mono">{fullTagList(job.userDispatchTags)}</span></div>
               <div>最终：<span className="font-mono">{fullTagList(job.dispatchTags)}</span></div>
             </div>
-          </section>
+          </DetailBlock>
 
-          <section className={cn(adminSubPanelClass, "p-4")}>
-            <h4 className="mb-3 text-sm font-semibold text-[var(--app-text-primary)]">调度链路</h4>
-            <div className="grid gap-2 text-xs leading-5">
-              {jobDispatchTrace(job).map((item, index) => (
-                <div key={`${item}-${index}`} className="flex items-center gap-2">
-                  <span className="app-badge off">{index + 1}</span>
-                  <span>{item}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className={cn(adminSubPanelClass, "p-4")}>
-            <h4 className="mb-3 text-sm font-semibold text-[var(--app-text-primary)]">耗时链路</h4>
+          <DetailBlock title="耗时链路">
             <div className="grid gap-2 text-xs leading-5 sm:grid-cols-2">
               <div>排队：{formatDurationMs(job.queueWaitMs)}</div>
               <div>上游：{formatDurationMs(job.upstreamDurationMs)}</div>
@@ -613,32 +629,13 @@ function JobDetailDrawer({
               <div>结束：{formatDateTime(job.finishedAt)}</div>
               <div>更新：{formatDateTime(job.updatedAt)}</div>
             </div>
-          </section>
+          </DetailBlock>
 
-          <section className={cn(adminSubPanelClass, "p-4")}>
-            <h4 className="mb-3 text-sm font-semibold text-[var(--app-text-primary)]">错误</h4>
-            <div className="grid gap-3 text-xs leading-5">
-              <div>
-                <div className="mb-1 text-[var(--app-text-muted)]">用户展示</div>
-                <div className="flex flex-wrap items-center gap-2 text-[var(--app-text-secondary)]">
-                  {job.userErrorType ? <span className="app-badge fail">{userErrorTypeLabel(job.userErrorType) || job.userErrorType}</span> : null}
-                  <span className="break-words">{job.userErrorMessage || "-"}</span>
-                </div>
-              </div>
-              <div className="text-rose-200">
-                <div className="mb-1 text-[var(--app-text-muted)]">真实错误</div>
-                <div>{job.errorCode || "-"}</div>
-                <div className="mt-1 break-words">{job.errorMessage || "-"}</div>
-              </div>
-            </div>
-          </section>
-
-          <section className={cn(adminSubPanelClass, "p-4")}>
-            <h4 className="mb-3 text-sm font-semibold text-[var(--app-text-primary)]">Payload</h4>
+          <DetailBlock title="Payload">
             <pre className="max-h-[360px] overflow-auto rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-black/20 p-3 text-xs leading-5 text-[var(--app-text-secondary)]">
               {prettyPayload(job.payload)}
             </pre>
-          </section>
+          </DetailBlock>
         </div>
       </aside>
     </div>
@@ -1177,22 +1174,22 @@ export default function OperationsPage() {
 
             <div className="rounded-[var(--app-radius-lg)] border border-[var(--app-border)]">
               <table className={cn(adminTableClass, "table-fixed text-left")}>
-	                <colgroup>
-	                  <col className="w-[11%]" />
-	                  <col className="w-[15%]" />
-	                  <col className="w-[31%]" />
-	                  <col className="w-[12%]" />
-	                  <col className="w-[15%]" />
-	                  <col className="w-[16%]" />
+                <colgroup>
+                  <col className="w-[14%]" />
+                  <col className="w-[18%]" />
+                  <col className="w-[22%]" />
+                  <col className="w-[22%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[12%]" />
                 </colgroup>
                 <thead className={adminTableHeadClass}>
                   <tr>
                     <th className="px-3 py-3 font-medium">状态 / 用户</th>
                     <th className="px-3 py-3 font-medium">平台 / 来源</th>
-                    <th className="px-3 py-3 font-medium">号池 / 标签</th>
+                    <th className="px-3 py-3 font-medium">来源详情</th>
                     <th className="px-3 py-3 font-medium">提示词</th>
-                    <th className="px-3 py-3 font-medium">执行 / 结果</th>
-                    <th className="px-3 py-3 font-medium">时间 / 错误</th>
+                    <th className="px-3 py-3 font-medium">结果</th>
+                    <th className="px-3 py-3 font-medium">错误</th>
                   </tr>
                 </thead>
                 <tbody className={adminTableBodyClass}>
@@ -1212,10 +1209,10 @@ export default function OperationsPage() {
                   ) : (
                     jobs.map((job) => (
                       <tr
-                          key={job.id}
-                          className={cn(adminTableRowClass, "cursor-pointer align-top text-[var(--app-text-secondary)]")}
-                          onClick={() => setSelectedJob(job)}
-                        >
+                        key={job.id}
+                        className={cn(adminTableRowClass, "cursor-pointer align-top text-[var(--app-text-secondary)]")}
+                        onClick={() => setSelectedJob(job)}
+                      >
                         <td className="whitespace-normal px-3 py-2">
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
@@ -1236,11 +1233,6 @@ export default function OperationsPage() {
                             </div>
                             <div className="mt-1 flex items-center gap-1 overflow-hidden">
                               <span className={cn("app-badge shrink-0", badgeClass(providerSourceVariant(job)))}>{providerSourceLabel(job)}</span>
-                              {dispatchStrategyLabel(job.dispatchStrategy) ? (
-                                <span className={cn("app-badge shrink-0", badgeClass(dispatchStrategyVariant(job.dispatchStrategy)))}>
-                                  {dispatchStrategyLabel(job.dispatchStrategy)}
-                                </span>
-                              ) : null}
                             </div>
                           </div>
                         </td>
@@ -1256,55 +1248,53 @@ export default function OperationsPage() {
                                 ? `成员 ${job.providerMemberName || job.providerName || job.providerMemberId || job.providerId || "-"} · ${providerMatchModeLabel(job.providerGroupMatchMode) || "-"}`
                                 : "API 接入"}
                             </div>
-                            {tagLine("池", job.providerGroupTags, 3)}
-                            {tagLine("用户", job.userDispatchTags, 3)}
-                            {tagLine("最终", job.dispatchTags, 4)}
+                            {dispatchStrategyLabel(job.dispatchStrategy) ? (
+                              <div className="mt-1">
+                                <span className={cn("app-badge shrink-0", badgeClass(dispatchStrategyVariant(job.dispatchStrategy)))}>
+                                  {dispatchStrategyLabel(job.dispatchStrategy)}
+                                </span>
+                              </div>
+                            ) : null}
                           </div>
                         </td>
                         <td className="whitespace-normal px-3 py-2">
                           <div className="min-w-0">
-                            <div className="truncate text-[var(--app-text-primary)]" title={job.prompt || ""}>{job.prompt || "-"}</div>
-                          </div>
-                        </td>
-                        <td className="whitespace-normal px-3 py-2">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className={cn("app-badge shrink-0", badgeClass(upstreamJobVariant(job)))}>{upstreamJobLabel(job)}</span>
-                              <span className="truncate text-xs text-[var(--app-text-muted)]">
-                                {numberText(job.actualCount)}/{numberText(job.requestedCount)} 张 · {formatBytes(job.storageBytes)}
-                              </span>
+                            <div className="flex min-w-0 items-center gap-2">
+                              <div className="truncate text-[var(--app-text-primary)]" title={job.prompt || ""}>{job.prompt || "-"}</div>
+                              {job.hasAttachment ? <span className="app-badge off shrink-0">含附件</span> : null}
                             </div>
-                            <div className="mt-0.5 text-xs text-[var(--app-text-muted)]">
+                          </div>
+                        </td>
+                        <td className="whitespace-normal px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-[var(--app-text-primary)]">
+                              {numberText(job.actualCount)}/{numberText(job.requestedCount)} 张
+                            </div>
+                            <div className="mt-0.5 truncate text-xs text-[var(--app-text-muted)]">
+                              {formatBytes(job.storageBytes)} · {formatDurationMs(job.totalDurationMs)}
+                            </div>
+                            <div className="mt-0.5 truncate text-xs text-[var(--app-text-muted)]">
                               点 {numberText(job.creditReserved)} / 退 {numberText(job.creditRefunded)}
                             </div>
-                            <div className="mt-0.5 text-xs text-[var(--app-text-muted)]">
-                              总 {formatDurationMs(job.totalDurationMs)}
-                            </div>
-                            <div className="mt-0.5 text-xs text-[var(--app-text-muted)]">
-                              上游 {formatDurationMs(job.upstreamDurationMs)}
-                            </div>
                           </div>
                         </td>
                         <td className="whitespace-normal px-3 py-2">
                           <div className="min-w-0">
-                            <div className="text-xs text-[var(--app-text-muted)]">
-                              创建 {formatDateTime(job.createdAt)}
-                            </div>
-                            <div className="text-xs text-[var(--app-text-muted)]">
-                              结束 {formatDateTime(job.finishedAt)}
-                            </div>
                             {job.userErrorType || job.errorCode || job.errorMessage ? (
-                              <div className="mt-1 flex min-w-0 items-center gap-1">
+                              <div className="flex min-w-0 items-center gap-1">
                                 {job.userErrorType ? (
                                   <span className="app-badge fail shrink-0">{userErrorTypeLabel(job.userErrorType) || job.userErrorType}</span>
                                 ) : null}
                                 <span className="truncate text-xs text-rose-300" title={job.errorMessage || job.errorCode || ""}>
-                                  {job.errorCode || "-"} {job.errorMessage || ""}
+                                  {job.userErrorMessage || job.errorCode || job.errorMessage || "-"}
                                 </span>
                               </div>
                             ) : (
                               <div className="mt-0.5 text-xs text-[var(--app-text-muted)]">-</div>
                             )}
+                            <div className="mt-0.5 truncate text-xs text-[var(--app-text-muted)]">
+                              {formatDateTime(job.finishedAt || job.updatedAt)}
+                            </div>
                           </div>
                         </td>
                       </tr>

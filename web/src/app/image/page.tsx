@@ -38,7 +38,7 @@ import { PromptComposer } from "./components/prompt-composer";
 import { WorkspaceHeader } from "./components/workspace-header";
 import { useImageHistory } from "./hooks/use-image-history";
 import { useImageSourceInputs } from "./hooks/use-image-source-inputs";
-import { useImageSubmit } from "./hooks/use-image-submit";
+import { useImageSubmit, type CompareModelSelection } from "./hooks/use-image-submit";
 import { buildConversationPreviewSource } from "./view-utils";
 
 type ImageAspectRatio = "auto" | "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "9:16" | "16:9" | "21:9";
@@ -165,6 +165,29 @@ const providerPlatformOptions: Array<{
   { label: "gpt-image", value: "gpt-image" },
   { label: "gemini-banana", value: "gemini-banana" },
 ];
+const compareModelOptions: CompareModelSelection[] = [
+  {
+    id: "gpt-image-2",
+    label: "GPT Image 2",
+    platform: "gpt-image",
+    model: "gpt-image-2",
+  },
+  {
+    id: "gpt-image-1",
+    label: "GPT Image 1",
+    platform: "gpt-image",
+    model: "gpt-image-1",
+  },
+  {
+    id: "gemini-2.5-flash-image",
+    label: "NanoBanana",
+    platform: "gemini-banana",
+    model: "gemini-2.5-flash-image",
+  },
+];
+const defaultCompareModelIds = compareModelOptions
+  .slice(0, 3)
+  .map((item) => item.id);
 
 const modeLabelMap: Record<ImageMode, string> = {
   generate: "生成",
@@ -259,11 +282,12 @@ const IMAGE_COMPOSER_SETTINGS_KEY = "image-studio.composer.settings.v1";
 
 type StoredImageComposerSettings = {
   mode?: ImageMode;
-  count?: string;
   aspectRatio?: ImageAspectRatio;
   resolutionTier?: ImageResolutionTier;
   quality?: ImageQuality;
   providerPlatform?: APIAccessPlatform;
+  compareEnabled?: boolean;
+  compareModelIds?: string[];
 };
 
 function hasAvailablePaidImageAccount(
@@ -317,11 +341,6 @@ function normalizeStoredImageMode(value: unknown): ImageMode | undefined {
   return value === "generate" || value === "edit" ? value : undefined;
 }
 
-function normalizeStoredImageCount(value: unknown) {
-  const count = Math.max(1, Math.min(8, Number(value) || 1));
-  return String(count);
-}
-
 function normalizeStoredImageAspectRatio(value: unknown): ImageAspectRatio | undefined {
   const next = String(value || "");
   return imageAspectRatioOptions.some((item) => item.value === next)
@@ -344,6 +363,19 @@ function normalizeStoredImageQuality(value: unknown): ImageQuality | undefined {
 
 function normalizeStoredProviderPlatform(value: unknown): APIAccessPlatform | undefined {
   return value === "gpt-image" || value === "gemini-banana" ? value : undefined;
+}
+
+function normalizeStoredCompareModelIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return defaultCompareModelIds;
+  }
+  const allowed = new Set(compareModelOptions.map((item) => item.id));
+  const items = value
+    .map((item) => String(item || "").trim())
+    .filter((item, index, array) =>
+      allowed.has(item) && array.indexOf(item) === index,
+    );
+  return items.length >= 2 ? items : defaultCompareModelIds;
 }
 
 function formatProcessingDuration(totalSeconds: number) {
@@ -518,9 +550,6 @@ export default function ImagePage() {
     () => normalizeStoredImageMode(initialComposerSettingsRef.current.mode) ?? "generate",
   );
   const [imagePrompt, setImagePrompt] = useState("");
-  const [imageCount, setImageCount] = useState(
-    () => normalizeStoredImageCount(initialComposerSettingsRef.current.count),
-  );
   const [imageAspectRatio, setImageAspectRatio] = useState<ImageAspectRatio>(
     () => normalizeStoredImageAspectRatio(initialComposerSettingsRef.current.aspectRatio) ?? "1:1",
   );
@@ -534,6 +563,12 @@ export default function ImagePage() {
     useState<APIAccessPlatform>(
       () => normalizeStoredProviderPlatform(initialComposerSettingsRef.current.providerPlatform) ?? "gpt-image",
     );
+  const [compareEnabled, setCompareEnabled] = useState(
+    () => initialComposerSettingsRef.current.compareEnabled === true,
+  );
+  const [selectedCompareModelIds, setSelectedCompareModelIds] = useState(
+    () => normalizeStoredCompareModelIds(initialComposerSettingsRef.current.compareModelIds),
+  );
   const [selectionEditorProviderPlatform, setSelectionEditorProviderPlatform] =
     useState<APIAccessPlatform>("gpt-image");
   const [composerResetKey, setComposerResetKey] = useState(0);
@@ -703,10 +738,7 @@ export default function ImagePage() {
   );
   const activeRequestStartedAt = selectedConversationProcessingStartedAt;
 
-  const parsedCount = useMemo(
-    () => Math.max(1, Math.min(8, Number(imageCount) || 1)),
-    [imageCount],
-  );
+  const parsedCount = 1;
   const hasAvailablePaidAccount = useMemo(
     () =>
       isBusinessProxyMode() ||
@@ -808,6 +840,13 @@ export default function ImagePage() {
   const imageSources = useMemo(
     () => sourceImages.filter((item) => item.role === "image"),
     [sourceImages],
+  );
+  const selectedCompareModels = useMemo(
+    () =>
+      selectedCompareModelIds
+        .map((id) => compareModelOptions.find((item) => item.id === id))
+        .filter((item): item is CompareModelSelection => Boolean(item)),
+    [selectedCompareModelIds],
   );
   const processingStatus = useMemo(
     () =>
@@ -974,7 +1013,6 @@ export default function ImagePage() {
               didApplyServerComposerDefaultsRef.current = true;
               setProviderPlatform(generation.defaultPlatform);
               setImageQuality(generation.defaultQuality);
-              setImageCount(String(Math.max(1, Math.min(8, generation.defaultCount || 1))));
             }
           } catch {
             // 系统设置读取失败不阻塞工作台基础加载。
@@ -1026,19 +1064,21 @@ export default function ImagePage() {
     }
     saveStoredImageComposerSettings({
       mode,
-      count: imageCount,
       aspectRatio: imageAspectRatio,
       resolutionTier: imageResolutionTier,
       quality: imageQuality,
       providerPlatform,
+      compareEnabled,
+      compareModelIds: selectedCompareModelIds,
     });
   }, [
     mode,
-    imageCount,
     imageAspectRatio,
     imageResolutionTier,
     imageQuality,
     providerPlatform,
+    compareEnabled,
+    selectedCompareModelIds,
   ]);
 
   const scrollToBottom = useCallback(
@@ -1404,6 +1444,17 @@ export default function ImagePage() {
     [mode, setSourceImages],
   );
 
+  const handleCompareModelToggle = useCallback((id: string) => {
+    setSelectedCompareModelIds((current) => {
+      if (current.includes(id)) {
+        return current.length <= 2
+          ? current
+          : current.filter((item) => item !== id);
+      }
+      return [...current, id].slice(0, 4);
+    });
+  }, []);
+
   const openWorkspaceView = useCallback(() => {
     navigate("/image/workspace");
   }, [navigate]);
@@ -1481,7 +1532,6 @@ export default function ImagePage() {
   const applyPromptExample = useCallback(
     (example: (typeof inspirationExamples)[number]) => {
       setMode("generate");
-      setImageCount(String(example.count));
       setImagePrompt(example.prompt);
       openDraftConversation();
       setSourceImages([]);
@@ -1495,6 +1545,8 @@ export default function ImagePage() {
       mode,
       imagePrompt,
       imageModel: "gpt-image-2",
+      compareEnabled,
+      compareModels: selectedCompareModels,
       imageSources,
       sourceImages,
       parsedCount,
@@ -1519,7 +1571,6 @@ export default function ImagePage() {
     <PromptComposer
       mode={mode}
       modeOptions={modeOptions}
-      imageCount={imageCount}
       imageAspectRatio={imageAspectRatio}
       imageAspectRatioOptions={imageAspectRatioOptions}
       imageResolutionTier={imageResolutionTier}
@@ -1532,13 +1583,15 @@ export default function ImagePage() {
       imageQualityOptions={imageQualityOptions}
       imageQualityDisabled={!isImageQualityEnabled}
       imageQualityDisabledReason={imageQualityDisabledReason}
+      compareEnabled={compareEnabled}
+      compareModelOptions={compareModelOptions}
+      selectedCompareModelIds={selectedCompareModelIds}
       sourceImages={sourceImages}
       imagePrompt={imagePrompt}
       textareaRef={textareaRef}
       uploadInputRef={uploadInputRef}
       maskInputRef={maskInputRef}
       onModeChange={setMode}
-      onImageCountChange={setImageCount}
       onImageAspectRatioChange={(value) =>
         setImageAspectRatio(value as ImageAspectRatio)
       }
@@ -1547,6 +1600,8 @@ export default function ImagePage() {
       }
       onProviderPlatformChange={setProviderPlatform}
       onImageQualityChange={(value) => setImageQuality(value as ImageQuality)}
+      onCompareEnabledChange={setCompareEnabled}
+      onCompareModelToggle={handleCompareModelToggle}
       onPromptChange={setImagePrompt}
       onPromptPaste={handlePromptPaste}
       onRemoveSourceImage={removeSourceImage}

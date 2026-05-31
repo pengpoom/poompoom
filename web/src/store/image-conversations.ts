@@ -61,7 +61,12 @@ export type ImageConversationTurn = {
   quality?: ImageQuality;
   providerPlatform?: APIAccessPlatform;
   scale?: string;
+  compareGroupId?: string;
+  compareModelLabel?: string;
+  compareModelIndex?: number;
+  compareModelCount?: number;
   sourceImages?: StoredSourceImage[];
+  hasAttachment?: boolean;
   sourceReference?: InpaintSourceReference;
   images: StoredImage[];
   createdAt: string;
@@ -531,7 +536,18 @@ function businessJobPayload(job?: BusinessImageJob): Record<string, unknown> {
 function businessTurnModeFromJob(job?: BusinessImageJob): ImageMode {
   const payload = businessJobPayload(job);
   const mode = String(payload.mode || "").trim();
-  return mode === "edit" || Array.isArray(payload.sourceImages) ? "edit" : "generate";
+  return mode === "edit" ? "edit" : "generate";
+}
+
+function businessHasAttachmentFromJob(job?: BusinessImageJob) {
+  if (job?.hasAttachment) {
+    return true;
+  }
+  const payload = businessJobPayload(job);
+  if (payload.hasAttachment === true) {
+    return true;
+  }
+  return Array.isArray(payload.sourceImages) && payload.sourceImages.length > 0;
 }
 
 function businessSourceImagesFromJob(job?: BusinessImageJob): StoredSourceImage[] {
@@ -569,6 +585,24 @@ function businessSourceReferenceFromJob(
     return undefined;
   }
   return normalizeSourceReference(sourceReference as ImageConversationTurn["sourceReference"]);
+}
+
+function businessCompareMetadataFromJob(job?: BusinessImageJob) {
+  const payload = businessJobPayload(job);
+  const compareGroupId = String(payload.compareGroupId || "").trim();
+  const compareModelLabel = String(payload.compareModelLabel || "").trim();
+  const compareModelIndex = Number(payload.compareModelIndex);
+  const compareModelCount = Number(payload.compareModelCount);
+  return {
+    compareGroupId: compareGroupId || undefined,
+    compareModelLabel: compareModelLabel || undefined,
+    compareModelIndex: Number.isFinite(compareModelIndex)
+      ? compareModelIndex
+      : undefined,
+    compareModelCount: Number.isFinite(compareModelCount)
+      ? compareModelCount
+      : undefined,
+  };
 }
 
 function businessGenerationImages(
@@ -630,6 +664,8 @@ export function businessImageConversationDetailToConversation(
       const error = job?.userErrorMessage || job?.errorMessage || generation.error || undefined;
       const mode = businessTurnModeFromJob(job);
       const sourceImages = businessSourceImagesFromJob(job);
+      const hasAttachment = businessHasAttachmentFromJob(job);
+      const compareMetadata = businessCompareMetadataFromJob(job);
       const prompt = generation.prompt || job?.prompt || "";
       return {
         id: turnID,
@@ -643,7 +679,9 @@ export function businessImageConversationDetailToConversation(
         providerPlatform: normalizeAPIAccessPlatform(
           (generation.response as { platform?: unknown } | undefined)?.platform,
         ),
+        ...compareMetadata,
         sourceImages,
+        hasAttachment,
         sourceReference: businessSourceReferenceFromJob(job),
         images: businessGenerationImages(generation, turnID, status, error),
         createdAt: generation.created_at || conversation.updated_at || conversation.created_at,
@@ -679,7 +717,20 @@ function normalizeTurn(turn: ImageConversationTurn): ImageConversationTurn {
     resolutionAccess: normalizeResolutionAccess(turn.resolutionAccess),
     quality: normalizeImageQuality(turn.quality),
     providerPlatform: normalizeAPIAccessPlatform(turn.providerPlatform),
+    compareGroupId: String(turn.compareGroupId || "").trim() || undefined,
+    compareModelLabel: String(turn.compareModelLabel || "").trim() || undefined,
+    compareModelIndex:
+      typeof turn.compareModelIndex === "number" &&
+      Number.isFinite(turn.compareModelIndex)
+        ? turn.compareModelIndex
+        : undefined,
+    compareModelCount:
+      typeof turn.compareModelCount === "number" &&
+      Number.isFinite(turn.compareModelCount)
+        ? turn.compareModelCount
+        : undefined,
     sourceImages: Array.isArray(turn.sourceImages) ? turn.sourceImages : [],
+    hasAttachment: Boolean(turn.hasAttachment || turn.sourceImages?.length),
     sourceReference: normalizeSourceReference(turn.sourceReference),
     images: (turn.images || []).map(normalizeStoredImage),
     status:
@@ -736,7 +787,12 @@ export function normalizeConversation(
             quality: conversation.quality,
             providerPlatform: conversation.providerPlatform,
             scale: conversation.scale,
+            compareGroupId: conversation.turns?.[0]?.compareGroupId,
+            compareModelLabel: conversation.turns?.[0]?.compareModelLabel,
+            compareModelIndex: conversation.turns?.[0]?.compareModelIndex,
+            compareModelCount: conversation.turns?.[0]?.compareModelCount,
             sourceImages: conversation.sourceImages,
+            hasAttachment: Boolean(conversation.sourceImages?.length),
             images: conversation.images || [],
             createdAt: conversation.createdAt,
             status: conversation.status,

@@ -1566,6 +1566,7 @@ export type BusinessImageJob = {
   providerGroupTags?: string[];
   providerMemberId?: string;
   providerMemberName?: string;
+  hasAttachment?: boolean;
   dispatchStrategy?: string;
   dispatchTrace?: string[];
   requestDispatchTags?: string[];
@@ -2760,7 +2761,12 @@ export async function generateImageWithOptions(
     conversationId?: string;
     turnId?: string;
     title?: string;
+    compareGroupId?: string;
+    compareModelLabel?: string;
+    compareModelIndex?: number;
+    compareModelCount?: number;
     sourceImages?: ImageSourcePayload[];
+    hasAttachment?: boolean;
     sourceReference?: InpaintSourceReference;
     dispatchTags?: string[];
   } = {},
@@ -2785,10 +2791,17 @@ export async function generateImageWithOptions(
     conversationId: options.conversationId?.trim() || undefined,
     turnId: options.turnId?.trim() || undefined,
     title: options.title?.trim() || undefined,
+    compareGroupId: options.compareGroupId?.trim() || undefined,
+    compareModelLabel: options.compareModelLabel?.trim() || undefined,
+    compareModelIndex: options.compareModelIndex,
+    compareModelCount: options.compareModelCount,
     dispatchTags: buildImageDispatchTags(options),
   };
   if (options.sourceImages?.length) {
     body.sourceImages = options.sourceImages;
+  }
+  if (options.hasAttachment) {
+    body.hasAttachment = true;
   }
   if (options.sourceReference) {
     body.sourceReference = options.sourceReference;

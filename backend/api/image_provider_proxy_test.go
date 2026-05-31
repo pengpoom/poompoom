@@ -257,6 +257,85 @@ func TestProviderImageGenerateProxiesOpenAICompatibleRequest(t *testing.T) {
 	}
 }
 
+func TestProviderImageGenerateKeepsSourceImagesForHistoryOnly(t *testing.T) {
+	var gotPath string
+	var gotPayload map[string]any
+	imageB64 := base64.StdEncoding.EncodeToString([]byte("generated-image"))
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
+			t.Fatalf("decode upstream payload: %v", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data": []map[string]any{
+				{"b64_json": imageB64, "revised_prompt": "cat"},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	t.Setenv("IMAGE_PROVIDER", "openai_compatible")
+	t.Setenv("IMAGE_BASE_URL", upstream.URL)
+	t.Setenv("IMAGE_API_KEY", "provider-key")
+	t.Setenv("IMAGE_MODEL", "gpt-image-test")
+
+	cfg := newBusinessImageTestConfig(t)
+	cfg.Storage.ImageDir = "data/business-images"
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 5)
+	server := NewServer(cfg, nil, nil)
+	sourceImage := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("reference-image"))
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/image/generate",
+		strings.NewReader(`{"mode":"generate","prompt":"cat","conversationId":"conv-history-source","turnId":"turn-history-source","jobId":"job-history-source","sourceImages":[{"id":"src","role":"image","name":"reference.png","dataUrl":"`+sourceImage+`"}]}`),
+	)
+	rec := httptest.NewRecorder()
+
+	server.handleProviderImageGenerate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/v1/images/generations" {
+		t.Fatalf("upstream path = %q, want /v1/images/generations", gotPath)
+	}
+	if _, ok := gotPayload["sourceImages"]; ok {
+		t.Fatalf("upstream payload should not contain sourceImages: %#v", gotPayload)
+	}
+
+	jobStore, err := businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open job store: %v", err)
+	}
+	defer jobStore.Close()
+	job, ok, err := jobStore.Get(context.Background(), "job-history-source", businessimage.DevUserID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if !ok {
+		t.Fatal("job not found")
+	}
+	var savedPayload map[string]any
+	if err := json.Unmarshal(job.PayloadJSON, &savedPayload); err != nil {
+		t.Fatalf("decode job payload: %v", err)
+	}
+	savedSources, ok := savedPayload["sourceImages"].([]any)
+	if !ok || len(savedSources) != 1 {
+		t.Fatalf("saved sourceImages = %#v", savedPayload["sourceImages"])
+	}
+	source, ok := savedSources[0].(map[string]any)
+	if !ok {
+		t.Fatalf("saved source = %#v", savedSources[0])
+	}
+	if strings.TrimSpace(stringValue(source["dataUrl"])) != "" {
+		t.Fatalf("source payload still contains dataUrl: %#v", source)
+	}
+	if url := strings.TrimSpace(stringValue(source["url"])); !strings.HasPrefix(url, "/v1/files/image/business-") {
+		t.Fatalf("source url = %q", url)
+	}
+}
+
 func TestProviderImageGenerateKeepsSubscriptionFirstAfterPartialRefund(t *testing.T) {
 	imageB64 := base64.StdEncoding.EncodeToString([]byte("partial-image"))
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -330,6 +409,174 @@ func TestProviderImageGenerateKeepsSubscriptionFirstAfterPartialRefund(t *testin
 	}
 	if summary.Balance != 5 || summary.Spent != 0 {
 		t.Fatalf("credit summary = %#v, want unchanged balance 5", summary)
+	}
+}
+
+func TestProviderImageGenerateBillsActualReturnedImages(t *testing.T) {
+	firstImageB64 := base64.StdEncoding.EncodeToString([]byte("actual-image-1"))
+	secondImageB64 := base64.StdEncoding.EncodeToString([]byte("actual-image-2"))
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data": []map[string]any{
+				{"b64_json": firstImageB64, "revised_prompt": "poster"},
+				{"b64_json": secondImageB64, "revised_prompt": "poster"},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	t.Setenv("IMAGE_PROVIDER", "openai_compatible")
+	t.Setenv("IMAGE_BASE_URL", upstream.URL)
+	t.Setenv("IMAGE_API_KEY", "provider-key")
+	t.Setenv("IMAGE_MODEL", "gpt-image-test")
+
+	cfg := newBusinessImageTestConfig(t)
+	cfg.Storage.ImageDir = "data/business-images"
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 5)
+	server := NewServer(cfg, nil, nil)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/image/generate",
+		strings.NewReader(`{"prompt":"two posters","n":1,"conversationId":"conv-actual-count","turnId":"turn-actual-count","jobId":"job-actual-count"}`),
+	)
+	rec := httptest.NewRecorder()
+
+	server.handleProviderImageGenerate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data []struct {
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Data) != 2 {
+		t.Fatalf("response image count = %d, want 2", len(response.Data))
+	}
+
+	creditStore, err := businesscredits.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open credit store: %v", err)
+	}
+	defer creditStore.Close()
+	totals, err := creditStore.GenerationTotals(context.Background(), businessimage.DevUserID, "job-actual-count")
+	if err != nil {
+		t.Fatalf("credit totals: %v", err)
+	}
+	if totals.Reserved != 2 || totals.Refunded != 0 {
+		t.Fatalf("credit totals = %#v, want reserved 2 refunded 0", totals)
+	}
+	summary, err := creditStore.Summary(context.Background(), businessimage.DevUserID)
+	if err != nil {
+		t.Fatalf("credit summary: %v", err)
+	}
+	if summary.Balance != 3 || summary.Spent != 2 {
+		t.Fatalf("credit summary = %#v, want balance 3 spent 2", summary)
+	}
+
+	jobStore, err := businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open job store: %v", err)
+	}
+	defer jobStore.Close()
+	job, ok, err := jobStore.Get(context.Background(), "job-actual-count", businessimage.DevUserID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if !ok {
+		t.Fatal("job not found")
+	}
+	if job.RequestedCount != 1 || job.ActualCount != 2 || job.CreditReserved != 2 || job.CreditRefunded != 0 {
+		t.Fatalf("job billing = requested:%d actual:%d reserved:%d refunded:%d", job.RequestedCount, job.ActualCount, job.CreditReserved, job.CreditRefunded)
+	}
+}
+
+func TestProviderImageGenerateClipsReturnedImagesWhenExtraCreditInsufficient(t *testing.T) {
+	firstImageB64 := base64.StdEncoding.EncodeToString([]byte("paid-image"))
+	secondImageB64 := base64.StdEncoding.EncodeToString([]byte("unpaid-image"))
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data": []map[string]any{
+				{"b64_json": firstImageB64, "revised_prompt": "poster"},
+				{"b64_json": secondImageB64, "revised_prompt": "poster"},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	t.Setenv("IMAGE_PROVIDER", "openai_compatible")
+	t.Setenv("IMAGE_BASE_URL", upstream.URL)
+	t.Setenv("IMAGE_API_KEY", "provider-key")
+	t.Setenv("IMAGE_MODEL", "gpt-image-test")
+
+	cfg := newBusinessImageTestConfig(t)
+	cfg.Storage.ImageDir = "data/business-images"
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 1)
+	server := NewServer(cfg, nil, nil)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/image/generate",
+		strings.NewReader(`{"prompt":"two posters","n":1,"conversationId":"conv-actual-clipped","turnId":"turn-actual-clipped","jobId":"job-actual-clipped"}`),
+	)
+	rec := httptest.NewRecorder()
+
+	server.handleProviderImageGenerate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data []struct {
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Data) != 1 || response.Data[0].B64JSON != firstImageB64 {
+		t.Fatalf("response data = %#v, want only the first paid image", response.Data)
+	}
+
+	creditStore, err := businesscredits.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open credit store: %v", err)
+	}
+	defer creditStore.Close()
+	totals, err := creditStore.GenerationTotals(context.Background(), businessimage.DevUserID, "job-actual-clipped")
+	if err != nil {
+		t.Fatalf("credit totals: %v", err)
+	}
+	if totals.Reserved != 1 || totals.Refunded != 0 {
+		t.Fatalf("credit totals = %#v, want reserved 1 refunded 0", totals)
+	}
+	summary, err := creditStore.Summary(context.Background(), businessimage.DevUserID)
+	if err != nil {
+		t.Fatalf("credit summary: %v", err)
+	}
+	if summary.Balance != 0 || summary.Spent != 1 {
+		t.Fatalf("credit summary = %#v, want balance 0 spent 1", summary)
+	}
+
+	jobStore, err := businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open job store: %v", err)
+	}
+	defer jobStore.Close()
+	job, ok, err := jobStore.Get(context.Background(), "job-actual-clipped", businessimage.DevUserID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if !ok {
+		t.Fatal("job not found")
+	}
+	if job.RequestedCount != 1 || job.ActualCount != 1 || job.CreditReserved != 1 || job.CreditRefunded != 0 {
+		t.Fatalf("job billing = requested:%d actual:%d reserved:%d refunded:%d", job.RequestedCount, job.ActualCount, job.CreditReserved, job.CreditRefunded)
 	}
 }
 
@@ -520,7 +767,8 @@ func TestProviderImageEditSubmitRunsWorkerAndExposesPayload(t *testing.T) {
 	}
 	var payload struct {
 		Item struct {
-			Payload struct {
+			HasAttachment bool `json:"hasAttachment"`
+			Payload       struct {
 				Mode         string `json:"mode"`
 				SourceImages []struct {
 					Role    string `json:"role"`
@@ -533,8 +781,8 @@ func TestProviderImageEditSubmitRunsWorkerAndExposesPayload(t *testing.T) {
 	if err := json.Unmarshal(getRec.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode job payload: %v", err)
 	}
-	if payload.Item.Payload.Mode != "edit" || len(payload.Item.Payload.SourceImages) != 1 {
-		t.Fatalf("public payload = %#v", payload.Item.Payload)
+	if payload.Item.Payload.Mode != "edit" || !payload.Item.HasAttachment || len(payload.Item.Payload.SourceImages) != 1 {
+		t.Fatalf("public job = %#v", payload.Item)
 	}
 	if payload.Item.Payload.SourceImages[0].DataURL != "" || !strings.HasPrefix(payload.Item.Payload.SourceImages[0].URL, "/v1/files/image/business-") {
 		t.Fatalf("public source image = %#v", payload.Item.Payload.SourceImages[0])

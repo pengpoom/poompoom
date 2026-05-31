@@ -20,6 +20,7 @@ type businessImageJobView struct {
 	ProviderGroupTags      []string       `json:"providerGroupTags,omitempty"`
 	ProviderMemberID       string         `json:"providerMemberId,omitempty"`
 	ProviderMemberName     string         `json:"providerMemberName,omitempty"`
+	HasAttachment          bool           `json:"hasAttachment,omitempty"`
 	DispatchStrategy       string         `json:"dispatchStrategy,omitempty"`
 	DispatchTrace          []string       `json:"dispatchTrace,omitempty"`
 	RequestDispatchTags    []string       `json:"requestDispatchTags,omitempty"`
@@ -59,6 +60,7 @@ func businessImageJobViewFromJob(job businessjobs.Job, groupNames map[string]str
 		ProviderGroupTags:   providerDispatchTagStrings(payload["providerGroupTags"]),
 		ProviderMemberID:    memberID,
 		ProviderMemberName:  memberName,
+		HasAttachment:       businessImageJobHasAttachment(payload),
 		DispatchStrategy:    strings.TrimSpace(stringValue(payload["dispatchStrategy"])),
 		DispatchTrace:       providerDispatchTagStrings(payload["dispatchTrace"]),
 		RequestDispatchTags: providerDispatchTagStrings(payload["requestDispatchTags"]),
@@ -100,9 +102,22 @@ func sanitizeBusinessImageJobPayload(payload map[string]any) map[string]any {
 			next[key] = sanitizeBusinessImageJobSourceImages(value)
 			continue
 		}
+		if key == "sourceReference" || key == "hasAttachment" {
+			continue
+		}
 		next[key] = value
 	}
 	return next
+}
+
+func businessImageJobHasAttachment(payload map[string]any) bool {
+	if payload == nil {
+		return false
+	}
+	if value, ok := payload["hasAttachment"].(bool); ok && value {
+		return true
+	}
+	return len(providerImageSourcesFromPayload(payload["sourceImages"])) > 0
 }
 
 func inferBusinessImageJobProviderSource(job businessjobs.Job, groupID string) string {

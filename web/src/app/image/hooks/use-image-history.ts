@@ -13,6 +13,8 @@ import {
   type ImageConversation,
 } from "@/store/image-conversations";
 
+const SELECTED_IMAGE_CONVERSATION_KEY = "image-studio.selected-conversation-id.v1";
+
 type UseImageHistoryOptions = {
   normalizeHistory: (
     items: ImageConversation[],
@@ -63,6 +65,32 @@ function collectProcessingConversationIds(items: ImageConversation[]) {
   );
 }
 
+function readStoredSelectedConversationId() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    return window.localStorage.getItem(SELECTED_IMAGE_CONVERSATION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredSelectedConversationId(conversationId: string | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    if (conversationId) {
+      window.localStorage.setItem(SELECTED_IMAGE_CONVERSATION_KEY, conversationId);
+      return;
+    }
+    window.localStorage.removeItem(SELECTED_IMAGE_CONVERSATION_KEY);
+  } catch {
+    // Ignore localStorage failures; selection can still live in React state.
+  }
+}
+
 function mergeConversationIdSets(
   left: Set<string>,
   right: Set<string>,
@@ -93,7 +121,16 @@ export function useImageHistory({
   );
   const [selectedConversationId, setSelectedConversationId] = useState<
     string | null
-  >(cachedConversations?.[0]?.id ?? null);
+  >(() => {
+    const storedSelectedId = readStoredSelectedConversationId();
+    if (
+      storedSelectedId &&
+      cachedConversations?.some((item) => item.id === storedSelectedId)
+    ) {
+      return storedSelectedId;
+    }
+    return cachedConversations?.[0]?.id ?? null;
+  });
   const [isLoadingHistory, setIsLoadingHistory] =
     useState(!cachedConversations);
 
@@ -104,6 +141,7 @@ export function useImageHistory({
   const focusConversation = useCallback(
     (conversationId: string) => {
       draftSelectionRef.current = false;
+      writeStoredSelectedConversationId(conversationId);
       setSelectedConversationId(conversationId);
     },
     [draftSelectionRef],
@@ -111,6 +149,7 @@ export function useImageHistory({
 
   const openDraftConversation = useCallback(() => {
     draftSelectionRef.current = true;
+    writeStoredSelectedConversationId(null);
     setSelectedConversationId(null);
   }, [draftSelectionRef]);
 
@@ -168,18 +207,31 @@ export function useImageHistory({
         setConversations(mergedItems);
         setSelectedConversationId((current) => {
           if (current && mergedItems.some((item) => item.id === current)) {
+            writeStoredSelectedConversationId(current);
             return current;
           }
           if (draftSelectionRef.current) {
+            writeStoredSelectedConversationId(null);
             return null;
+          }
+          const storedSelectedId = readStoredSelectedConversationId();
+          if (
+            storedSelectedId &&
+            mergedItems.some((item) => item.id === storedSelectedId)
+          ) {
+            writeStoredSelectedConversationId(storedSelectedId);
+            return storedSelectedId;
           }
           if (
             preferredProcessingConversationId &&
             mergedItems.some((item) => item.id === preferredProcessingConversationId)
           ) {
+            writeStoredSelectedConversationId(preferredProcessingConversationId);
             return preferredProcessingConversationId;
           }
-          return mergedItems[0]?.id ?? null;
+          const nextSelectedId = mergedItems[0]?.id ?? null;
+          writeStoredSelectedConversationId(nextSelectedId);
+          return nextSelectedId;
         });
       } catch (error) {
         if (!silent && mountedRef.current) {
@@ -193,7 +245,13 @@ export function useImageHistory({
         }
       }
     },
-    [draftSelectionRef, mountedRef, normalizeHistory, preferredProcessingConversationId, processingConversationIds],
+    [
+      draftSelectionRef,
+      mountedRef,
+      normalizeHistory,
+      preferredProcessingConversationId,
+      processingConversationIds,
+    ],
   );
 
   const refreshConversation = useCallback(
@@ -261,7 +319,9 @@ export function useImageHistory({
             return prev;
           }
           draftSelectionRef.current = false;
-          return nextConversations[0]?.id ?? null;
+          const nextSelectedId = nextConversations[0]?.id ?? null;
+          writeStoredSelectedConversationId(nextSelectedId);
+          return nextSelectedId;
         });
         return nextConversations;
       });
@@ -283,12 +343,16 @@ export function useImageHistory({
             previousSelectedId &&
             items.some((item) => item.id === previousSelectedId)
           ) {
+            writeStoredSelectedConversationId(previousSelectedId);
             return previousSelectedId;
           }
           if (previousDraftSelection) {
+            writeStoredSelectedConversationId(null);
             return null;
           }
-          return items[0]?.id ?? null;
+          const nextSelectedId = items[0]?.id ?? null;
+          writeStoredSelectedConversationId(nextSelectedId);
+          return nextSelectedId;
         });
       }
     },
@@ -306,6 +370,7 @@ export function useImageHistory({
       draftSelectionRef.current = true;
       conversationsRef.current = [];
       setConversations([]);
+      writeStoredSelectedConversationId(null);
       setSelectedConversationId(null);
       toast.success("已清空历史记录");
     } catch (error) {

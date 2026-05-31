@@ -1233,11 +1233,10 @@ html[data-resolved-theme="light"] .hs-conv-btn.active {
 .hs-conv-act.danger:hover { color: #fb7185; }
 .hs-conv-act:disabled { cursor: not-allowed; opacity: 0.3; }
 
-/* ── prompt-composer 特殊元素(原型未覆盖：textarea/数量/提交) ── */
+/* ── prompt-composer 特殊元素(原型未覆盖：textarea/提交) ── */
 .app-btn.is-disabled { opacity: 0.55; cursor: not-allowed; }
 .pc-textarea { min-height: 52px; max-height: 128px; width: 100%; resize: none; overflow-y: auto; border: 0; background: transparent; padding: 0 48px 0 4px; font-size: 14px; font-weight: 500; line-height: 1.5; color: var(--app-text-primary); outline: none; }
 .pc-textarea::placeholder { color: var(--app-text-muted); }
-.pc-count-input { height: 28px; width: 36px; border: 0; border-radius: 999px; background: var(--app-bg-surface-hover); color: var(--app-text-primary); font-size: 13px; font-weight: 700; text-align: center; outline: none; padding: 0 8px; }
 .pc-submit { position: relative; display: grid; place-items: center; width: 44px; height: 44px; flex-shrink: 0; border: 0; border-radius: 999px; background: var(--app-text-primary); color: var(--app-bg-root); cursor: pointer; transition: opacity 0.2s ease; }
 .pc-submit:hover { opacity: 0.88; }
 
