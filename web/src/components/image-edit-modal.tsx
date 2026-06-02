@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { ArrowUp, Brush, ChevronDown, Cpu, LoaderCircle, Redo2, Trash2, Undo2, X } from "lucide-react";
 import { toast } from "sonner";
 
-import type { APIAccessPlatform } from "@/lib/api";
+import type { BusinessImageModel, ImageModelId } from "@/lib/api";
 import { ChipSelect } from "@/components/chip-select";
 import { cn } from "@/lib/utils";
 
@@ -42,12 +42,12 @@ type ImageEditModalProps = {
   imageQualityOptions?: Array<{ label: string; value: string; description: string }>;
   imageQualityDisabled?: boolean;
   imageQualityDisabledReason?: string;
-  providerPlatform?: APIAccessPlatform;
-  providerPlatformOptions?: Array<{ label: string; value: APIAccessPlatform; disabled?: boolean }>;
+  modelId?: ImageModelId;
+  modelOptions?: BusinessImageModel[];
   onImageAspectRatioChange?: (value: string) => void;
   onImageResolutionTierChange?: (value: string) => void;
   onImageQualityChange?: (value: string) => void;
-  onProviderPlatformChange?: (value: APIAccessPlatform) => void;
+  onModelChange?: (value: ImageModelId) => void;
   onClose: () => void;
   onSubmit: (payload: {
     prompt: string;
@@ -55,7 +55,7 @@ type ImageEditModalProps = {
     aspectRatio?: string;
     resolutionTier?: string;
     quality?: string;
-    providerPlatform?: APIAccessPlatform;
+    modelId?: ImageModelId;
   }) => Promise<void>;
 };
 
@@ -114,12 +114,12 @@ export function ImageEditModal({
   imageQualityOptions = [],
   imageQualityDisabled = false,
   imageQualityDisabledReason = "",
-  providerPlatform = "gpt-image",
-  providerPlatformOptions = [],
+  modelId = "",
+  modelOptions = [],
   onImageAspectRatioChange,
   onImageResolutionTierChange,
   onImageQualityChange,
-  onProviderPlatformChange,
+  onModelChange,
   onClose,
   onSubmit,
 }: ImageEditModalProps) {
@@ -141,6 +141,8 @@ export function ImageEditModal({
   const [isPromptExpanded, setIsPromptExpanded] = useState(false);
 
   const hasSelection = strokes.length > 0;
+  const selectedModel =
+    modelOptions.find((item) => item.id === modelId) ?? modelOptions[0] ?? null;
   const requestClose = useCallback(() => {
     if (isSubmitting) {
       return;
@@ -489,12 +491,12 @@ export function ImageEditModal({
       const mask = await buildMaskPayload();
       await onSubmit({
         prompt: trimmedPrompt,
-      mask,
-      aspectRatio: allowOutputOptions ? imageAspectRatio : undefined,
-      resolutionTier: allowOutputOptions ? imageResolutionTier : undefined,
-      quality: allowOutputOptions ? imageQuality : undefined,
-      providerPlatform,
-    });
+        mask,
+        aspectRatio: allowOutputOptions ? imageAspectRatio : undefined,
+        resolutionTier: allowOutputOptions ? imageResolutionTier : undefined,
+        quality: allowOutputOptions ? imageQuality : undefined,
+        modelId: selectedModel?.id || modelId || undefined,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "提交编辑失败";
       toast.error(message);
@@ -673,13 +675,19 @@ export function ImageEditModal({
             <div className="min-w-0 flex-1">
               {allowOutputOptions ? (
                 <div className="hide-scrollbar -mx-1 mb-2 flex items-center gap-2 overflow-x-auto px-1 pb-1">
-                  <ChipSelect<APIAccessPlatform>
-                    value={providerPlatform}
-                    options={providerPlatformOptions.map((item) => ({ value: item.value as APIAccessPlatform, label: item.label, disabled: item.disabled }))}
-                    onChange={(value) => onProviderPlatformChange?.(value)}
+                  <ChipSelect<ImageModelId>
+                    value={selectedModel?.id ?? modelId}
+                    options={modelOptions.map((item) => ({
+                      value: item.id,
+                      label: item.displayName,
+                      description: `${item.vendorLabel} / ${item.upstreamModel}`,
+                      disabled: !item.enabled || item.capabilities.edit === false,
+                    }))}
+                    onChange={(value) => onModelChange?.(value)}
                     triggerClassName="app-cs-trigger"
                     triggerIcon={<Cpu className="size-4 shrink-0" />}
-                    triggerLabel={providerPlatformOptions.find((item) => item.value === providerPlatform)?.label ?? providerPlatform}
+                    triggerLabel={selectedModel?.displayName ?? "选择模型"}
+                    disabled={modelOptions.length === 0 || isSubmitting}
                   />
 
                   <ChipSelect<string>

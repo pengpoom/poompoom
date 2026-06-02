@@ -17,9 +17,80 @@ export type SyncStatus =
 export type SyncSource = "cpa" | "newapi" | "sub2api";
 export type AccountSourceKind = "auth_file" | "token";
 export type ImageModel = string;
+export type ImageModelId = string;
 export type ImageQuality = "low" | "medium" | "high";
 export type ImageResolutionAccess = "free" | "paid";
-export type APIAccessPlatform = "gpt-image" | "gemini-banana";
+export type APIAccessPlatform =
+  | "gpt-image"
+  | "gemini-banana"
+  | "doubao"
+  | "qwen"
+  | "baidu"
+  | "z-ai"
+  | "tencent"
+  | "kling"
+  | "grok";
+export type ImageModelCapabilities = {
+  generate: boolean;
+  edit: boolean;
+  referenceImage: boolean;
+  mask: boolean;
+  sizes?: string[];
+  qualities?: ImageQuality[];
+  maxImages: number;
+  maxReferenceImages: number;
+};
+export type BusinessImageModel = {
+  id: ImageModelId;
+  vendor: string;
+  vendorLabel: string;
+  displayName: string;
+  adapter: string;
+  platform: APIAccessPlatform | string;
+  upstreamModel: ImageModel;
+  enabled: boolean;
+  preview?: boolean;
+  compareEnabled: boolean;
+  capabilities: ImageModelCapabilities;
+  creditCost: number;
+  isDefault?: boolean;
+  sortOrder: number;
+  availability?: BusinessImageModelAvailability;
+  createdAt?: string;
+  updatedAt?: string;
+};
+export type BusinessImageModelAvailability = {
+  status: string;
+  available: boolean;
+  message: string;
+  issues?: string[];
+  apiProviderAvailable: boolean;
+  apiProviderName?: string;
+  apiProviderDefaultModel?: string;
+  apiProviderModelMismatch?: boolean;
+  poolAvailable: boolean;
+  poolName?: string;
+  poolMemberId?: string;
+  poolMemberName?: string;
+  poolMemberDefaultModel?: string;
+  poolMemberModelMismatch?: boolean;
+};
+export type BusinessImageModelInput = {
+  id?: ImageModelId;
+  vendor: string;
+  vendorLabel: string;
+  displayName: string;
+  adapter: string;
+  platform: APIAccessPlatform;
+  upstreamModel: ImageModel;
+  enabled: boolean;
+  preview: boolean;
+  compareEnabled: boolean;
+  capabilities: ImageModelCapabilities;
+  creditCost: number;
+  isDefault: boolean;
+  sortOrder: number;
+};
 export type BusinessAPIProvider = {
   id: string;
   name: string;
@@ -1566,13 +1637,23 @@ export type BusinessImageJob = {
   providerGroupTags?: string[];
   providerMemberId?: string;
   providerMemberName?: string;
+  compareBatchStatus?: BusinessCompareBatchStatus;
   hasAttachment?: boolean;
   dispatchStrategy?: string;
   dispatchTrace?: string[];
   requestDispatchTags?: string[];
   userDispatchTags?: string[];
   dispatchTags?: string[];
+  compareBatchId?: string;
+  compareModelIndex?: number;
+  compareModelCount?: number;
+  modelId?: string;
+  modelLabel?: string;
+  vendor?: string;
+  vendorLabel?: string;
   model?: string;
+  upstreamModel?: string;
+  upstreamStatusCode?: number;
   prompt?: string;
   size?: string;
   quality?: string;
@@ -1586,6 +1667,8 @@ export type BusinessImageJob = {
   errorMessage?: string;
   userErrorType?: string;
   userErrorMessage?: string;
+  failureReasonCode?: string;
+  failureReasonMessage?: string;
   queueWaitMs: number;
   upstreamDurationMs: number;
   persistDurationMs: number;
@@ -1610,6 +1693,19 @@ type BusinessImageJobPageResponse = {
   page: PaginationMeta;
 };
 
+export type BusinessCompareBatchStatus = {
+  id: string;
+  total: number;
+  queued: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  reserved: number;
+  refunded: number;
+  status: string;
+};
+
 export type BusinessImageJobQuery = {
   page?: number;
   pageSize?: number;
@@ -1617,6 +1713,7 @@ export type BusinessImageJobQuery = {
   status?: string;
   platform?: string;
   errorType?: string;
+  compareBatchId?: string;
   from?: string;
   to?: string;
   timeRange?: string;
@@ -1633,6 +1730,27 @@ export type BusinessDashboardQuery = {
 type BusinessImageJobResponse = {
   item: BusinessImageJob;
   activeCancelled?: boolean;
+};
+
+export type BusinessImageCompareBatchResponse = {
+  summary: BusinessCompareBatchStatus;
+  items: BusinessImageJob[];
+};
+
+type BusinessImageModelListResponse = {
+  items: BusinessImageModel[];
+};
+type BusinessImageModelMutationResponse = {
+  item: BusinessImageModel;
+};
+export type BusinessImageModelTestResponse = {
+  ok: boolean;
+  message: string;
+  code?: string;
+  durationMs?: number;
+  imageCount?: number;
+  model?: BusinessImageModel;
+  availability?: BusinessImageModelAvailability;
 };
 
 export type BusinessTrackerPlatformSummary = {
@@ -2009,9 +2127,61 @@ export async function fetchBusinessImageJob(id: string) {
   );
 }
 
+export async function fetchBusinessImageModels() {
+  return httpRequest<BusinessImageModelListResponse>("/api/business/image-models");
+}
+
+export async function fetchAdminBusinessImageModels() {
+  return httpRequest<BusinessImageModelListResponse>("/api/business/admin/image-models");
+}
+
+export async function createBusinessImageModel(payload: BusinessImageModelInput) {
+  return httpRequest<BusinessImageModelMutationResponse>("/api/business/admin/image-models", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateBusinessImageModel(id: string, payload: BusinessImageModelInput) {
+  return httpRequest<BusinessImageModelMutationResponse>(
+    `/api/business/admin/image-models/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      body: payload,
+    },
+  );
+}
+
+export async function setDefaultBusinessImageModel(id: string) {
+  return httpRequest<BusinessImageModelMutationResponse>(
+    `/api/business/admin/image-models/${encodeURIComponent(id)}/default`,
+    { method: "POST" },
+  );
+}
+
+export async function testBusinessImageModel(id: string) {
+  return httpRequest<BusinessImageModelTestResponse>(
+    `/api/business/admin/image-models/${encodeURIComponent(id)}/test`,
+    { method: "POST" },
+  );
+}
+
+export async function deleteBusinessImageModel(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/admin/image-models/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
 export async function fetchAdminBusinessImageJobs(query: BusinessImageJobQuery = {}) {
   return httpRequest<BusinessImageJobPageResponse>(
     `/api/business/admin/jobs${buildQuery(query)}`,
+  );
+}
+
+export async function fetchAdminBusinessImageCompareBatch(id: string) {
+  return httpRequest<BusinessImageCompareBatchResponse>(
+    `/api/business/admin/compare-batches/${encodeURIComponent(id)}`,
   );
 }
 
@@ -2728,9 +2898,12 @@ export async function generateImage(
 
 function buildImageDispatchTags(options: {
   mode?: "generate" | "edit";
+  modelId?: ImageModelId;
   model?: ImageModel;
   size?: string;
   quality?: ImageQuality;
+  vendor?: string;
+  adapter?: string;
   dispatchTags?: string[];
 }) {
   const tags = new Set<string>();
@@ -2744,7 +2917,10 @@ function buildImageDispatchTags(options: {
   add(`mode:${options.mode || "generate"}`);
   add(options.quality ? `quality:${options.quality}` : undefined);
   add(options.size ? `size:${options.size}` : undefined);
+  add(options.modelId ? `modelId:${options.modelId}` : undefined);
   add(options.model ? `model:${options.model}` : undefined);
+  add(options.vendor ? `vendor:${options.vendor}` : undefined);
+  add(options.adapter ? `adapter:${options.adapter}` : undefined);
   return Array.from(tags);
 }
 
@@ -2752,7 +2928,12 @@ export async function generateImageWithOptions(
   prompt: string,
   options: {
     mode?: "generate" | "edit";
+    modelId?: ImageModelId;
     model?: ImageModel;
+    modelLabel?: string;
+    vendor?: string;
+    vendorLabel?: string;
+    adapter?: string;
     count?: number;
     size?: string;
     quality?: ImageQuality;
@@ -2761,6 +2942,7 @@ export async function generateImageWithOptions(
     conversationId?: string;
     turnId?: string;
     title?: string;
+    compareBatchId?: string;
     compareGroupId?: string;
     compareModelLabel?: string;
     compareModelIndex?: number;
@@ -2780,7 +2962,12 @@ export async function generateImageWithOptions(
   const normalizedCount = Math.max(1, count);
   const body: Record<string, unknown> = {
     prompt,
+    modelId: options.modelId?.trim() || undefined,
     model,
+    modelLabel: options.modelLabel?.trim() || undefined,
+    vendor: options.vendor?.trim() || undefined,
+    vendorLabel: options.vendorLabel?.trim() || undefined,
+    adapter: options.adapter?.trim() || undefined,
     n: normalizedCount,
     size: size?.trim() || undefined,
     quality,
@@ -2791,6 +2978,7 @@ export async function generateImageWithOptions(
     conversationId: options.conversationId?.trim() || undefined,
     turnId: options.turnId?.trim() || undefined,
     title: options.title?.trim() || undefined,
+    compareBatchId: options.compareBatchId?.trim() || options.compareGroupId?.trim() || undefined,
     compareGroupId: options.compareGroupId?.trim() || undefined,
     compareModelLabel: options.compareModelLabel?.trim() || undefined,
     compareModelIndex: options.compareModelIndex,

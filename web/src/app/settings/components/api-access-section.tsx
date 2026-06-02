@@ -29,16 +29,17 @@ import {
   type BusinessAPIProvider,
   type BusinessAPIProviderInput,
 } from "@/lib/api";
+import {
+  defaultModelForPlatform,
+  isGeminiPlatform,
+  providerPlatformLabel,
+  providerPlatformOptions,
+} from "@/lib/provider-platforms";
 
 import { ConfigSection, Field, TooltipDetails } from "./shared";
 import { settingsTableWrapClass } from "./styles";
 
 const allFilterValue = "all";
-
-const platformOptions: Array<{ label: string; value: APIAccessPlatform }> = [
-  { label: "gpt-image", value: "gpt-image" },
-  { label: "gemini-banana", value: "gemini-banana" },
-];
 
 const geminiBananaModelOptions = [
   "gemini-3.1-flash-image-preview",
@@ -55,10 +56,6 @@ type ProviderTestResult = {
   imageCount?: number;
   testedAt: string;
 };
-
-function defaultModelForPlatform(platform: APIAccessPlatform) {
-  return platform === "gemini-banana" ? "gemini-2.5-flash-image" : "gpt-image-2";
-}
 
 function createEmptyDraft(): BusinessAPIProviderInput {
   return {
@@ -109,7 +106,7 @@ function formatProviderTime(value: string) {
 }
 
 function platformLabel(value: APIAccessPlatform) {
-  return platformOptions.find((item) => item.value === value)?.label ?? value;
+  return providerPlatformLabel(value);
 }
 
 function providerTestResultText(result: ProviderTestResult) {
@@ -367,7 +364,7 @@ export function APIAccessSection() {
               onChange={(value) => setPlatformFilter(value as typeof allFilterValue | APIAccessPlatform)}
               options={[
                 { value: allFilterValue, label: "全部平台" },
-                ...platformOptions.map((item) => ({ value: item.value, label: item.label })),
+                ...providerPlatformOptions.map((item) => ({ value: item.value, label: item.label })),
               ]}
             />
           </div>
@@ -596,23 +593,27 @@ export function APIAccessSection() {
               hint="选择这个接入对应的图片平台。"
               tooltip={
                 <TooltipDetails
-                  items={[
-                    {
-                      title: "gpt-image",
-                      body: <>OpenAI 兼容图片接口。</>,
-                    },
-                    {
-                      title: "gemini-banana",
-                      body: <>Gemini 图片接口。</>,
-                    },
-                  ]}
+	                  items={[
+	                    {
+	                      title: "OpenAI",
+	                      body: <>OpenAI 兼容图片接口。</>,
+	                    },
+	                    {
+	                      title: "Google",
+	                      body: <>Gemini 图片接口。</>,
+	                    },
+	                    {
+	                      title: "其他平台",
+	                      body: <>OpenAI 兼容图片接口，按模型目录路由。</>,
+	                    },
+	                  ]}
                 />
               }
             >
               <AppSelect
                 value={draft.platform}
                 onChange={(value) => updateDraft("platform", value as APIAccessPlatform)}
-                options={platformOptions.map((item) => ({ value: item.value, label: item.label }))}
+                options={providerPlatformOptions.map((item) => ({ value: item.value, label: item.label }))}
               />
             </Field>
 
@@ -625,7 +626,7 @@ export function APIAccessSection() {
                 value={draft.baseUrl}
                 onChange={(event) => updateDraft("baseUrl", event.target.value)}
                 placeholder={
-                  draft.platform === "gemini-banana"
+                  isGeminiPlatform(draft.platform)
                     ? "https://generativelanguage.googleapis.com"
                     : "http://127.0.0.1:8080"
                 }
@@ -634,14 +635,14 @@ export function APIAccessSection() {
             </Field>
 
             <Field
-              label={draft.platform === "gemini-banana" ? "请求模型" : "默认模型"}
+              label={isGeminiPlatform(draft.platform) ? "请求模型" : "默认模型"}
               hint={
-                draft.platform === "gemini-banana"
+                isGeminiPlatform(draft.platform)
                   ? "选择 Gemini 图片生成请求使用的模型。"
                   : "上游请求的默认模型。"
               }
             >
-              {draft.platform === "gemini-banana" ? (
+              {isGeminiPlatform(draft.platform) ? (
                 <AppSelect
                   value={draft.defaultModel || defaultModelForPlatform(draft.platform)}
                   onChange={(value) => updateDraft("defaultModel", value)}
@@ -665,7 +666,7 @@ export function APIAccessSection() {
                 type="password"
                 value={draft.apiKey}
                 onChange={(event) => updateDraft("apiKey", event.target.value)}
-                placeholder={draft.platform === "gemini-banana" ? "AIza..." : "sk-..."}
+                placeholder={isGeminiPlatform(draft.platform) ? "AIza..." : "sk-..."}
                
               />
             </Field>

@@ -6,11 +6,16 @@ import { toast } from "sonner";
 import {
   generateImageWithOptions,
   type APIAccessPlatform,
+  type ImageModelId,
   type ImageSourcePayload,
   type ImageModel,
   type ImageQuality,
   type ImageResolutionAccess,
 } from "@/lib/api";
+import {
+  defaultModelForPlatform as defaultProviderModelForPlatform,
+  isGeminiPlatform,
+} from "@/lib/provider-platforms";
 import type {
   ImageConversation,
   ImageConversationTurn,
@@ -30,18 +35,24 @@ import {
 import { buildSourceRequestImageUrl } from "../view-utils";
 
 export type CompareModelSelection = {
-  id: string;
+  id: ImageModelId;
   label: string;
+  vendor: string;
+  vendorLabel: string;
+  adapter: string;
   platform: APIAccessPlatform;
   model: ImageModel;
 };
 
+export type ImageModelSelection = CompareModelSelection;
+
 type UseImageSubmitOptions = {
   mode: ImageMode;
   imagePrompt: string;
-  imageModel: ImageModel;
+  selectedModel: ImageModelSelection;
+  editModels: ImageModelSelection[];
   compareEnabled: boolean;
-  compareModels: CompareModelSelection[];
+  compareModels: ImageModelSelection[];
   imageSources: StoredSourceImage[];
   sourceImages: StoredSourceImage[];
   parsedCount: number;
@@ -81,7 +92,13 @@ function buildConversationBase(
     resolutionAccess: draftTurn.resolutionAccess,
     quality: draftTurn.quality,
     providerPlatform: draftTurn.providerPlatform,
+    modelId: draftTurn.modelId,
+    modelLabel: draftTurn.modelLabel,
+    vendor: draftTurn.vendor,
+    vendorLabel: draftTurn.vendorLabel,
+    adapter: draftTurn.adapter,
     scale: draftTurn.scale,
+    compareBatchId: draftTurn.compareBatchId,
     compareGroupId: draftTurn.compareGroupId,
     compareModelLabel: draftTurn.compareModelLabel,
     compareModelIndex: draftTurn.compareModelIndex,
@@ -102,7 +119,7 @@ function resultImageCount(items: Array<{ url?: string; b64_json?: string }>) {
 function shouldRunModelCompare(
   mode: ImageMode,
   enabled: boolean,
-  models: CompareModelSelection[],
+  models: ImageModelSelection[],
 ) {
   return mode === "generate" && enabled && models.length > 1;
 }
@@ -150,7 +167,7 @@ function normalizeImageQuality(value: string | undefined, fallback: ImageQuality
 }
 
 function defaultImageModelForPlatform(platform: APIAccessPlatform): ImageModel {
-  return platform === "gemini-banana" ? "gemini-2.5-flash-image" : "gpt-image-2";
+  return defaultProviderModelForPlatform(platform);
 }
 
 function imageModelForPlatform(
@@ -158,19 +175,37 @@ function imageModelForPlatform(
   model: ImageModel | undefined,
 ): ImageModel {
   const trimmed = String(model || "").trim();
-  if (platform === "gemini-banana" && (!trimmed || trimmed.startsWith("gpt-image-"))) {
+  if (isGeminiPlatform(platform) && (!trimmed || trimmed.startsWith("gpt-image-"))) {
     return defaultImageModelForPlatform(platform);
   }
-  if (platform === "gpt-image" && (!trimmed || trimmed.startsWith("gemini-"))) {
+  if (!isGeminiPlatform(platform) && (!trimmed || trimmed.startsWith("gemini-"))) {
     return defaultImageModelForPlatform(platform);
   }
   return trimmed || defaultImageModelForPlatform(platform);
 }
 
+function modelSelectionFromTurn(
+  turn: ImageConversationTurn,
+  fallback: ImageModelSelection,
+): ImageModelSelection {
+  const platform = turn.providerPlatform ?? fallback.platform;
+  const model = imageModelForPlatform(platform, turn.model || fallback.model);
+  return {
+    id: String(turn.modelId || fallback.id || model).trim(),
+    label: String(turn.modelLabel || turn.compareModelLabel || fallback.label || model).trim(),
+    vendor: String(turn.vendor || fallback.vendor || "").trim(),
+    vendorLabel: String(turn.vendorLabel || fallback.vendorLabel || "").trim(),
+    adapter: String(turn.adapter || fallback.adapter || "").trim(),
+    platform,
+    model,
+  };
+}
+
 export function useImageSubmit({
   mode,
   imagePrompt,
-  imageModel,
+  selectedModel,
+  editModels,
   compareEnabled,
   compareModels,
   imageSources,
@@ -204,7 +239,7 @@ export function useImageSubmit({
       aspectRatio: _aspectRatio,
       resolutionTier: _resolutionTier,
       quality: overrideQuality,
-      providerPlatform: overrideProviderPlatform,
+      modelId: overrideModelId,
     }: {
       prompt: string;
       mask: {
@@ -214,9 +249,29 @@ export function useImageSubmit({
       aspectRatio?: string;
       resolutionTier?: string;
       quality?: string;
-      providerPlatform?: APIAccessPlatform;
+      modelId?: ImageModelId;
     }) => {
       if (isSelectionEditDispatchingRef.current || !editorTarget) {
+        return;
+      }
+      const baseSelection =
+        (overrideModelId
+          ? editModels.find((item) => item.id === overrideModelId)
+          : undefined) ??
+        (editorTarget.modelId
+          ? editModels.find((item) => item.id === editorTarget.modelId)
+          : undefined) ??
+        (editorTarget.providerPlatform && editorTarget.model
+          ? editModels.find(
+              (item) =>
+                item.platform === editorTarget.providerPlatform &&
+                item.model === editorTarget.model,
+            )
+          : undefined) ??
+        editModels.find((item) => item.id === selectedModel.id) ??
+        editModels[0];
+      if (!baseSelection) {
+        toast.error("当前没有可用于编辑的模型");
         return;
       }
       isSelectionEditDispatchingRef.current = true;
@@ -231,16 +286,11 @@ export function useImageSubmit({
       const nextQuality = supportsEditableOutputOptions
         ? normalizeImageQuality(overrideQuality, imageQuality)
         : imageQuality;
-      const nextProviderPlatform =
-        overrideProviderPlatform ?? editorTarget.providerPlatform ?? providerPlatform;
-      const baseModel =
-        editorTarget.providerPlatform === nextProviderPlatform
-          ? editorTarget.model
-          : imageModel;
+      const nextProviderPlatform = baseSelection.platform;
       const turnId = makeId();
       const jobId = makeId();
       const now = new Date().toISOString();
-      const requestModel = imageModelForPlatform(nextProviderPlatform, baseModel);
+      const requestModel = imageModelForPlatform(nextProviderPlatform, baseSelection.model);
       const draftTurn = createConversationTurn({
         turnId,
         title: buildConversationTitle("edit", prompt),
@@ -254,6 +304,11 @@ export function useImageSubmit({
           : undefined,
         quality: supportsEditableOutputOptions ? nextQuality : undefined,
         providerPlatform: nextProviderPlatform,
+        modelId: baseSelection.id,
+        modelLabel: baseSelection.label,
+        vendor: baseSelection.vendor,
+        vendorLabel: baseSelection.vendorLabel,
+        adapter: baseSelection.adapter,
         sourceImages: [
           buildSourceReference({
             id: makeId(),
@@ -301,7 +356,12 @@ export function useImageSubmit({
 
         const response = await generateImageWithOptions(prompt, {
           mode: "edit",
+          modelId: baseSelection.id,
           model: requestModel,
+          modelLabel: baseSelection.label,
+          vendor: baseSelection.vendor,
+          vendorLabel: baseSelection.vendorLabel,
+          adapter: baseSelection.adapter,
           count: 1,
           size: supportsEditableOutputOptions ? imageSize : undefined,
           quality: nextQuality,
@@ -317,6 +377,7 @@ export function useImageSubmit({
           turnId,
           response.data || [],
           1,
+          jobId,
         );
         const jobOnlyResponse =
           Boolean(response.jobId || response.job) &&
@@ -370,14 +431,14 @@ export function useImageSubmit({
     [
       closeSelectionEditor,
       editorTarget,
+      editModels,
       focusConversation,
-      imageModel,
       imageQuality,
       imageResolutionAccess,
       imageSize,
-      providerPlatform,
       makeId,
       persistConversation,
+      selectedModel.id,
       selectedConversationId,
       setImagePrompt,
       setSourceImages,
@@ -407,7 +468,8 @@ export function useImageSubmit({
       );
       const turnQuality = turn.quality || "high";
       const turnProviderPlatform = turn.providerPlatform ?? providerPlatform;
-      const requestModel = imageModelForPlatform(turnProviderPlatform, turn.model);
+      const turnSelection = modelSelectionFromTurn(turn, selectedModel);
+      const requestModel = imageModelForPlatform(turnProviderPlatform, turnSelection.model);
       const previousCount = Math.max(1, turn.count || 1);
       const isSingleImageRetry =
         turnMode === "generate" &&
@@ -450,6 +512,16 @@ export function useImageSubmit({
         resolutionAccess: turn.resolutionAccess,
         quality: turnQuality,
         providerPlatform: turnProviderPlatform,
+        modelId: turnSelection.id,
+        modelLabel: turnSelection.label,
+        vendor: turnSelection.vendor,
+        vendorLabel: turnSelection.vendorLabel,
+        adapter: turnSelection.adapter,
+        compareBatchId: turn.compareBatchId || turn.compareGroupId,
+        compareGroupId: turn.compareGroupId || turn.compareBatchId,
+        compareModelLabel: turn.compareModelLabel,
+        compareModelIndex: turn.compareModelIndex,
+        compareModelCount: turn.compareModelCount,
         sourceImages: turnSourceImages,
         hasAttachment: turnSourceImages.length > 0 || turn.hasAttachment,
         sourceReference: turn.sourceReference,
@@ -473,7 +545,12 @@ export function useImageSubmit({
 
         const response = await generateImageWithOptions(prompt, {
           mode: turnMode,
+          modelId: turnSelection.id,
           model: requestModel,
+          modelLabel: turnSelection.label,
+          vendor: turnSelection.vendor,
+          vendorLabel: turnSelection.vendorLabel,
+          adapter: turnSelection.adapter,
           count: requestCount,
           size: turn.size,
           quality: turnQuality,
@@ -482,6 +559,11 @@ export function useImageSubmit({
           conversationId,
           turnId: turn.id,
           title: buildConversationTitle(turnMode, prompt),
+          compareBatchId: turn.compareBatchId || turn.compareGroupId,
+          compareGroupId: turn.compareGroupId || turn.compareBatchId,
+          compareModelLabel: turn.compareModelLabel,
+          compareModelIndex: turn.compareModelIndex,
+          compareModelCount: turn.compareModelCount,
           sourceImages: sourceImagePayloads(turnSourceImages),
           hasAttachment: turnSourceImages.length > 0 || turn.hasAttachment,
           sourceReference: turn.sourceReference,
@@ -491,6 +573,7 @@ export function useImageSubmit({
           turn.id,
           responseItems,
           Math.max(requestCount, resultImageCount(responseItems)),
+          retryJobId,
         );
         const jobOnlyResponse =
           Boolean(response.jobId || response.job) &&
@@ -570,6 +653,7 @@ export function useImageSubmit({
       makeId,
       onSubmitSettled,
       providerPlatform,
+      selectedModel,
       setSubmitElapsedSeconds,
       updateConversation,
     ],
@@ -597,17 +681,8 @@ export function useImageSubmit({
     const conversationId = selectedConversationId ?? makeId();
     const expectedCount = mode === "generate" ? parsedCount : 1;
     const runCompare = shouldRunModelCompare(mode, compareEnabled, compareModels);
-    const compareGroupId = runCompare ? makeId() : undefined;
-    const selectedModels = runCompare
-      ? compareModels
-      : [
-          {
-            id: providerPlatform,
-            label: providerPlatform,
-            platform: providerPlatform,
-            model: imageModel,
-          },
-        ];
+    const compareBatchId = runCompare ? makeId() : undefined;
+    const selectedModels = runCompare ? compareModels : [selectedModel];
     const now = new Date().toISOString();
     const draftTurns = selectedModels.map((selection, index) => {
       const turnId = makeId();
@@ -623,7 +698,13 @@ export function useImageSubmit({
         resolutionAccess: imageResolutionAccess,
         quality: imageQuality,
         providerPlatform: selection.platform,
-        compareGroupId,
+        modelId: selection.id,
+        modelLabel: selection.label,
+        vendor: selection.vendor,
+        vendorLabel: selection.vendorLabel,
+        adapter: selection.adapter,
+        compareBatchId,
+        compareGroupId: compareBatchId,
         compareModelLabel: runCompare ? selection.label : undefined,
         compareModelIndex: runCompare ? index : undefined,
         compareModelCount: runCompare ? selectedModels.length : undefined,
@@ -662,7 +743,12 @@ export function useImageSubmit({
           try {
             const response = await generateImageWithOptions(prompt, {
               mode,
+              modelId: draftTurn.modelId,
               model: draftTurn.model,
+              modelLabel: draftTurn.modelLabel,
+              vendor: draftTurn.vendor,
+              vendorLabel: draftTurn.vendorLabel,
+              adapter: draftTurn.adapter,
               count: expectedCount,
               size: imageSize,
               quality: imageQuality,
@@ -671,7 +757,8 @@ export function useImageSubmit({
               conversationId,
               turnId: draftTurn.id,
               title: draftTurn.title,
-              compareGroupId: draftTurn.compareGroupId,
+              compareBatchId: draftTurn.compareBatchId || draftTurn.compareGroupId,
+              compareGroupId: draftTurn.compareGroupId || draftTurn.compareBatchId,
               compareModelLabel: draftTurn.compareModelLabel,
               compareModelIndex: draftTurn.compareModelIndex,
               compareModelCount: draftTurn.compareModelCount,
@@ -683,6 +770,7 @@ export function useImageSubmit({
               draftTurn.id,
               responseItems,
               Math.max(expectedCount, resultImageCount(responseItems)),
+              draftTurn.jobId,
             );
             const jobOnlyResponse =
               Boolean(response.jobId || response.job) &&
@@ -753,9 +841,7 @@ export function useImageSubmit({
     focusConversation,
     compareEnabled,
     compareModels,
-    imageModel,
     imagePrompt,
-    providerPlatform,
     imageSources,
     makeId,
     mode,
@@ -766,6 +852,7 @@ export function useImageSubmit({
     persistConversation,
     resetComposer,
     selectedConversationId,
+    selectedModel,
     setImagePrompt,
     setSourceImages,
     setSubmitElapsedSeconds,

@@ -103,7 +103,7 @@ export function ChipSelect<T extends string>({
         title={title}
       >
         {triggerIcon}
-        <span>{triggerLabel}</span>
+        <span className="min-w-0 flex-1 truncate text-center">{triggerLabel}</span>
         <ChevronDown className={cn("size-4 opacity-65 transition", open && "rotate-180")} />
       </button>
       {open && typeof document !== "undefined"

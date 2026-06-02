@@ -31,9 +31,11 @@ import {
   type BusinessSystemSettings,
   type ImageQuality,
 } from "@/lib/api";
+import { providerPlatformOptions } from "@/lib/provider-platforms";
 import { dispatchSiteSettingsChanged } from "@/lib/site-settings";
 import { cn } from "@/lib/utils";
 import { isAuthErrorDuringIntentionalLogout } from "@/store/auth";
+import { ImageModelsSection } from "./components/image-models-section";
 
 type SectionProps = {
   title: string;
@@ -43,11 +45,6 @@ type SectionProps = {
 };
 
 type SettingsTab = "basic" | "email";
-
-const platformOptions: Array<{ label: string; value: APIAccessPlatform }> = [
-  { label: "gpt-image", value: "gpt-image" },
-  { label: "gemini-banana", value: "gemini-banana" },
-];
 
 const qualityOptions: Array<{ label: string; value: ImageQuality }> = [
   { label: "Low", value: "low" },
@@ -918,8 +915,8 @@ export default function SettingsPage() {
             </SettingSection>
 
             <SettingSection
-              title="生图与点数"
-              description="控制工作台默认生成参数和不同平台的基础扣点规则。"
+              title="生图默认值"
+              description="控制工作台默认生成参数。模型扣点以“模型目录”为准，平台扣点仅作为旧请求兜底。"
               icon={ImageIcon}
             >
               <Field label="默认平台" hint="后续工作台首次打开会优先使用这个平台。">
@@ -934,7 +931,7 @@ export default function SettingsPage() {
                       },
                     }))
                   }
-                  options={platformOptions}
+                  options={providerPlatformOptions}
                 />
               </Field>
               <Field label="默认质量" hint="后续工作台首次打开会优先使用这个质量。">
@@ -1000,7 +997,7 @@ export default function SettingsPage() {
                   }
                 />
               </Field>
-              <Field label="gpt-image 每张扣点" hint="后端已按平台读取该规则扣点。">
+              <Field label="OpenAI 兜底每张扣点" hint="仅在请求没有匹配到模型目录时使用。正常生图按模型目录扣点。">
                 <input className="app-input"
                   type="number"
                   min="0"
@@ -1017,7 +1014,7 @@ export default function SettingsPage() {
                   }
                 />
               </Field>
-              <Field label="gemini-banana 每张扣点" hint="后端已按平台读取该规则扣点。">
+              <Field label="Google 兜底每张扣点" hint="仅在请求没有匹配到模型目录时使用。正常生图按模型目录扣点。">
                 <input className="app-input"
                   type="number"
                   min="0"
@@ -1077,6 +1074,8 @@ export default function SettingsPage() {
                 }
               />
             </SettingSection>
+
+            <ImageModelsSection />
 
             <SettingSection
               title="运行限制"

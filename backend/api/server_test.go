@@ -1890,6 +1890,127 @@ func TestAdminCanListBusinessImageJobsWithFilters(t *testing.T) {
 	}
 }
 
+func TestAdminCanGetBusinessImageCompareBatch(t *testing.T) {
+	t.Setenv("ADMIN_USERNAME", "owner")
+	t.Setenv("ADMIN_PASSWORD", "owner-pass")
+	t.Setenv("TEST_USERNAME", "tester")
+	t.Setenv("TEST_PASSWORD", "tester-pass")
+
+	cfg := newDatabaseServerTestConfig(t)
+	server := NewServer(cfg, nil, nil)
+	adminToken := loginForTest(t, server, "owner", "owner-pass")
+
+	store, err := businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("New job store returned error: %v", err)
+	}
+	batchID := "compare-batch-api"
+	jobs := []businessjobs.Job{
+		{
+			ID:                "job-compare-third",
+			UserID:            businessauth.DefaultTestUserID,
+			ConversationID:    "conv-compare-api",
+			GenerationID:      "gen-compare-third",
+			TurnID:            "turn-compare-third",
+			Platform:          "gemini-banana",
+			Model:             "gemini-3.1-flash-image-preview",
+			CompareBatchID:    batchID,
+			CompareModelIndex: 2,
+			CompareModelCount: 3,
+			Status:            businessjobs.StatusRunning,
+			Stage:             "upstream",
+			RequestedCount:    1,
+			CreditReserved:    5,
+			CreatedAt:         "2026-05-31T00:00:03Z",
+		},
+		{
+			ID:                "job-compare-first",
+			UserID:            businessauth.DefaultTestUserID,
+			ConversationID:    "conv-compare-api",
+			GenerationID:      "gen-compare-first",
+			TurnID:            "turn-compare-first",
+			Platform:          "gpt-image",
+			Model:             "gpt-image-2",
+			CompareBatchID:    batchID,
+			CompareModelIndex: 0,
+			CompareModelCount: 3,
+			Status:            businessjobs.StatusSucceeded,
+			Stage:             "done",
+			RequestedCount:    1,
+			ActualCount:       1,
+			CreditReserved:    1,
+			CreatedAt:         "2026-05-31T00:00:01Z",
+		},
+		{
+			ID:                "job-compare-second",
+			UserID:            businessauth.DefaultTestUserID,
+			ConversationID:    "conv-compare-api",
+			GenerationID:      "gen-compare-second",
+			TurnID:            "turn-compare-second",
+			Platform:          "gemini-banana",
+			Model:             "gemini-2.5-flash-image",
+			CompareBatchID:    batchID,
+			CompareModelIndex: 1,
+			CompareModelCount: 3,
+			Status:            businessjobs.StatusFailed,
+			Stage:             "upstream",
+			ErrorCode:         "upstream_429",
+			ErrorMessage:      "rate limited",
+			RequestedCount:    1,
+			CreditReserved:    5,
+			CreditRefunded:    5,
+			CreatedAt:         "2026-05-31T00:00:02Z",
+		},
+	}
+	for _, job := range jobs {
+		if _, err := store.Save(context.Background(), job); err != nil {
+			t.Fatalf("Save job %s returned error: %v", job.ID, err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close job store returned error: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/business/admin/compare-batches/"+batchID, nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin compare batch status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Summary businessjobs.CompareBatchSummary `json:"summary"`
+		Items   []businessImageJobView           `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode compare batch payload: %v", err)
+	}
+	if payload.Summary.ID != batchID ||
+		payload.Summary.Total != 3 ||
+		payload.Summary.Succeeded != 1 ||
+		payload.Summary.Failed != 1 ||
+		payload.Summary.Running != 1 ||
+		payload.Summary.Reserved != 11 ||
+		payload.Summary.Refunded != 5 ||
+		payload.Summary.Status != businessjobs.StatusRunning {
+		t.Fatalf("compare batch summary = %#v", payload.Summary)
+	}
+	if len(payload.Items) != 3 ||
+		payload.Items[0].ID != "job-compare-first" ||
+		payload.Items[1].ID != "job-compare-second" ||
+		payload.Items[2].ID != "job-compare-third" {
+		t.Fatalf("compare batch items = %#v", payload.Items)
+	}
+
+	missingReq := httptest.NewRequest(http.MethodGet, "/api/business/admin/compare-batches/missing-batch", nil)
+	missingReq.Header.Set("Authorization", "Bearer "+adminToken)
+	missingRec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(missingRec, missingReq)
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("missing compare batch status = %d, body = %s", missingRec.Code, missingRec.Body.String())
+	}
+}
+
 func TestCancelBusinessImageJobMarksQueuedJobCancelled(t *testing.T) {
 	t.Setenv("TEST_USERNAME", "tester")
 	t.Setenv("TEST_PASSWORD", "tester-pass")

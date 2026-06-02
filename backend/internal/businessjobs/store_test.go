@@ -86,6 +86,85 @@ func TestStoreClaimQueuedByJobIDDoesNotRequireUserID(t *testing.T) {
 	}
 }
 
+func TestStoreCompareBatchFieldsAndSummary(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	batchID := "compare_batch_store"
+	jobs := []Job{
+		{
+			ID:                "job_compare_one",
+			UserID:            "user_compare",
+			ConversationID:    "conv_compare",
+			GenerationID:      "gen_compare_one",
+			CompareBatchID:    batchID,
+			CompareModelIndex: 0,
+			CompareModelCount: 3,
+			Status:            StatusSucceeded,
+			Stage:             "done",
+			RequestedCount:    1,
+			ActualCount:       1,
+			CreditReserved:    5,
+		},
+		{
+			ID:                "job_compare_two",
+			UserID:            "user_compare",
+			ConversationID:    "conv_compare",
+			GenerationID:      "gen_compare_two",
+			CompareBatchID:    batchID,
+			CompareModelIndex: 1,
+			CompareModelCount: 3,
+			Status:            StatusFailed,
+			Stage:             "upstream",
+			RequestedCount:    1,
+			CreditReserved:    5,
+			CreditRefunded:    5,
+		},
+		{
+			ID:                "job_compare_three",
+			UserID:            "user_compare",
+			ConversationID:    "conv_compare",
+			GenerationID:      "gen_compare_three",
+			CompareBatchID:    batchID,
+			CompareModelIndex: 2,
+			CompareModelCount: 3,
+			Status:            StatusRunning,
+			Stage:             "running",
+			RequestedCount:    1,
+			CreditReserved:    5,
+		},
+	}
+	for _, job := range jobs {
+		if _, err := store.Save(ctx, job); err != nil {
+			t.Fatalf("Save(%s) returned error: %v", job.ID, err)
+		}
+	}
+
+	items, total, err := store.AdminList(ctx, AdminListFilter{CompareBatchID: batchID, Limit: 10})
+	if err != nil {
+		t.Fatalf("AdminList() returned error: %v", err)
+	}
+	if total != 3 || len(items) != 3 {
+		t.Fatalf("AdminList() total=%d len=%d, want 3", total, len(items))
+	}
+	for _, item := range items {
+		if item.CompareBatchID != batchID || item.CompareModelCount != 3 {
+			t.Fatalf("compare fields = %#v", item)
+		}
+	}
+
+	summaries, err := store.CompareBatchSummaries(ctx, "user_compare", []string{batchID})
+	if err != nil {
+		t.Fatalf("CompareBatchSummaries() returned error: %v", err)
+	}
+	summary := summaries[batchID]
+	if summary.Total != 3 || summary.Succeeded != 1 || summary.Failed != 1 || summary.Running != 1 || summary.Status != StatusRunning {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if summary.Reserved != 15 || summary.Refunded != 5 {
+		t.Fatalf("summary credits = reserved:%d refunded:%d", summary.Reserved, summary.Refunded)
+	}
+}
+
 func TestStoreClaimQueuedRespectsNextRunAt(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

@@ -173,7 +173,7 @@ func (s *Server) handlePreviewBusinessProviderDispatch(w http.ResponseWriter, r 
 	if platform == "" {
 		platform = businessproviders.PlatformGPTImage
 	}
-	if platform != businessproviders.PlatformGPTImage && platform != businessproviders.PlatformGeminiBanana {
+	if !businessproviders.IsSupportedPlatform(platform) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("unsupported provider platform %q", platform)})
 		return
 	}
@@ -580,10 +580,7 @@ func imageProviderProxyConfigFromBusinessProvider(item businessproviders.Provide
 	if apiKey == "" {
 		return imageProviderProxyConfig{}, fmt.Errorf("apiKey is required")
 	}
-	provider := imageProviderOpenAICompatible
-	if platform == businessproviders.PlatformGeminiBanana {
-		provider = imageProviderGeminiBanana
-	}
+	provider := firstNonEmpty(imageProviderAdapterForPlatform(platform), imageProviderOpenAICompatible)
 	return imageProviderProxyConfig{
 		Provider:       provider,
 		ProviderID:     item.ID,
@@ -614,10 +611,7 @@ func imageProviderProxyConfigFromBusinessProviderMember(item businessproviders.M
 	if apiKey == "" {
 		return imageProviderProxyConfig{}, fmt.Errorf("apiKey is required")
 	}
-	provider := imageProviderOpenAICompatible
-	if platform == businessproviders.PlatformGeminiBanana {
-		provider = imageProviderGeminiBanana
-	}
+	provider := firstNonEmpty(imageProviderAdapterForPlatform(platform), imageProviderOpenAICompatible)
 	return imageProviderProxyConfig{
 		Provider:        provider,
 		ProviderID:      item.ID,

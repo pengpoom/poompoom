@@ -16,6 +16,13 @@ import (
 const (
 	PlatformGPTImage     = "gpt-image"
 	PlatformGeminiBanana = "gemini-banana"
+	PlatformDoubao       = "doubao"
+	PlatformQwen         = "qwen"
+	PlatformBaidu        = "baidu"
+	PlatformZAI          = "z-ai"
+	PlatformTencent      = "tencent"
+	PlatformKling        = "kling"
+	PlatformGrok         = "grok"
 )
 
 const (
@@ -1180,7 +1187,7 @@ func (s *Store) EnsureConfigProvider(ctx context.Context, cfg *config.Config) er
 		Platform:     platform,
 		BaseURL:      baseURL,
 		APIKey:       apiKey,
-		DefaultModel: "gpt-image-2",
+		DefaultModel: defaultModelForPlatform(platform),
 		Enabled:      true,
 		IsDefault:    true,
 	})
@@ -1416,7 +1423,7 @@ func normalizeInput(input MutationInput) (Provider, error) {
 		item.Name = item.Platform
 	}
 	if item.Platform == "" {
-		return Provider{}, fmt.Errorf("platform must be gpt-image or gemini-banana")
+		return Provider{}, fmt.Errorf("unsupported provider platform")
 	}
 	if item.BaseURL == "" {
 		return Provider{}, fmt.Errorf("baseUrl is required")
@@ -1445,7 +1452,7 @@ func normalizeGroupInput(input GroupInput) (Group, error) {
 		item.Name = item.Platform
 	}
 	if item.Platform == "" {
-		return Group{}, fmt.Errorf("platform must be gpt-image or gemini-banana")
+		return Group{}, fmt.Errorf("unsupported provider platform")
 	}
 	if item.Priority < 0 {
 		item.Priority = 0
@@ -1494,7 +1501,7 @@ func normalizeMemberInput(input MemberInput) (Member, error) {
 	if rawPlatform != "" {
 		platform = NormalizePlatform(rawPlatform)
 		if platform == "" {
-			return Member{}, fmt.Errorf("platform must be gpt-image or gemini-banana")
+			return Member{}, fmt.Errorf("unsupported provider platform")
 		}
 	}
 	item := Member{
@@ -1542,9 +1549,27 @@ func NormalizePlatform(value string) string {
 		return PlatformGPTImage
 	case PlatformGeminiBanana:
 		return PlatformGeminiBanana
+	case PlatformDoubao:
+		return PlatformDoubao
+	case PlatformQwen:
+		return PlatformQwen
+	case PlatformBaidu:
+		return PlatformBaidu
+	case PlatformZAI, "zai", "z.ai":
+		return PlatformZAI
+	case PlatformTencent:
+		return PlatformTencent
+	case PlatformKling:
+		return PlatformKling
+	case PlatformGrok:
+		return PlatformGrok
 	default:
 		return ""
 	}
+}
+
+func IsSupportedPlatform(value string) bool {
+	return NormalizePlatform(value) != ""
 }
 
 func NormalizeMemberStatus(value string) string {
@@ -1564,6 +1589,20 @@ func defaultModelForPlatform(platform string) string {
 	switch NormalizePlatform(platform) {
 	case PlatformGeminiBanana:
 		return "gemini-2.5-flash-image"
+	case PlatformDoubao:
+		return "doubao-seedream-image"
+	case PlatformQwen:
+		return "qwen-image"
+	case PlatformBaidu:
+		return "baidu-image"
+	case PlatformZAI:
+		return "z-ai-image"
+	case PlatformTencent:
+		return "tencent-image"
+	case PlatformKling:
+		return "kling-image"
+	case PlatformGrok:
+		return "grok-image"
 	default:
 		return "gpt-image-2"
 	}

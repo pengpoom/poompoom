@@ -794,6 +794,20 @@ func normalizeAPIAccessPlatform(value string) string {
 		return "gpt-image"
 	case "gemini-banana":
 		return "gemini-banana"
+	case "doubao":
+		return "doubao"
+	case "qwen":
+		return "qwen"
+	case "baidu":
+		return "baidu"
+	case "z-ai", "zai", "z.ai":
+		return "z-ai"
+	case "tencent":
+		return "tencent"
+	case "kling":
+		return "kling"
+	case "grok":
+		return "grok"
 	default:
 		return "gpt-image"
 	}

@@ -43,7 +43,13 @@ export function createConversationTurn(payload: {
   resolutionAccess?: ImageResolutionAccess;
   quality?: ImageQuality;
   providerPlatform?: APIAccessPlatform;
+  modelId?: string;
+  modelLabel?: string;
+  vendor?: string;
+  vendorLabel?: string;
+  adapter?: string;
   scale?: string;
+  compareBatchId?: string;
   compareGroupId?: string;
   compareModelLabel?: string;
   compareModelIndex?: number;
@@ -68,15 +74,24 @@ export function createConversationTurn(payload: {
     resolutionAccess: payload.resolutionAccess,
     quality: payload.quality,
     providerPlatform: payload.providerPlatform,
+    modelId: payload.modelId,
+    modelLabel: payload.modelLabel,
+    vendor: payload.vendor,
+    vendorLabel: payload.vendorLabel,
+    adapter: payload.adapter,
     scale: payload.scale,
-    compareGroupId: payload.compareGroupId,
+    compareBatchId: payload.compareBatchId || payload.compareGroupId,
+    compareGroupId: payload.compareGroupId || payload.compareBatchId,
     compareModelLabel: payload.compareModelLabel,
     compareModelIndex: payload.compareModelIndex,
     compareModelCount: payload.compareModelCount,
     sourceImages: payload.sourceImages ?? [],
     hasAttachment: Boolean(payload.hasAttachment || payload.sourceImages?.length),
     sourceReference: payload.sourceReference,
-    images: payload.images,
+    images: payload.images.map((image) => ({
+      ...image,
+      jobId: image.jobId || payload.jobId,
+    })),
     createdAt: payload.createdAt,
     status: payload.status,
     error: payload.error,
@@ -103,11 +118,13 @@ export function mergeResultImages(
     source_account_id?: string;
   }>,
   expected: number,
+  jobId?: string,
 ) {
   const results: StoredImage[] = items.map((item, index) =>
     item.b64_json || item.url
       ? {
           id: `${conversationId}-${index}`,
+          jobId,
           status: "success",
           b64_json: item.b64_json,
           url: item.url,
@@ -120,6 +137,7 @@ export function mergeResultImages(
         }
       : {
           id: `${conversationId}-${index}`,
+          jobId,
           status: "error",
           error: "接口没有返回图片数据",
         },
@@ -128,6 +146,7 @@ export function mergeResultImages(
   while (results.length < expected) {
     results.push({
       id: `${conversationId}-${results.length}`,
+      jobId,
       status: "error",
       error: "接口返回的图片数量不足",
     });

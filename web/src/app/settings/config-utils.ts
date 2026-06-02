@@ -1,4 +1,5 @@
 import type { ConfigPayload } from "@/lib/api";
+import { normalizeAPIAccessPlatform as normalizeProviderPlatform } from "@/lib/provider-platforms";
 
 export function joinDisplayPath(root: string, relativePath: string) {
   const normalizedRoot = String(root || "")
@@ -127,12 +128,7 @@ export function normalizeConfigPayload(
     ...defaults.apiAccess,
     ...next.apiAccess,
   };
-  if (
-    apiAccess.platform !== "gpt-image" &&
-    apiAccess.platform !== "gemini-banana"
-  ) {
-    apiAccess.platform = "gpt-image";
-  }
+  apiAccess.platform = normalizeProviderPlatform(apiAccess.platform) ?? "gpt-image";
   const legacyImageStorage =
     storage.imageStorage === "server" ? "server" : "browser";
   storage.imageConversationStorage =

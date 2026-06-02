@@ -38,6 +38,7 @@ import {
 import { AppSelect, AppTimeSeg } from "@/components/app-controls";
 import { timeRangeQuery, type TimeRangeValue } from "@/components/time-range-utils";
 import {
+  fetchAdminBusinessImageCompareBatch,
   fetchAdminBusinessImageJobs,
   fetchBusinessAPIProviders,
   fetchBusinessProviderPools,
@@ -47,6 +48,7 @@ import {
   fetchRuntimeStatus,
   updateMaintenanceStatus,
   type BusinessAPIProvider,
+  type BusinessCompareBatchStatus,
   type BusinessProviderPool,
   type BusinessImageJob,
   type BusinessTrackerSummary,
@@ -54,6 +56,7 @@ import {
   type MaintenanceStatus,
   type RuntimeStatusResponse,
 } from "@/lib/api";
+import { providerPlatformLabel, providerPlatformOptions } from "@/lib/provider-platforms";
 import { cn } from "@/lib/utils";
 
 function numberText(value: number | undefined) {
@@ -176,15 +179,134 @@ function poolDefaultNames(items: BusinessProviderPool[]) {
   return names.length > 0 ? names.join(" / ") : "-";
 }
 
-function platformLabel(value: string) {
-  switch (value) {
-    case "gpt-image":
-      return "gpt-image";
-    case "gemini-banana":
-      return "gemini-banana";
-    default:
-      return value || "-";
+function providerPoolHeaderStatus(
+  runtime: RuntimeStatusResponse | null,
+  pools: BusinessProviderPool[],
+) {
+  const snapshot = runtime?.providerPool;
+  if (snapshot) {
+    const groups = Number(snapshot.groups || 0);
+    const members = Number(snapshot.members || 0);
+    const available = Number(snapshot.availableMembers || 0);
+    const blocked =
+      Number(snapshot.coolingMembers || 0) +
+      Number(snapshot.limitedMembers || 0) +
+      Number(snapshot.concurrencyLimitedMembers || 0) +
+      Number(snapshot.unavailableMembers || 0);
+    if (groups <= 0 || members <= 0) {
+      return { label: "号池未配置", variant: "danger" as const };
+    }
+    if (available <= 0) {
+      return { label: `号池无可用成员 0/${members}`, variant: "danger" as const };
+    }
+    return {
+      label: `号池可用 ${available}/${members}`,
+      variant: blocked > 0 ? "warning" as const : "success" as const,
+    };
   }
+
+  const members = pools.reduce((total, pool) => total + pool.members.length, 0);
+  const enabledMembers = pools.reduce(
+    (total, pool) => total + pool.members.filter((member) => member.enabled).length,
+    0,
+  );
+  if (pools.length === 0 || members <= 0) {
+    return { label: "号池未配置", variant: "danger" as const };
+  }
+  if (enabledMembers <= 0) {
+    return { label: `号池未启用 0/${members}`, variant: "danger" as const };
+  }
+  return { label: `号池已配置 ${enabledMembers}/${members}`, variant: "warning" as const };
+}
+
+function platformLabel(value: string) {
+  return providerPlatformLabel(value) || "-";
+}
+
+function selectedModelLabel(job: BusinessImageJob) {
+  const vendor = (job.vendorLabel || platformLabel(String(job.platform || ""))).trim();
+  const model = (job.modelLabel || job.model || job.upstreamModel || "").trim();
+  if (vendor && model) {
+    return `${vendor} · ${model}`;
+  }
+  return model || vendor || "-";
+}
+
+function upstreamModelLabel(job: BusinessImageJob) {
+  return (job.upstreamModel || job.model || "").trim() || "-";
+}
+
+function providerMemberLabel(job: BusinessImageJob) {
+  if (job.providerSource === "provider_pool") {
+    return job.providerMemberName || job.providerName || job.providerMemberId || job.providerId || "-";
+  }
+  return job.providerName || job.providerId || providerSourceLabel(job);
+}
+
+function creditSummaryLabel(job: BusinessImageJob) {
+  const reserved = Number(job.creditReserved || 0);
+  const refunded = Number(job.creditRefunded || 0);
+  if (reserved <= 0 && refunded <= 0) {
+    return "未扣点";
+  }
+  if (refunded >= reserved && reserved > 0) {
+    return `扣 ${numberText(reserved)} / 已全退`;
+  }
+  if (refunded > 0) {
+    return `扣 ${numberText(reserved)} / 退 ${numberText(refunded)}`;
+  }
+  return `扣 ${numberText(reserved)}`;
+}
+
+function creditStatusLabel(job: BusinessImageJob) {
+  const reserved = Number(job.creditReserved || 0);
+  const refunded = Number(job.creditRefunded || 0);
+  if (reserved <= 0) return "未扣点";
+  if (refunded >= reserved) return "已退款";
+  if (refunded > 0) return "部分退款";
+  return "已扣点";
+}
+
+function compareBatchSummaryTextFromSummary(summary?: BusinessCompareBatchStatus | null) {
+  if (!summary || summary.total <= 0) {
+    return "";
+  }
+  const parts = [`${summary.succeeded}/${summary.total} 完成`];
+  if (summary.failed > 0) parts.push(`${summary.failed} 失败`);
+  if (summary.running > 0) parts.push(`${summary.running} 运行中`);
+  if (summary.queued > 0) parts.push(`${summary.queued} 排队中`);
+  if (summary.cancelled > 0) parts.push(`${summary.cancelled} 已取消`);
+  return parts.join(" · ");
+}
+
+function compareBatchSummaryText(job: BusinessImageJob) {
+  if (!job.compareBatchId) {
+    return "";
+  }
+  return compareBatchSummaryTextFromSummary(job.compareBatchStatus);
+}
+
+function compareBatchLabel(job: BusinessImageJob) {
+  if (!job.compareBatchId) {
+    return "";
+  }
+  const count = job.compareBatchStatus?.total || job.compareModelCount || 0;
+  return count > 0 ? `模型对比 · ${count} 个模型` : "模型对比";
+}
+
+function sortCompareBatchJobs(items: BusinessImageJob[]) {
+  return [...items].sort((a, b) => {
+    const leftIndex = Number.isFinite(Number(a.compareModelIndex))
+      ? Number(a.compareModelIndex)
+      : Number.MAX_SAFE_INTEGER;
+    const rightIndex = Number.isFinite(Number(b.compareModelIndex))
+      ? Number(b.compareModelIndex)
+      : Number.MAX_SAFE_INTEGER;
+    if (leftIndex !== rightIndex) {
+      return leftIndex - rightIndex;
+    }
+    return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+  });
 }
 
 function jobStatusLabel(status: string) {
@@ -258,22 +380,64 @@ function upstreamJobLabel(job: BusinessImageJob) {
   return job.upstreamSent || job.upstreamStatus === "sent" ? "已发上游" : "未发上游";
 }
 
-function upstreamJobVariant(job: BusinessImageJob): "warning" | "info" {
-  return job.upstreamSent || job.upstreamStatus === "sent" ? "warning" : "info";
-}
-
 function providerSourceLabel(job: BusinessImageJob) {
   switch (job.providerSource) {
     case "provider_pool":
-      return "号池";
+      return "号池成员";
     case "legacy_provider":
-      return "API 接入";
     case "api_access":
-      return "配置接入";
+      return "API 接入";
     case "environment":
       return "环境变量";
     default:
       return job.providerId ? "API 接入" : "-";
+  }
+}
+
+function upstreamStatusLabel(job: BusinessImageJob) {
+  const statusCode = Number(job.upstreamStatusCode || 0);
+  if (statusCode > 0) {
+    return `HTTP ${statusCode}`;
+  }
+  return upstreamJobLabel(job);
+}
+
+function failureReasonLabel(job: BusinessImageJob) {
+  return job.failureReasonMessage || job.userErrorMessage || job.errorMessage || job.errorCode || "-";
+}
+
+function failureReasonTypeLabel(code?: string) {
+  switch (code) {
+    case "insufficient_credits":
+      return "点数不足";
+    case "provider_empty_response":
+      return "空结果";
+    case "provider_member_cooling":
+      return "成员冷却";
+    case "no_available_pool":
+      return "无可用号池";
+    case "provider_pool_failed_no_fallback":
+      return "无兜底";
+    case "provider_not_configured":
+      return "接入未配置";
+    case "upstream_unauthorized":
+      return "上游 401";
+    case "upstream_forbidden":
+      return "上游 403";
+    case "upstream_rate_limited":
+      return "上游 429";
+    case "upstream_server_error":
+      return "上游 5xx";
+    case "upstream_client_error":
+      return "上游 4xx";
+    case "provider_request_failed":
+      return "请求失败";
+    case "provider_response_failed":
+      return "响应失败";
+    case "cancelled":
+      return "已取消";
+    default:
+      return code || "";
   }
 }
 
@@ -518,15 +682,201 @@ function DetailBlock({
   );
 }
 
+function CompareBatchJobsBlock({
+  currentJobId,
+  jobs,
+  loading,
+  error,
+  onSelectJob,
+}: {
+  currentJobId: string;
+  jobs: BusinessImageJob[];
+  loading: boolean;
+  error: string;
+  onSelectJob: (job: BusinessImageJob) => void;
+}) {
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-black/10 px-3 py-3 text-xs text-[var(--app-text-muted)]">
+        <LoaderCircle className="size-4 animate-spin" />
+        正在读取同批次模型
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-[var(--app-radius-md)] border border-rose-400/20 bg-rose-500/10 px-3 py-3 text-xs leading-5 text-rose-100">
+        {error}
+      </div>
+    );
+  }
+
+  if (jobs.length === 0) {
+    return (
+      <div className="rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-black/10 px-3 py-3 text-xs text-[var(--app-text-muted)]">
+        暂未读取到同批次 Job。
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-[var(--app-radius-md)] border border-[var(--app-border)]">
+      <table className={cn(adminTableClass, "table-fixed text-left text-xs")}>
+        <colgroup>
+          <col className="w-[7%]" />
+          <col className="w-[24%]" />
+          <col className="w-[18%]" />
+          <col className="w-[18%]" />
+          <col className="w-[12%]" />
+          <col className="w-[21%]" />
+        </colgroup>
+        <thead className={adminTableHeadClass}>
+          <tr>
+            <th className="px-3 py-2 font-medium">序号</th>
+            <th className="px-3 py-2 font-medium">用户选择模型</th>
+            <th className="px-3 py-2 font-medium">上游模型</th>
+            <th className="px-3 py-2 font-medium">来源 / 成员</th>
+            <th className="px-3 py-2 font-medium">扣点</th>
+            <th className="px-3 py-2 font-medium">状态 / 错误</th>
+          </tr>
+        </thead>
+        <tbody className={adminTableBodyClass}>
+          {jobs.map((item) => {
+            const active = item.id === currentJobId;
+            return (
+              <tr
+                key={item.id}
+                className={cn(
+                  adminTableRowClass,
+                  "cursor-pointer align-top text-[var(--app-text-secondary)]",
+                  active ? "bg-cyan-400/10" : "",
+                )}
+                onClick={() => onSelectJob(item)}
+              >
+                <td className="px-3 py-2">
+                  <span className={cn("app-badge", active ? "ok" : "off")}>
+                    {Number(item.compareModelIndex ?? -1) >= 0
+                      ? Number(item.compareModelIndex) + 1
+                      : "-"}
+                  </span>
+                </td>
+                <td className="whitespace-normal px-3 py-2">
+                  <div className="truncate font-medium text-[var(--app-text-primary)]" title={selectedModelLabel(item)}>
+                    {selectedModelLabel(item)}
+                  </div>
+                  <div className="mt-0.5 truncate font-mono text-[11px] text-[var(--app-text-muted)]" title={item.modelId || ""}>
+                    {item.modelId || "-"}
+                  </div>
+                </td>
+                <td className="whitespace-normal px-3 py-2">
+                  <div className="truncate font-mono text-[var(--app-text-primary)]" title={upstreamModelLabel(item)}>
+                    {upstreamModelLabel(item)}
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] text-[var(--app-text-muted)]">
+                    {platformLabel(String(item.platform || ""))}
+                  </div>
+                </td>
+                <td className="whitespace-normal px-3 py-2">
+                  <div className="truncate text-[var(--app-text-primary)]" title={providerSourceLabel(item)}>
+                    {providerSourceLabel(item)}
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] text-[var(--app-text-muted)]" title={providerMemberLabel(item)}>
+                    {providerMemberLabel(item)}
+                  </div>
+                </td>
+                <td className="whitespace-normal px-3 py-2">
+                  <div className="truncate text-[var(--app-text-primary)]" title={creditSummaryLabel(item)}>
+                    {creditSummaryLabel(item)}
+                  </div>
+                </td>
+                <td className="whitespace-normal px-3 py-2">
+                  <div className="flex min-w-0 items-center gap-1">
+                    <span className={cn("app-badge shrink-0", badgeClass(jobStatusVariant(item.status)))}>
+                      {jobStatusLabel(item.status)}
+                    </span>
+                    <span className="truncate text-[var(--app-text-muted)]" title={formatDateTime(item.finishedAt || item.updatedAt)}>
+                      {formatDateTime(item.finishedAt || item.updatedAt)}
+                    </span>
+                  </div>
+                  {item.failureReasonCode || item.userErrorType || item.errorCode || item.errorMessage ? (
+                    <div className="mt-1 truncate text-rose-300" title={failureReasonLabel(item)}>
+                      {failureReasonTypeLabel(item.failureReasonCode) || userErrorTypeLabel(item.userErrorType) || "错误"} · {failureReasonLabel(item)}
+                    </div>
+                  ) : (
+                    <div className="mt-1 truncate text-[var(--app-text-muted)]">-</div>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function JobDetailDrawer({
   job,
   username,
+  onFilterCompareBatch,
+  onSelectJob,
   onClose,
 }: {
   job: BusinessImageJob | null;
   username: string;
+  onFilterCompareBatch: (batchId: string) => void;
+  onSelectJob: (job: BusinessImageJob) => void;
   onClose: () => void;
 }) {
+  const compareBatchId = String(job?.compareBatchId || "").trim();
+  const [batchJobs, setBatchJobs] = useState<BusinessImageJob[]>([]);
+  const [batchSummary, setBatchSummary] =
+    useState<BusinessCompareBatchStatus | null>(null);
+  const [batchJobsLoading, setBatchJobsLoading] = useState(false);
+  const [batchJobsError, setBatchJobsError] = useState("");
+  const activeBatchSummary = batchSummary ?? job?.compareBatchStatus ?? null;
+
+  useEffect(() => {
+    if (!compareBatchId) {
+      setBatchJobs([]);
+      setBatchSummary(null);
+      setBatchJobsError("");
+      setBatchJobsLoading(false);
+      return;
+    }
+
+    let disposed = false;
+    setBatchJobsLoading(true);
+    setBatchSummary(null);
+    setBatchJobsError("");
+    fetchAdminBusinessImageCompareBatch(compareBatchId)
+      .then((payload) => {
+        if (disposed) {
+          return;
+        }
+        setBatchSummary(payload.summary);
+        setBatchJobs(sortCompareBatchJobs(payload.items || []));
+      })
+      .catch((error) => {
+        if (disposed) {
+          return;
+        }
+        setBatchJobs([]);
+        setBatchSummary(null);
+        setBatchJobsError(error instanceof Error ? error.message : "读取同批次 Job 失败");
+      })
+      .finally(() => {
+        if (!disposed) {
+          setBatchJobsLoading(false);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [compareBatchId]);
+
   if (!job) {
     return null;
   }
@@ -564,13 +914,56 @@ function JobDetailDrawer({
           <section className="grid gap-2 sm:grid-cols-2">
             <DetailRow label="用户" value={username || job.userId} />
             <DetailRow label="阶段" value={job.stage || "-"} />
-            <DetailRow label="平台" value={`${platformLabel(String(job.platform || ""))} / ${job.model || "-"}`} />
+            <DetailRow label="用户选择模型" value={selectedModelLabel(job)} />
+            <DetailRow label="上游请求模型" value={upstreamModelLabel(job)} />
+            <DetailRow label="平台" value={platformLabel(String(job.platform || ""))} />
+            <DetailRow label="来源" value={providerSourceLabel(job)} />
+            <DetailRow label="命中成员" value={providerMemberLabel(job)} />
             <DetailRow label="规格" value={`${job.size || "-"} / ${job.quality || "-"}`} />
             <DetailRow label="图片" value={`${numberText(job.actualCount)} / ${numberText(job.requestedCount)} 张`} />
-            <DetailRow label="扣点" value={`${numberText(job.creditReserved)} / 退 ${numberText(job.creditRefunded)}`} />
+            <DetailRow label="扣点" value={`${creditSummaryLabel(job)} · ${creditStatusLabel(job)}`} />
+            <DetailRow label="上游状态" value={upstreamStatusLabel(job)} />
           </section>
 
+          {job.compareBatchId ? (
+            <DetailBlock title="对比批次">
+              <div className="grid gap-3 text-xs leading-5">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div>批次：<span className="font-mono">{job.compareBatchId}</span></div>
+                  <div>当前模型：{Number(job.compareModelIndex || 0) + 1}/{job.compareModelCount || activeBatchSummary?.total || "-"}</div>
+                  <div className="sm:col-span-2">状态：{compareBatchSummaryTextFromSummary(activeBatchSummary) || "-"}</div>
+                  <button
+                    type="button"
+                    className="app-btn w-fit"
+                    onClick={() => {
+                      onFilterCompareBatch(job.compareBatchId || "");
+                    }}
+                  >
+                    按批次过滤列表
+                  </button>
+                </div>
+                <CompareBatchJobsBlock
+                  currentJobId={job.id}
+                  jobs={batchJobs}
+                  loading={batchJobsLoading}
+                  error={batchJobsError}
+                  onSelectJob={onSelectJob}
+                />
+              </div>
+            </DetailBlock>
+          ) : null}
+
           <div className="grid gap-4 lg:grid-cols-2">
+            <DetailBlock title="失败归因" tone={job.failureReasonCode || job.failureReasonMessage ? "danger" : "default"}>
+              <div className="grid gap-2 text-xs leading-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  {job.failureReasonCode ? <span className="app-badge fail">{failureReasonTypeLabel(job.failureReasonCode)}</span> : null}
+                  {job.upstreamStatusCode ? <span className="app-badge warn">HTTP {job.upstreamStatusCode}</span> : null}
+                  <span className="break-words text-[var(--app-text-secondary)]">{failureReasonLabel(job)}</span>
+                </div>
+              </div>
+            </DetailBlock>
+
             <DetailBlock title="用户看到的错误" tone={job.userErrorType || job.userErrorMessage ? "danger" : "default"}>
               <div className="grid gap-2 text-xs leading-5">
                 <div className="flex flex-wrap items-center gap-2">
@@ -579,11 +972,23 @@ function JobDetailDrawer({
                 </div>
               </div>
             </DetailBlock>
+          </div>
 
+          <div className="grid gap-4 lg:grid-cols-2">
             <DetailBlock title="真实上游错误" tone={job.errorCode || job.errorMessage ? "danger" : "default"}>
               <div className="grid gap-2 text-xs leading-5">
                 <div><span className="text-[var(--app-text-muted)]">错误码：</span>{job.errorCode || "-"}</div>
+                <div><span className="text-[var(--app-text-muted)]">上游状态：</span>{upstreamStatusLabel(job)}</div>
                 <div className="break-words text-rose-200">{job.errorMessage || "-"}</div>
+              </div>
+            </DetailBlock>
+
+            <DetailBlock title="模型链路">
+              <div className="grid gap-2 text-xs leading-5">
+                <div>用户选择：{selectedModelLabel(job)}</div>
+                <div>模型 ID：<span className="font-mono">{job.modelId || "-"}</span></div>
+                <div>上游模型：<span className="font-mono">{upstreamModelLabel(job)}</span></div>
+                <div>平台：{platformLabel(String(job.platform || ""))}</div>
               </div>
             </DetailBlock>
           </div>
@@ -657,6 +1062,7 @@ export default function OperationsPage() {
   const [jobErrorType, setJobErrorType] = useState("");
   const [jobUserId, setJobUserId] = useState("");
   const [jobPlatform, setJobPlatform] = useState("");
+  const [jobCompareBatchId, setJobCompareBatchId] = useState("");
   const [jobTimeRange, setJobTimeRange] = useState<TimeRangeValue>({ preset: "last7", from: "", to: "" });
   const [loading, setLoading] = useState(true);
   const [jobsLoading, setJobsLoading] = useState(true);
@@ -670,9 +1076,10 @@ export default function OperationsPage() {
       errorType: jobErrorType || undefined,
       userId: jobUserId || undefined,
       platform: jobPlatform || undefined,
+      compareBatchId: jobCompareBatchId.trim() || undefined,
       ...timeRangeQuery(jobTimeRange),
     }),
-    [jobErrorType, jobPlatform, jobStatus, jobTimeRange, jobUserId],
+    [jobCompareBatchId, jobErrorType, jobPlatform, jobStatus, jobTimeRange, jobUserId],
   );
 
   const loadStatus = useCallback(async () => {
@@ -756,6 +1163,10 @@ export default function OperationsPage() {
   const defaultPools = useMemo(() => poolDefaultNames(providerPools), [providerPools]);
   const providerPool = runtime?.providerPool;
   const providerPoolIssues = providerPool?.dispatchIssues || [];
+  const poolHeaderStatus = useMemo(
+    () => providerPoolHeaderStatus(runtime, providerPools),
+    [providerPools, runtime],
+  );
   const recentFailure = tracker?.recentFailures[0];
   const system = runtime?.system;
   const capacity = runtimeCapacity(runtime);
@@ -790,6 +1201,9 @@ export default function OperationsPage() {
             </>
           }
         >
+          <span className={cn("app-badge", badgeClass(poolHeaderStatus.variant))}>
+            {poolHeaderStatus.label}
+          </span>
           {(() => {
             const variant = statusVariant(runtime, providers, tracker);
             const cls = variant === "success" ? "ok" : variant === "danger" ? "fail" : "warn";
@@ -1160,11 +1574,21 @@ export default function OperationsPage() {
                 onChange={setJobPlatform}
                 options={[
                   { value: "", label: "全部平台" },
-                  { value: "gpt-image", label: "gpt-image" },
-                  { value: "gemini-banana", label: "gemini-banana" },
+                  ...providerPlatformOptions.map((item) => ({ value: item.value, label: item.label })),
                 ]}
                 placeholder="全部平台"
               />
+              <input
+                className="app-input h-10 w-[220px]"
+                value={jobCompareBatchId}
+                onChange={(event) => setJobCompareBatchId(event.target.value)}
+                placeholder="compareBatchId"
+              />
+              {jobCompareBatchId ? (
+                <button className="app-btn" type="button" onClick={() => setJobCompareBatchId("")}>
+                  清除批次
+                </button>
+              ) : null}
               <span className="spacer" />
               <button className="app-btn" type="button" onClick={() => void loadJobs(jobsPage.page)} disabled={jobsLoading}>
                 {jobsLoading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
@@ -1185,8 +1609,8 @@ export default function OperationsPage() {
                 <thead className={adminTableHeadClass}>
                   <tr>
                     <th className="px-3 py-3 font-medium">状态 / 用户</th>
-                    <th className="px-3 py-3 font-medium">平台 / 来源</th>
-                    <th className="px-3 py-3 font-medium">来源详情</th>
+                    <th className="px-3 py-3 font-medium">模型链路</th>
+                    <th className="px-3 py-3 font-medium">上游来源</th>
                     <th className="px-3 py-3 font-medium">提示词</th>
                     <th className="px-3 py-3 font-medium">结果</th>
                     <th className="px-3 py-3 font-medium">错误</th>
@@ -1228,12 +1652,21 @@ export default function OperationsPage() {
                         </td>
                         <td className="whitespace-normal px-3 py-2">
                           <div className="min-w-0">
-                            <div className="truncate font-medium text-[var(--app-text-primary)]">
-                              {platformLabel(String(job.platform || ""))} · {job.model || "-"}
+                            <div className="truncate font-medium text-[var(--app-text-primary)]" title={selectedModelLabel(job)}>
+                              {selectedModelLabel(job)}
+                            </div>
+                            <div className="mt-0.5 truncate font-mono text-[11px] text-[var(--app-text-muted)]" title={upstreamModelLabel(job)}>
+                              上游 {upstreamModelLabel(job)}
                             </div>
                             <div className="mt-1 flex items-center gap-1 overflow-hidden">
+                              <span className="app-badge off shrink-0">{platformLabel(String(job.platform || ""))}</span>
                               <span className={cn("app-badge shrink-0", badgeClass(providerSourceVariant(job)))}>{providerSourceLabel(job)}</span>
                             </div>
+                            {job.compareBatchId ? (
+                              <div className="mt-1 truncate text-[11px] text-[var(--app-text-muted)]" title={job.compareBatchId}>
+                                {compareBatchLabel(job)} · {compareBatchSummaryText(job) || job.compareBatchId}
+                              </div>
+                            ) : null}
                           </div>
                         </td>
                         <td className="whitespace-normal px-3 py-2">
@@ -1245,8 +1678,8 @@ export default function OperationsPage() {
                             </div>
                             <div className="truncate text-[11px] text-[var(--app-text-muted)]" title={job.providerMemberName || job.providerName || job.providerMemberId || job.providerId || ""}>
                               {job.providerSource === "provider_pool"
-                                ? `成员 ${job.providerMemberName || job.providerName || job.providerMemberId || job.providerId || "-"} · ${providerMatchModeLabel(job.providerGroupMatchMode) || "-"}`
-                                : "API 接入"}
+                                ? `成员 ${providerMemberLabel(job)} · ${providerMatchModeLabel(job.providerGroupMatchMode) || "-"}`
+                                : providerSourceLabel(job)}
                             </div>
                             {dispatchStrategyLabel(job.dispatchStrategy) ? (
                               <div className="mt-1">
@@ -1274,26 +1707,26 @@ export default function OperationsPage() {
                               {formatBytes(job.storageBytes)} · {formatDurationMs(job.totalDurationMs)}
                             </div>
                             <div className="mt-0.5 truncate text-xs text-[var(--app-text-muted)]">
-                              点 {numberText(job.creditReserved)} / 退 {numberText(job.creditRefunded)}
+                              {creditSummaryLabel(job)}
                             </div>
                           </div>
                         </td>
                         <td className="whitespace-normal px-3 py-2">
                           <div className="min-w-0">
-                            {job.userErrorType || job.errorCode || job.errorMessage ? (
+                            {job.failureReasonCode || job.userErrorType || job.errorCode || job.errorMessage ? (
                               <div className="flex min-w-0 items-center gap-1">
-                                {job.userErrorType ? (
-                                  <span className="app-badge fail shrink-0">{userErrorTypeLabel(job.userErrorType) || job.userErrorType}</span>
+                                {job.failureReasonCode || job.userErrorType ? (
+                                  <span className="app-badge fail shrink-0">{failureReasonTypeLabel(job.failureReasonCode) || userErrorTypeLabel(job.userErrorType) || job.userErrorType}</span>
                                 ) : null}
-                                <span className="truncate text-xs text-rose-300" title={job.errorMessage || job.errorCode || ""}>
-                                  {job.userErrorMessage || job.errorCode || job.errorMessage || "-"}
+                                <span className="truncate text-xs text-rose-300" title={failureReasonLabel(job)}>
+                                  {failureReasonLabel(job)}
                                 </span>
                               </div>
                             ) : (
                               <div className="mt-0.5 text-xs text-[var(--app-text-muted)]">-</div>
                             )}
                             <div className="mt-0.5 truncate text-xs text-[var(--app-text-muted)]">
-                              {formatDateTime(job.finishedAt || job.updatedAt)}
+                              {upstreamStatusLabel(job)} · {formatDateTime(job.finishedAt || job.updatedAt)}
                             </div>
                           </div>
                         </td>
@@ -1335,7 +1768,16 @@ export default function OperationsPage() {
             </div>
           </div>
         </AdminPanel>
-        <JobDetailDrawer job={selectedJob} username={selectedJobUsername} onClose={() => setSelectedJob(null)} />
+        <JobDetailDrawer
+          job={selectedJob}
+          username={selectedJobUsername}
+          onFilterCompareBatch={(batchId) => {
+            setJobCompareBatchId(batchId);
+            setSelectedJob(null);
+          }}
+          onSelectJob={setSelectedJob}
+          onClose={() => setSelectedJob(null)}
+        />
     </AdminPage>
   );
 }

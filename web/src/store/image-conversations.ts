@@ -14,6 +14,7 @@ import {
   type InpaintSourceReference,
 } from "@/lib/api";
 import webConfig from "@/constants/common-env";
+import { normalizeAPIAccessPlatform as normalizeProviderPlatform } from "@/lib/provider-platforms";
 import { httpRequest } from "@/lib/request";
 
 export type ImageMode = "generate" | "edit";
@@ -29,6 +30,7 @@ export type StoredSourceImage = {
 
 export type StoredImage = {
   id: string;
+  jobId?: string;
   status?: "loading" | "success" | "error";
   b64_json?: string;
   url?: string;
@@ -60,7 +62,13 @@ export type ImageConversationTurn = {
   resolutionAccess?: ImageResolutionAccess;
   quality?: ImageQuality;
   providerPlatform?: APIAccessPlatform;
+  modelId?: string;
+  modelLabel?: string;
+  vendor?: string;
+  vendorLabel?: string;
+  adapter?: string;
   scale?: string;
+  compareBatchId?: string;
   compareGroupId?: string;
   compareModelLabel?: string;
   compareModelIndex?: number;
@@ -93,6 +101,11 @@ export type ImageConversation = {
   resolutionAccess?: ImageResolutionAccess;
   quality?: ImageQuality;
   providerPlatform?: APIAccessPlatform;
+  modelId?: string;
+  modelLabel?: string;
+  vendor?: string;
+  vendorLabel?: string;
+  adapter?: string;
   scale?: string;
   sourceImages?: StoredSourceImage[];
   images: StoredImage[];
@@ -387,9 +400,7 @@ function normalizeImageModel(value: unknown): ImageModel {
 }
 
 function normalizeAPIAccessPlatform(value: unknown): APIAccessPlatform | undefined {
-  return value === "gpt-image" || value === "gemini-banana"
-    ? value
-    : undefined;
+  return normalizeProviderPlatform(value);
 }
 
 function buildBusinessImageTitle(prompt: string) {
@@ -589,11 +600,13 @@ function businessSourceReferenceFromJob(
 
 function businessCompareMetadataFromJob(job?: BusinessImageJob) {
   const payload = businessJobPayload(job);
-  const compareGroupId = String(payload.compareGroupId || "").trim();
+  const compareBatchId = String(job?.compareBatchId || payload.compareBatchId || payload.compareGroupId || "").trim();
+  const compareGroupId = String(payload.compareGroupId || compareBatchId || "").trim();
   const compareModelLabel = String(payload.compareModelLabel || "").trim();
-  const compareModelIndex = Number(payload.compareModelIndex);
-  const compareModelCount = Number(payload.compareModelCount);
+  const compareModelIndex = Number(job?.compareModelIndex ?? payload.compareModelIndex);
+  const compareModelCount = Number(job?.compareModelCount ?? payload.compareModelCount);
   return {
+    compareBatchId: compareBatchId || undefined,
     compareGroupId: compareGroupId || undefined,
     compareModelLabel: compareModelLabel || undefined,
     compareModelIndex: Number.isFinite(compareModelIndex)
@@ -605,17 +618,46 @@ function businessCompareMetadataFromJob(job?: BusinessImageJob) {
   };
 }
 
+function businessModelMetadataFromJob(
+  job?: BusinessImageJob,
+  generation?: BusinessImageGeneration,
+) {
+  const payload = businessJobPayload(job);
+  const response = generation?.response as
+    | {
+        modelId?: unknown;
+        modelLabel?: unknown;
+        vendor?: unknown;
+        vendorLabel?: unknown;
+      }
+    | undefined;
+  return {
+    modelId:
+      String(payload.modelId || response?.modelId || "").trim() || undefined,
+    modelLabel:
+      String(payload.modelLabel || response?.modelLabel || "").trim() ||
+      undefined,
+    vendor: String(payload.vendor || response?.vendor || "").trim() || undefined,
+    vendorLabel:
+      String(payload.vendorLabel || response?.vendorLabel || "").trim() ||
+      undefined,
+    adapter: String(payload.adapter || "").trim() || undefined,
+  };
+}
+
 function businessGenerationImages(
   generation: BusinessImageGeneration,
   turnID: string,
   statusOverride?: ImageConversationStatus,
   errorOverride?: string,
+  jobId?: string,
 ): StoredImage[] {
   const items = businessGenerationResponseItems(generation);
   const images = items.map((item, index): StoredImage => {
     if (item.b64_json || item.url) {
       return {
         id: `${turnID}-${index}`,
+        jobId,
         status: "success",
         b64_json: item.b64_json,
         url: item.url,
@@ -629,6 +671,7 @@ function businessGenerationImages(
     }
     return {
       id: `${turnID}-${index}`,
+      jobId,
       status: "error",
       error: item.error || errorOverride || generation.error || "接口没有返回图片数据",
     };
@@ -638,6 +681,7 @@ function businessGenerationImages(
   while (images.length < expected) {
     images.push({
       id: `${turnID}-${images.length}`,
+      jobId,
       status:
         statusOverride === "queued" ||
         statusOverride === "running" ||
@@ -666,6 +710,8 @@ export function businessImageConversationDetailToConversation(
       const sourceImages = businessSourceImagesFromJob(job);
       const hasAttachment = businessHasAttachmentFromJob(job);
       const compareMetadata = businessCompareMetadataFromJob(job);
+      const modelMetadata = businessModelMetadataFromJob(job, generation);
+      const jobId = job?.id || undefined;
       const prompt = generation.prompt || job?.prompt || "";
       return {
         id: turnID,
@@ -679,15 +725,16 @@ export function businessImageConversationDetailToConversation(
         providerPlatform: normalizeAPIAccessPlatform(
           (generation.response as { platform?: unknown } | undefined)?.platform,
         ),
+        ...modelMetadata,
         ...compareMetadata,
         sourceImages,
         hasAttachment,
         sourceReference: businessSourceReferenceFromJob(job),
-        images: businessGenerationImages(generation, turnID, status, error),
+        images: businessGenerationImages(generation, turnID, status, error, jobId),
         createdAt: generation.created_at || conversation.updated_at || conversation.created_at,
         status,
         error,
-        jobId: generation.id || undefined,
+        jobId,
         waitingDetail: job?.stage,
         waitingSince: job?.queuedAt,
         startedAt: job?.startedAt,
@@ -717,7 +764,13 @@ function normalizeTurn(turn: ImageConversationTurn): ImageConversationTurn {
     resolutionAccess: normalizeResolutionAccess(turn.resolutionAccess),
     quality: normalizeImageQuality(turn.quality),
     providerPlatform: normalizeAPIAccessPlatform(turn.providerPlatform),
-    compareGroupId: String(turn.compareGroupId || "").trim() || undefined,
+    modelId: String(turn.modelId || "").trim() || undefined,
+    modelLabel: String(turn.modelLabel || "").trim() || undefined,
+    vendor: String(turn.vendor || "").trim() || undefined,
+    vendorLabel: String(turn.vendorLabel || "").trim() || undefined,
+    adapter: String(turn.adapter || "").trim() || undefined,
+    compareBatchId: String(turn.compareBatchId || turn.compareGroupId || "").trim() || undefined,
+    compareGroupId: String(turn.compareGroupId || turn.compareBatchId || "").trim() || undefined,
     compareModelLabel: String(turn.compareModelLabel || "").trim() || undefined,
     compareModelIndex:
       typeof turn.compareModelIndex === "number" &&
@@ -786,7 +839,13 @@ export function normalizeConversation(
             resolutionAccess: conversation.resolutionAccess,
             quality: conversation.quality,
             providerPlatform: conversation.providerPlatform,
+            modelId: conversation.turns?.[0]?.modelId,
+            modelLabel: conversation.turns?.[0]?.modelLabel,
+            vendor: conversation.turns?.[0]?.vendor,
+            vendorLabel: conversation.turns?.[0]?.vendorLabel,
+            adapter: conversation.turns?.[0]?.adapter,
             scale: conversation.scale,
+            compareBatchId: conversation.turns?.[0]?.compareBatchId || conversation.turns?.[0]?.compareGroupId,
             compareGroupId: conversation.turns?.[0]?.compareGroupId,
             compareModelLabel: conversation.turns?.[0]?.compareModelLabel,
             compareModelIndex: conversation.turns?.[0]?.compareModelIndex,
@@ -813,6 +872,11 @@ export function normalizeConversation(
     resolutionAccess: latestTurn.resolutionAccess,
     quality: latestTurn.quality,
     providerPlatform: latestTurn.providerPlatform,
+    modelId: latestTurn.modelId,
+    modelLabel: latestTurn.modelLabel,
+    vendor: latestTurn.vendor,
+    vendorLabel: latestTurn.vendorLabel,
+    adapter: latestTurn.adapter,
     scale: latestTurn.scale,
     sourceImages: latestTurn.sourceImages,
     images: latestTurn.images,

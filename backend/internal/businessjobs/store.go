@@ -50,6 +50,7 @@ var (
 
 const jobSelectColumns = `id, user_id, conversation_id, generation_id, turn_id, platform,
 	provider_id, provider_name, model, prompt, size, quality,
+	compare_batch_id, compare_model_index, compare_model_count,
 	requested_count, actual_count, status, stage, upstream_sent, error_code,
 	error_message, queue_wait_ms, upstream_duration_ms,
 	persist_duration_ms, total_duration_ms, storage_bytes,
@@ -70,6 +71,9 @@ type Job struct {
 	Prompt             string `json:"prompt,omitempty"`
 	Size               string `json:"size,omitempty"`
 	Quality            string `json:"quality,omitempty"`
+	CompareBatchID     string `json:"compareBatchId,omitempty"`
+	CompareModelIndex  int    `json:"compareModelIndex"`
+	CompareModelCount  int    `json:"compareModelCount"`
 	RequestedCount     int    `json:"requestedCount"`
 	ActualCount        int    `json:"actualCount"`
 	Status             string `json:"status"`
@@ -119,19 +123,33 @@ type ReconcileResult struct {
 }
 
 type AdminListFilter struct {
-	UserID    string
-	Status    string
-	Platform  string
-	ErrorType string
-	From      string
-	To        string
-	Limit     int
-	Offset    int
+	UserID         string
+	Status         string
+	Platform       string
+	ErrorType      string
+	CompareBatchID string
+	From           string
+	To             string
+	Limit          int
+	Offset         int
 }
 
 type ActiveCounts struct {
 	Queued  int64 `json:"queued"`
 	Running int64 `json:"running"`
+}
+
+type CompareBatchSummary struct {
+	ID        string `json:"id"`
+	Total     int64  `json:"total"`
+	Queued    int64  `json:"queued"`
+	Running   int64  `json:"running"`
+	Succeeded int64  `json:"succeeded"`
+	Failed    int64  `json:"failed"`
+	Cancelled int64  `json:"cancelled"`
+	Reserved  int64  `json:"reserved"`
+	Refunded  int64  `json:"refunded"`
+	Status    string `json:"status"`
 }
 
 func (c ActiveCounts) Total() int64 {
@@ -215,6 +233,9 @@ func (s *Store) init() error {
 			prompt TEXT NOT NULL,
 			size TEXT NOT NULL,
 			quality TEXT NOT NULL,
+			compare_batch_id TEXT NOT NULL DEFAULT '',
+			compare_model_index INTEGER NOT NULL DEFAULT 0,
+			compare_model_count INTEGER NOT NULL DEFAULT 0,
 			requested_count INTEGER NOT NULL,
 			actual_count INTEGER NOT NULL,
 			status TEXT NOT NULL,
@@ -250,6 +271,8 @@ func (s *Store) init() error {
 			ON business_image_jobs(user_id, generation_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_business_image_jobs_status_updated
 			ON business_image_jobs(status, updated_at DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_business_image_jobs_compare_batch
+			ON business_image_jobs(compare_batch_id, updated_at DESC);`,
 		`CREATE INDEX IF NOT EXISTS idx_business_image_jobs_runnable
 			ON business_image_jobs(status, next_run_at, lease_until, created_at);`,
 	}
@@ -280,6 +303,15 @@ func (s *Store) init() error {
 		return err
 	}
 	if err := s.ensureColumn("business_image_jobs", "next_run_at", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("business_image_jobs", "compare_batch_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("business_image_jobs", "compare_model_index", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("business_image_jobs", "compare_model_count", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	return nil
@@ -415,6 +447,7 @@ func (s *Store) prepareSaveJob(job Job) (Job, error) {
 	job.Prompt = strings.TrimSpace(job.Prompt)
 	job.Size = strings.TrimSpace(job.Size)
 	job.Quality = strings.TrimSpace(job.Quality)
+	job.CompareBatchID = clean(job.CompareBatchID)
 	job.Status = normalizeStatus(job.Status)
 	job.Stage = strings.TrimSpace(job.Stage)
 	job.ClaimedBy = strings.TrimSpace(job.ClaimedBy)
@@ -442,6 +475,12 @@ func (s *Store) prepareSaveJob(job Job) (Job, error) {
 	}
 	if job.ActualCount < 0 {
 		job.ActualCount = 0
+	}
+	if job.CompareModelIndex < 0 {
+		job.CompareModelIndex = 0
+	}
+	if job.CompareModelCount < 0 {
+		job.CompareModelCount = 0
 	}
 	if job.Attempts < 0 {
 		job.Attempts = 0
@@ -533,13 +572,14 @@ func (s *Store) execSave(ctx context.Context, exec jobExecer, job Job) error {
 		s.rebind(`INSERT INTO business_image_jobs(
 			id, user_id, conversation_id, generation_id, turn_id, platform,
 			provider_id, provider_name, model, prompt, size, quality,
+			compare_batch_id, compare_model_index, compare_model_count,
 			requested_count, actual_count, status, stage, upstream_sent, error_code,
 			error_message, queue_wait_ms, upstream_duration_ms,
 			persist_duration_ms, total_duration_ms, storage_bytes,
 			credit_reserved, credit_refunded, payload_json, created_at, queued_at,
 			started_at, finished_at, updated_at, claimed_by, claimed_at, lease_until,
 			attempts, last_error, next_run_at
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			conversation_id = excluded.conversation_id,
 			generation_id = excluded.generation_id,
@@ -551,6 +591,9 @@ func (s *Store) execSave(ctx context.Context, exec jobExecer, job Job) error {
 			prompt = excluded.prompt,
 			size = excluded.size,
 			quality = excluded.quality,
+			compare_batch_id = excluded.compare_batch_id,
+			compare_model_index = excluded.compare_model_index,
+			compare_model_count = excluded.compare_model_count,
 			requested_count = excluded.requested_count,
 			actual_count = excluded.actual_count,
 			status = excluded.status,
@@ -604,6 +647,9 @@ func (s *Store) execSave(ctx context.Context, exec jobExecer, job Job) error {
 		job.Prompt,
 		job.Size,
 		job.Quality,
+		job.CompareBatchID,
+		job.CompareModelIndex,
+		job.CompareModelCount,
 		job.RequestedCount,
 		job.ActualCount,
 		job.Status,
@@ -738,6 +784,7 @@ func (s *Store) AdminList(ctx context.Context, filter AdminListFilter) ([]Job, i
 	filter.Status = normalizeOptionalStatus(filter.Status)
 	filter.Platform = strings.TrimSpace(filter.Platform)
 	filter.ErrorType = normalizeAdminErrorType(filter.ErrorType)
+	filter.CompareBatchID = clean(filter.CompareBatchID)
 	filter.From = strings.TrimSpace(filter.From)
 	filter.To = strings.TrimSpace(filter.To)
 	if filter.Limit <= 0 || filter.Limit > 200 {
@@ -779,6 +826,81 @@ func (s *Store) AdminList(ctx context.Context, filter AdminListFilter) ([]Job, i
 		return nil, 0, err
 	}
 	return items, total, nil
+}
+
+func (s *Store) CompareBatchSummaries(ctx context.Context, userID string, batchIDs []string) (map[string]CompareBatchSummary, error) {
+	ids := uniqueCleanIDs(batchIDs)
+	if len(ids) == 0 {
+		return map[string]CompareBatchSummary{}, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, 0, len(ids)+1)
+	for index, id := range ids {
+		placeholders[index] = "?"
+		args = append(args, id)
+	}
+	where := "compare_batch_id IN (" + strings.Join(placeholders, ",") + ")"
+	userID = strings.TrimSpace(userID)
+	if userID != "" {
+		where += " AND user_id = ?"
+		args = append(args, userID)
+	}
+	rows, err := s.db.QueryContext(
+		ctx,
+		s.rebind(`SELECT compare_batch_id, status, COUNT(*), COALESCE(SUM(credit_reserved), 0), COALESCE(SUM(credit_refunded), 0)
+		   FROM business_image_jobs
+		  WHERE `+where+`
+		  GROUP BY compare_batch_id, status`),
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	summaries := make(map[string]CompareBatchSummary, len(ids))
+	for rows.Next() {
+		var (
+			batchID  string
+			status   string
+			count    int64
+			reserved int64
+			refunded int64
+		)
+		if err := rows.Scan(&batchID, &status, &count, &reserved, &refunded); err != nil {
+			return nil, err
+		}
+		summary := summaries[batchID]
+		summary.ID = batchID
+		summary.Total += count
+		summary.Reserved += reserved
+		summary.Refunded += refunded
+		switch normalizeStatus(status) {
+		case StatusQueued:
+			summary.Queued += count
+		case StatusRunning:
+			summary.Running += count
+		case StatusSucceeded:
+			summary.Succeeded += count
+		case StatusFailed:
+			summary.Failed += count
+		case StatusCancelled, StatusCancelRequested:
+			summary.Cancelled += count
+		}
+		summaries[batchID] = summary
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for id, summary := range summaries {
+		summary.Status = compareBatchStatus(summary)
+		summaries[id] = summary
+	}
+	for _, id := range ids {
+		if _, ok := summaries[id]; !ok {
+			summaries[id] = CompareBatchSummary{ID: id, Status: ""}
+		}
+	}
+	return summaries, nil
 }
 
 func (s *Store) CountUserActive(ctx context.Context, userID string) (ActiveCounts, error) {
@@ -1153,6 +1275,10 @@ func adminListWhere(filter AdminListFilter) (string, []any) {
 	if filter.Platform != "" {
 		clauses = append(clauses, "platform = ?")
 		args = append(args, filter.Platform)
+	}
+	if filter.CompareBatchID != "" {
+		clauses = append(clauses, "compare_batch_id = ?")
+		args = append(args, filter.CompareBatchID)
 	}
 	if errorSQL, errorArgs := adminErrorTypeWhere(filter.ErrorType); errorSQL != "" {
 		clauses = append(clauses, errorSQL)
@@ -1543,6 +1669,9 @@ func scanJob(row rowScanner) (Job, error) {
 		&item.Prompt,
 		&item.Size,
 		&item.Quality,
+		&item.CompareBatchID,
+		&item.CompareModelIndex,
+		&item.CompareModelCount,
 		&item.RequestedCount,
 		&item.ActualCount,
 		&item.Status,
@@ -1601,6 +1730,25 @@ func upstreamStatus(sent bool) string {
 		return "sent"
 	}
 	return "pending"
+}
+
+func compareBatchStatus(summary CompareBatchSummary) string {
+	if summary.Total <= 0 {
+		return ""
+	}
+	if summary.Running > 0 {
+		return StatusRunning
+	}
+	if summary.Queued > 0 {
+		return StatusQueued
+	}
+	if summary.Failed > 0 {
+		return StatusFailed
+	}
+	if summary.Cancelled > 0 && summary.Succeeded == 0 {
+		return StatusCancelled
+	}
+	return StatusSucceeded
 }
 
 func boolToInt(value bool) int {
@@ -1747,6 +1895,23 @@ func isFinalStatus(status string) bool {
 
 func clean(value string) string {
 	return strings.TrimSpace(value)
+}
+
+func uniqueCleanIDs(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = clean(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func firstNonEmpty(values ...string) string {

@@ -24,6 +24,7 @@ import (
 	"imagestudio/internal/businesscredits"
 	"imagestudio/internal/businessimage"
 	"imagestudio/internal/businessjobs"
+	"imagestudio/internal/businessmodels"
 	"imagestudio/internal/businesspayments"
 	"imagestudio/internal/businessproviders"
 	"imagestudio/internal/businesssettings"
@@ -63,12 +64,20 @@ type imageProviderProxyConfig struct {
 }
 
 type providerImageGenerateMetadata struct {
-	ConversationID string
-	TurnID         string
-	JobID          string
-	Title          string
-	Platform       string
-	DispatchTags   []string
+	ConversationID    string
+	TurnID            string
+	JobID             string
+	Title             string
+	Platform          string
+	ModelID           string
+	ModelLabel        string
+	Vendor            string
+	VendorLabel       string
+	CreditCost        int64
+	CompareBatchID    string
+	CompareModelIndex int
+	CompareModelCount int
+	DispatchTags      []string
 }
 
 type providerImageSource struct {
@@ -305,6 +314,9 @@ func persistProviderConfigInPayload(payload map[string]any, providerCfg imagePro
 	if providerCfg.ProviderSource != "" {
 		payload["providerSource"] = providerCfg.ProviderSource
 	}
+	if providerCfg.Platform != "" {
+		payload["platform"] = providerCfg.Platform
+	}
 	if providerCfg.ProviderID != "" {
 		payload["providerId"] = providerCfg.ProviderID
 	}
@@ -336,6 +348,26 @@ func providerPayloadForConfig(payload map[string]any, providerCfg imageProviderP
 	nextPayload["model"] = providerImageRequestModel(nextPayload, providerCfg)
 	persistProviderConfigInPayload(nextPayload, providerCfg)
 	return nextPayload, buildProviderImageGeneratePayload(nextPayload)
+}
+
+func (s *Server) prepareProviderImageModelPayload(ctx context.Context, payload map[string]any) providerImageGenerateMetadata {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if item, ok := s.resolveBusinessImageModel(ctx, payload); ok {
+		applyBusinessImageModelPayload(payload, item)
+		return providerImageGenerateMetadataFromModel(payload, item)
+	}
+	return extractProviderImageGenerateMetadata(payload)
+}
+
+func providerImageCreditCost(settings businesssettings.Settings, metadata providerImageGenerateMetadata, platform string, count int) int64 {
+	fallbackUnitCost := businesssettings.CreditCostForPlatform(settings, platform, 1)
+	return businessmodels.CreditCostForModel(businessmodels.Model{
+		ID:         metadata.ModelID,
+		Platform:   platform,
+		CreditCost: metadata.CreditCost,
+	}, count, fallbackUnitCost)
 }
 
 func (s *Server) prepareProviderImagePayload(ctx context.Context, userID string, payload map[string]any) (map[string]any, providerResolvedEditInput, error) {
@@ -440,10 +472,10 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 		payload = map[string]any{}
 	}
 	payload = sanitizeClientProviderSelectionPayload(payload)
+	metadata := s.prepareProviderImageModelPayload(ctx, payload)
 	if startedAt.IsZero() {
 		startedAt = time.Now().UTC()
 	}
-	metadata := extractProviderImageGenerateMetadata(payload)
 	metadata = s.enrichProviderImageDispatchTags(ctx, userID, payload, metadata, false)
 	providerRequest := append([]string{metadata.Platform}, metadata.DispatchTags...)
 	providerCfg, err := s.imageProviderProxyConfig(providerRequest...)
@@ -462,6 +494,7 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 	}
 	payload["prompt"] = prompt
 	requestModel := providerImageRequestModel(payload, providerCfg)
+	providerCfg.Model = requestModel
 	payload["model"] = requestModel
 	persistProviderConfigInPayload(payload, providerCfg)
 	if normalizePositiveInt(payload["n"]) <= 0 {
@@ -489,25 +522,28 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 	}
 	generationID := firstNonEmpty(metadata.JobID, metadata.TurnID)
 	job := businessjobs.Job{
-		ID:             metadata.JobID,
-		UserID:         userID,
-		ConversationID: metadata.ConversationID,
-		GenerationID:   generationID,
-		TurnID:         metadata.TurnID,
-		Platform:       providerCfg.Platform,
-		ProviderID:     providerCfg.ProviderID,
-		ProviderName:   providerCfg.ProviderName,
-		Model:          requestModel,
-		Prompt:         prompt,
-		Size:           strings.TrimSpace(stringValue(payload["size"])),
-		Quality:        strings.TrimSpace(stringValue(payload["quality"])),
-		RequestedCount: requestedCount,
-		Status:         businessjobs.StatusQueued,
-		Stage:          "queued",
-		CreditReserved: businesssettings.CreditCostForPlatform(systemSettings, providerCfg.Platform, requestedCount),
-		PayloadJSON:    providerImagePayloadJSON(payload),
-		CreatedAt:      startedAt.Format(time.RFC3339Nano),
-		QueuedAt:       startedAt.Format(time.RFC3339Nano),
+		ID:                metadata.JobID,
+		UserID:            userID,
+		ConversationID:    metadata.ConversationID,
+		GenerationID:      generationID,
+		TurnID:            metadata.TurnID,
+		Platform:          providerCfg.Platform,
+		ProviderID:        providerCfg.ProviderID,
+		ProviderName:      providerCfg.ProviderName,
+		Model:             requestModel,
+		CompareBatchID:    metadata.CompareBatchID,
+		CompareModelIndex: metadata.CompareModelIndex,
+		CompareModelCount: metadata.CompareModelCount,
+		Prompt:            prompt,
+		Size:              strings.TrimSpace(stringValue(payload["size"])),
+		Quality:           strings.TrimSpace(stringValue(payload["quality"])),
+		RequestedCount:    requestedCount,
+		Status:            businessjobs.StatusQueued,
+		Stage:             "queued",
+		CreditReserved:    providerImageCreditCost(systemSettings, metadata, providerCfg.Platform, requestedCount),
+		PayloadJSON:       providerImagePayloadJSON(payload),
+		CreatedAt:         startedAt.Format(time.RFC3339Nano),
+		QueuedAt:          startedAt.Format(time.RFC3339Nano),
 	}
 	store, err := s.newBusinessJobStore()
 	if err != nil {
@@ -530,7 +566,7 @@ func (s *Server) recordFailedProviderImageSubmit(ctx context.Context, userID str
 	if payload == nil {
 		return
 	}
-	metadata := extractProviderImageGenerateMetadata(payload)
+	metadata := s.prepareProviderImageModelPayload(ctx, payload)
 	if strings.TrimSpace(metadata.ConversationID) == "" || strings.TrimSpace(metadata.TurnID) == "" {
 		return
 	}
@@ -541,6 +577,11 @@ func (s *Server) recordFailedProviderImageSubmit(ctx context.Context, userID str
 	providerCfg := imageProviderProxyConfig{
 		Platform: businessproviders.NormalizePlatform(metadata.Platform),
 		Model:    strings.TrimSpace(stringValue(payload["model"])),
+	}
+	if providerCfg.Platform == "" {
+		if item, ok := s.resolveBusinessImageModel(ctx, payload); ok {
+			providerCfg.Platform = item.Platform
+		}
 	}
 	message := "提交任务失败"
 	var submitErr *providerImageGenerateSubmitError
@@ -569,7 +610,13 @@ func (s *Server) saveFailedProviderImageSubmitJob(ctx context.Context, userID st
 	}
 	platform := businessproviders.NormalizePlatform(metadata.Platform)
 	if platform == "" {
-		platform = businessproviders.PlatformGPTImage
+		if item, ok := s.resolveBusinessImageModel(ctx, payload); ok {
+			applyBusinessImageModelPayload(payload, item)
+			platform = item.Platform
+			metadata = providerImageGenerateMetadataFromModel(payload, item)
+		} else {
+			platform = businessproviders.PlatformGPTImage
+		}
 	}
 	prompt := strings.TrimSpace(stringValue(payload["prompt"]))
 	requestedCount := normalizePositiveInt(payload["n"])
@@ -578,26 +625,29 @@ func (s *Server) saveFailedProviderImageSubmitJob(ctx context.Context, userID st
 	}
 	finishedAt := time.Now().UTC()
 	job := businessjobs.Job{
-		ID:              metadata.JobID,
-		UserID:          userID,
-		ConversationID:  metadata.ConversationID,
-		GenerationID:    firstNonEmpty(metadata.JobID, metadata.TurnID),
-		TurnID:          metadata.TurnID,
-		Platform:        platform,
-		Model:           strings.TrimSpace(stringValue(payload["model"])),
-		Prompt:          prompt,
-		Size:            strings.TrimSpace(stringValue(payload["size"])),
-		Quality:         strings.TrimSpace(stringValue(payload["quality"])),
-		RequestedCount:  requestedCount,
-		Status:          businessjobs.StatusFailed,
-		Stage:           "dispatch",
-		ErrorCode:       strings.TrimSpace(result.ErrorCode),
-		ErrorMessage:    strings.TrimSpace(result.ErrorMessage),
-		PayloadJSON:     providerImagePayloadJSON(payload),
-		CreatedAt:       startedAt.Format(time.RFC3339Nano),
-		QueuedAt:        startedAt.Format(time.RFC3339Nano),
-		FinishedAt:      finishedAt.Format(time.RFC3339Nano),
-		TotalDurationMS: finishedAt.Sub(startedAt).Milliseconds(),
+		ID:                metadata.JobID,
+		UserID:            userID,
+		ConversationID:    metadata.ConversationID,
+		GenerationID:      firstNonEmpty(metadata.JobID, metadata.TurnID),
+		TurnID:            metadata.TurnID,
+		Platform:          platform,
+		Model:             strings.TrimSpace(stringValue(payload["model"])),
+		CompareBatchID:    metadata.CompareBatchID,
+		CompareModelIndex: metadata.CompareModelIndex,
+		CompareModelCount: metadata.CompareModelCount,
+		Prompt:            prompt,
+		Size:              strings.TrimSpace(stringValue(payload["size"])),
+		Quality:           strings.TrimSpace(stringValue(payload["quality"])),
+		RequestedCount:    requestedCount,
+		Status:            businessjobs.StatusFailed,
+		Stage:             "dispatch",
+		ErrorCode:         strings.TrimSpace(result.ErrorCode),
+		ErrorMessage:      strings.TrimSpace(result.ErrorMessage),
+		PayloadJSON:       providerImagePayloadJSON(payload),
+		CreatedAt:         startedAt.Format(time.RFC3339Nano),
+		QueuedAt:          startedAt.Format(time.RFC3339Nano),
+		FinishedAt:        finishedAt.Format(time.RFC3339Nano),
+		TotalDurationMS:   finishedAt.Sub(startedAt).Milliseconds(),
 	}
 	store, err := s.newBusinessJobStore()
 	if err != nil {
@@ -652,6 +702,7 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	if payload == nil {
 		payload = map[string]any{}
 	}
+	metadata := s.prepareProviderImageModelPayload(ctx, payload)
 	tracker := businesstracker.Record{
 		ID:        businesstracker.NewRecordID(),
 		UserID:    userID,
@@ -670,24 +721,26 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		s.saveBusinessImageTracker(context.Background(), tracker)
 	}
 
-	metadata := extractProviderImageGenerateMetadata(payload)
 	metadata = s.enrichProviderImageDispatchTags(ctx, userID, payload, metadata, execution.TrustedPayload)
 	tracker.ConversationID = metadata.ConversationID
 	tracker.TurnID = metadata.TurnID
 	tracker.GenerationID = firstNonEmpty(metadata.JobID, metadata.TurnID)
 	tracker.Platform = businessproviders.NormalizePlatform(metadata.Platform)
 	job := businessjobs.Job{
-		ID:             firstNonEmpty(metadata.JobID, businessjobs.NewJobID()),
-		UserID:         userID,
-		ConversationID: metadata.ConversationID,
-		GenerationID:   firstNonEmpty(metadata.JobID, metadata.TurnID),
-		TurnID:         metadata.TurnID,
-		Platform:       tracker.Platform,
-		Status:         businessjobs.StatusQueued,
-		Stage:          "received",
-		PayloadJSON:    providerImagePayloadJSON(payload),
-		CreatedAt:      startedAt.Format(time.RFC3339Nano),
-		QueuedAt:       startedAt.Format(time.RFC3339Nano),
+		ID:                firstNonEmpty(metadata.JobID, businessjobs.NewJobID()),
+		UserID:            userID,
+		ConversationID:    metadata.ConversationID,
+		GenerationID:      firstNonEmpty(metadata.JobID, metadata.TurnID),
+		TurnID:            metadata.TurnID,
+		Platform:          tracker.Platform,
+		CompareBatchID:    metadata.CompareBatchID,
+		CompareModelIndex: metadata.CompareModelIndex,
+		CompareModelCount: metadata.CompareModelCount,
+		Status:            businessjobs.StatusQueued,
+		Stage:             "received",
+		PayloadJSON:       providerImagePayloadJSON(payload),
+		CreatedAt:         startedAt.Format(time.RFC3339Nano),
+		QueuedAt:          startedAt.Format(time.RFC3339Nano),
 	}
 	jobCtx, cancelJobContext := context.WithCancel(ctx)
 	unregisterJob := s.registerActiveBusinessImageJob(job.ID, cancelJobContext)
@@ -783,6 +836,7 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	}
 	payload["prompt"] = prompt
 	requestModel := providerImageRequestModel(payload, providerCfg)
+	providerCfg.Model = requestModel
 	payload["model"] = requestModel
 	persistProviderConfigInPayload(payload, providerCfg)
 	tracker.Model = requestModel
@@ -801,13 +855,13 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	if systemSettings.Generation.MaxCount > 0 && requestedCount > systemSettings.Generation.MaxCount {
 		tracker.RequestedCount = requestedCount
 		job.RequestedCount = requestedCount
-		job.CreditReserved = businesssettings.CreditCostForPlatform(systemSettings, providerCfg.Platform, requestedCount)
+		job.CreditReserved = providerImageCreditCost(systemSettings, metadata, providerCfg.Platform, requestedCount)
 		s.reportProviderPoolRelease(context.Background(), providerCfg)
 		finishJob(businessjobs.StatusFailed, "validation", "invalid_request", fmt.Sprintf("单次最多生成 %d 张图片", systemSettings.Generation.MaxCount))
 		finishTracker(businesstracker.StatusFailed, "validation", "invalid_request", fmt.Sprintf("单次最多生成 %d 张图片", systemSettings.Generation.MaxCount))
 		return providerImageGenerateError(http.StatusBadRequest, "invalid_request", fmt.Sprintf("单次最多生成 %d 张图片", systemSettings.Generation.MaxCount))
 	}
-	creditCost := businesssettings.CreditCostForPlatform(systemSettings, providerCfg.Platform, requestedCount)
+	creditCost := providerImageCreditCost(systemSettings, metadata, providerCfg.Platform, requestedCount)
 	generationID := firstNonEmpty(metadata.JobID, metadata.TurnID)
 	tracker.RequestedCount = requestedCount
 	tracker.CreditReserved = creditCost
@@ -1107,6 +1161,7 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 			job.ProviderName = providerCfg.ProviderName
 			job.Platform = providerCfg.Platform
 			requestModel = providerImageRequestModel(payload, providerCfg)
+			providerCfg.Model = requestModel
 			payload["model"] = requestModel
 			tracker.Model = requestModel
 			job.Model = requestModel
@@ -1161,6 +1216,8 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		if !poolFailureReported {
 			s.reportProviderPoolFailure(context.Background(), providerCfg, providerErr)
 		}
+		setProviderFailurePayloadMetadata(payload, providerErr)
+		job.PayloadJSON = providerImagePayloadJSON(payload)
 		refundCredits(creditCost)
 		job.CreditRefunded = refundedCredits
 		s.recordProviderImageGeneration(ctx, userID, metadata, providerPayload, providerErr.ResponseBody, "failed", errorMessage, startedAt)
@@ -1176,12 +1233,15 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	}
 	if actualCount <= 0 {
 		providerErr := providerGenerationError{
-			HTTPStatus:   http.StatusBadGateway,
-			Code:         "provider_empty_response",
-			Message:      "上游接口返回成功，但没有返回可用图片数据",
-			ResponseBody: body,
+			HTTPStatus:     http.StatusBadGateway,
+			UpstreamStatus: http.StatusOK,
+			Code:           "provider_empty_response",
+			Message:        "上游接口返回成功，但没有返回可用图片数据",
+			ResponseBody:   body,
 		}
 		s.reportProviderPoolFailure(context.Background(), providerCfg, providerErr)
+		setProviderFailurePayloadMetadata(payload, providerErr)
+		job.PayloadJSON = providerImagePayloadJSON(payload)
 		refundCredits(creditCost)
 		job.CreditRefunded = refundedCredits
 		s.recordProviderImageGeneration(ctx, userID, metadata, providerPayload, providerErr.ResponseBody, "failed", providerErr.Message, startedAt)
@@ -1190,14 +1250,14 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		return providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, providerErr.Message)
 	}
 	if actualCount < requestedCount && systemSettings.Billing.RefundPartialCount {
-		actualCost := businesssettings.CreditCostForPlatform(systemSettings, providerCfg.Platform, actualCount)
+		actualCost := providerImageCreditCost(systemSettings, metadata, providerCfg.Platform, actualCount)
 		refundCredits(creditCost - actualCost)
 	}
 	if actualCount > requestedCount {
 		billedCount := requestedCount
 		for billedCount < actualCount {
-			currentCost := businesssettings.CreditCostForPlatform(systemSettings, providerCfg.Platform, billedCount)
-			nextCost := businesssettings.CreditCostForPlatform(systemSettings, providerCfg.Platform, billedCount+1)
+			currentCost := providerImageCreditCost(systemSettings, metadata, providerCfg.Platform, billedCount)
+			nextCost := providerImageCreditCost(systemSettings, metadata, providerCfg.Platform, billedCount+1)
 			if err := reserveAdditionalCredits(nextCost - currentCost); err != nil {
 				if errors.Is(err, businesscredits.ErrInsufficientBalance) {
 					body = limitProviderImageResponseItems(body, billedCount)
@@ -1319,15 +1379,15 @@ func imageAdmissionErrorCode(err error) string {
 }
 
 func providerImageRequestModel(payload map[string]any, providerCfg imageProviderProxyConfig) string {
+	model := strings.TrimSpace(stringValue(payload["model"]))
+	if model != "" {
+		return model
+	}
 	if providerCfg.Provider == imageProviderGeminiBanana {
-		model := strings.TrimSpace(providerCfg.Model)
+		model = strings.TrimSpace(providerCfg.Model)
 		if model == "" {
 			return defaultGeminiBananaModel
 		}
-		return model
-	}
-	model := strings.TrimSpace(stringValue(payload["model"]))
-	if model != "" {
 		return model
 	}
 	model = strings.TrimSpace(providerCfg.Model)
@@ -1339,12 +1399,20 @@ func providerImageRequestModel(payload map[string]any, providerCfg imageProvider
 
 func extractProviderImageGenerateMetadata(payload map[string]any) providerImageGenerateMetadata {
 	return providerImageGenerateMetadata{
-		ConversationID: strings.TrimSpace(stringValue(payload["conversationId"])),
-		TurnID:         strings.TrimSpace(stringValue(payload["turnId"])),
-		JobID:          strings.TrimSpace(stringValue(payload["jobId"])),
-		Title:          strings.TrimSpace(stringValue(payload["title"])),
-		Platform:       strings.TrimSpace(stringValue(payload["platform"])),
-		DispatchTags:   extractProviderDispatchTags(payload),
+		ConversationID:    strings.TrimSpace(stringValue(payload["conversationId"])),
+		TurnID:            strings.TrimSpace(stringValue(payload["turnId"])),
+		JobID:             strings.TrimSpace(stringValue(payload["jobId"])),
+		Title:             strings.TrimSpace(stringValue(payload["title"])),
+		Platform:          strings.TrimSpace(stringValue(payload["platform"])),
+		ModelID:           strings.TrimSpace(stringValue(payload["modelId"])),
+		ModelLabel:        strings.TrimSpace(stringValue(payload["modelLabel"])),
+		Vendor:            strings.TrimSpace(stringValue(payload["vendor"])),
+		VendorLabel:       strings.TrimSpace(stringValue(payload["vendorLabel"])),
+		CreditCost:        normalizeNonNegativeInt64(payload["creditCost"]),
+		CompareBatchID:    strings.TrimSpace(firstNonEmpty(stringValue(payload["compareBatchId"]), stringValue(payload["compareGroupId"]))),
+		CompareModelIndex: normalizeOptionalNonNegativeInt(payload["compareModelIndex"]),
+		CompareModelCount: normalizeOptionalNonNegativeInt(payload["compareModelCount"]),
+		DispatchTags:      extractProviderDispatchTags(payload),
 	}
 }
 
@@ -1367,7 +1435,7 @@ func extractProviderDispatchTags(payload map[string]any) []string {
 			appendTag(raw)
 		}
 	}
-	for _, key := range []string{"mode", "quality", "size", "model"} {
+	for _, key := range []string{"mode", "quality", "size", "model", "modelId", "vendor", "adapter"} {
 		value := strings.TrimSpace(stringValue(payload[key]))
 		if value != "" {
 			appendTag(key + ":" + value)
@@ -1593,6 +1661,7 @@ func (s *Server) recordProviderImageGeneration(ctx context.Context, userID strin
 		result.StorageBytes = stats.StorageBytes
 	}
 	persistedResponse = injectProviderImageResponsePlatform(persistedResponse, metadata.Platform)
+	persistedResponse = injectProviderImageResponseModelMetadata(persistedResponse, metadata)
 	_, _ = store.UpsertConversation(ctx, businessimage.Conversation{
 		ID:        conversationID,
 		UserID:    userID,
@@ -1682,6 +1751,31 @@ func injectProviderImageResponsePlatform(responseBody []byte, platform string) [
 	return next
 }
 
+func injectProviderImageResponseModelMetadata(responseBody []byte, metadata providerImageGenerateMetadata) []byte {
+	if len(responseBody) == 0 {
+		responseBody = []byte(`{}`)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(responseBody, &payload); err != nil {
+		return responseBody
+	}
+	setString := func(key string, value string) {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			payload[key] = value
+		}
+	}
+	setString("modelId", metadata.ModelID)
+	setString("modelLabel", metadata.ModelLabel)
+	setString("vendor", metadata.Vendor)
+	setString("vendorLabel", metadata.VendorLabel)
+	next, err := json.Marshal(payload)
+	if err != nil {
+		return responseBody
+	}
+	return next
+}
+
 type providerGenerationError struct {
 	HTTPStatus     int
 	UpstreamStatus int
@@ -1707,6 +1801,18 @@ func providerGenerationErrorDetails(err error) providerGenerationError {
 		HTTPStatus: http.StatusBadGateway,
 		Code:       "provider_request_failed",
 		Message:    err.Error(),
+	}
+}
+
+func setProviderFailurePayloadMetadata(payload map[string]any, providerErr providerGenerationError) {
+	if payload == nil {
+		return
+	}
+	if code := strings.TrimSpace(providerErr.Code); code != "" {
+		payload["upstreamErrorCode"] = code
+	}
+	if providerErr.UpstreamStatus > 0 {
+		payload["upstreamStatusCode"] = providerErr.UpstreamStatus
 	}
 }
 
@@ -2373,7 +2479,7 @@ func (s *Server) imageProviderProxyConfig(requestedPlatform ...string) (imagePro
 	if platform == "" {
 		platform = businessproviders.PlatformGPTImage
 	}
-	if platform != businessproviders.PlatformGPTImage && platform != businessproviders.PlatformGeminiBanana {
+	if !businessproviders.IsSupportedPlatform(platform) {
 		return imageProviderProxyConfig{}, fmt.Errorf("unsupported provider platform %q", platform)
 	}
 	timeout := s.imageProviderRequestTimeout()
@@ -2413,7 +2519,7 @@ func (s *Server) imageProviderProxyFallbackConfig(platform string) (imageProvide
 	if platform == "" {
 		platform = businessproviders.PlatformGPTImage
 	}
-	if platform != businessproviders.PlatformGPTImage && platform != businessproviders.PlatformGeminiBanana {
+	if !businessproviders.IsSupportedPlatform(platform) {
 		return imageProviderProxyConfig{}, false, fmt.Errorf("unsupported provider platform %q", platform)
 	}
 	cfg, ok, err := s.imageProviderProxyConfigWithoutPool(platform, s.imageProviderRequestTimeout())
@@ -2435,6 +2541,8 @@ func (s *Server) imageProviderProxyConfigWithoutPool(platform string, timeout ti
 	model := strings.TrimSpace(firstNonEmpty(os.Getenv("IMAGE_MODEL"), defaultModelForProviderPlatform(platform)))
 	if platform == businessproviders.PlatformGPTImage {
 		provider = strings.ToLower(strings.TrimSpace(firstNonEmpty(os.Getenv("IMAGE_PROVIDER"), imageProviderOpenAICompatible)))
+	} else if mappedProvider := imageProviderAdapterForPlatform(platform); mappedProvider != "" {
+		provider = mappedProvider
 	} else {
 		provider = imageProviderGeminiBanana
 	}
@@ -2449,11 +2557,7 @@ func (s *Server) imageProviderProxyConfigWithoutPool(platform string, timeout ti
 		providerID = dbProvider.ID
 		providerName = dbProvider.Name
 		providerSource = imageProviderSourceLegacy
-		if platform == businessproviders.PlatformGeminiBanana {
-			provider = imageProviderGeminiBanana
-		} else {
-			provider = imageProviderOpenAICompatible
-		}
+		provider = firstNonEmpty(imageProviderAdapterForPlatform(platform), imageProviderOpenAICompatible)
 		usedDBProvider = true
 	}
 
@@ -2471,15 +2575,10 @@ func (s *Server) imageProviderProxyConfigWithoutPool(platform string, timeout ti
 		if apiAccessAPIKey == "" {
 			return imageProviderProxyConfig{}, false, fmt.Errorf("api_access.api_key is required when api_access.base_url is configured")
 		}
-		switch strings.ToLower(strings.TrimSpace(s.cfg.APIAccess.Platform)) {
-		case "", "gpt-image":
-			if platform == businessproviders.PlatformGPTImage {
-				provider = imageProviderOpenAICompatible
-			}
-		case "gemini-banana":
-			provider = imageProviderGeminiBanana
-		default:
-			return imageProviderProxyConfig{}, false, fmt.Errorf("unsupported api_access.platform %q", s.cfg.APIAccess.Platform)
+		if apiAccessPlatform != "" {
+			provider = firstNonEmpty(imageProviderAdapterForPlatform(apiAccessPlatform), provider)
+		} else if mappedProvider := imageProviderAdapterForPlatform(platform); mappedProvider != "" {
+			provider = mappedProvider
 		}
 		baseURL = apiAccessBaseURL
 		apiKey = apiAccessAPIKey
@@ -2543,10 +2642,7 @@ func (s *Server) defaultBusinessProviderPoolMember(platform string, dispatchTags
 	if apiKey == "" {
 		return imageProviderProxyConfig{}, false, fmt.Errorf("provider pool member apiKey is required")
 	}
-	provider := imageProviderOpenAICompatible
-	if platform == businessproviders.PlatformGeminiBanana {
-		provider = imageProviderGeminiBanana
-	}
+	provider := firstNonEmpty(imageProviderAdapterForPlatform(platform), imageProviderOpenAICompatible)
 	if err := store.MarkMemberAcquired(context.Background(), member.ID); err != nil {
 		return imageProviderProxyConfig{}, false, err
 	}
@@ -2721,10 +2817,7 @@ func (s *Server) imageProviderProxyConfigFromPoolMember(memberID string) (imageP
 	if apiKey == "" {
 		return imageProviderProxyConfig{}, fmt.Errorf("provider pool member apiKey is required")
 	}
-	provider := imageProviderOpenAICompatible
-	if platform == businessproviders.PlatformGeminiBanana {
-		provider = imageProviderGeminiBanana
-	}
+	provider := firstNonEmpty(imageProviderAdapterForPlatform(platform), imageProviderOpenAICompatible)
 	groupMatchMode := ""
 	groupTags := ""
 	if group, ok, err := store.GetGroup(context.Background(), member.GroupID); err == nil && ok {
@@ -2836,17 +2929,60 @@ func (s *Server) defaultBusinessAPIProvider(platform string) (businessproviders.
 }
 
 func defaultModelForProviderPlatform(platform string) string {
-	if businessproviders.NormalizePlatform(platform) == businessproviders.PlatformGeminiBanana {
+	switch businessproviders.NormalizePlatform(platform) {
+	case businessproviders.PlatformGeminiBanana:
 		return defaultGeminiBananaModel
+	case businessproviders.PlatformDoubao:
+		return "doubao-seedream-image"
+	case businessproviders.PlatformQwen:
+		return "qwen-image"
+	case businessproviders.PlatformBaidu:
+		return "baidu-image"
+	case businessproviders.PlatformZAI:
+		return "z-ai-image"
+	case businessproviders.PlatformTencent:
+		return "tencent-image"
+	case businessproviders.PlatformKling:
+		return "kling-image"
+	case businessproviders.PlatformGrok:
+		return "grok-image"
 	}
 	return cpaFixedImageModel
 }
 
 func normalizeProviderBaseURL(platform string, value string) string {
-	if businessproviders.NormalizePlatform(platform) == businessproviders.PlatformGeminiBanana {
+	switch businessproviders.NormalizePlatform(platform) {
+	case businessproviders.PlatformGeminiBanana:
 		return normalizeGeminiBananaBaseURL(value)
+	case businessproviders.PlatformGPTImage,
+		businessproviders.PlatformDoubao,
+		businessproviders.PlatformQwen,
+		businessproviders.PlatformBaidu,
+		businessproviders.PlatformZAI,
+		businessproviders.PlatformTencent,
+		businessproviders.PlatformKling,
+		businessproviders.PlatformGrok:
+		return normalizeOpenAICompatibleBaseURL(value)
 	}
 	return normalizeOpenAICompatibleBaseURL(value)
+}
+
+func imageProviderAdapterForPlatform(platform string) string {
+	switch businessproviders.NormalizePlatform(platform) {
+	case businessproviders.PlatformGeminiBanana:
+		return imageProviderGeminiBanana
+	case businessproviders.PlatformGPTImage,
+		businessproviders.PlatformDoubao,
+		businessproviders.PlatformQwen,
+		businessproviders.PlatformBaidu,
+		businessproviders.PlatformZAI,
+		businessproviders.PlatformTencent,
+		businessproviders.PlatformKling,
+		businessproviders.PlatformGrok:
+		return imageProviderOpenAICompatible
+	default:
+		return ""
+	}
 }
 
 func normalizeOpenAICompatibleBaseURL(value string) string {
@@ -2966,6 +3102,66 @@ func normalizePositiveInt(value any) int {
 	default:
 		return 0
 	}
+}
+
+func normalizeOptionalNonNegativeInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		if typed >= 0 {
+			return typed
+		}
+	case int64:
+		if typed >= 0 {
+			return int(typed)
+		}
+	case float64:
+		if typed >= 0 {
+			return int(typed)
+		}
+	case json.Number:
+		parsed, _ := typed.Int64()
+		if parsed >= 0 {
+			return int(parsed)
+		}
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return 0
+		}
+		parsed, _ := strconv.Atoi(trimmed)
+		if parsed >= 0 {
+			return parsed
+		}
+	}
+	return 0
+}
+
+func normalizeNonNegativeInt64(value any) int64 {
+	switch typed := value.(type) {
+	case int:
+		if typed > 0 {
+			return int64(typed)
+		}
+	case int64:
+		if typed > 0 {
+			return typed
+		}
+	case float64:
+		if typed > 0 {
+			return int64(typed)
+		}
+	case json.Number:
+		parsed, _ := typed.Int64()
+		if parsed > 0 {
+			return parsed
+		}
+	case string:
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		if parsed > 0 {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func normalizeEnvInt(key string, fallback int) int {

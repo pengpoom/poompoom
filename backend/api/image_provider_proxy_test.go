@@ -18,6 +18,7 @@ import (
 	"imagestudio/internal/businesscredits"
 	"imagestudio/internal/businessimage"
 	"imagestudio/internal/businessjobs"
+	"imagestudio/internal/businessmodels"
 	"imagestudio/internal/businesspayments"
 	"imagestudio/internal/businessproviders"
 	"imagestudio/internal/businesssettings"
@@ -1297,6 +1298,50 @@ func TestCreateQueuedProviderImageJobPersistsTaggedFallbackDispatchTrace(t *test
 	}
 }
 
+func TestBusinessImageJobViewExposesModelRouteAndFailureReason(t *testing.T) {
+	job := businessjobs.Job{
+		ID:           "job-failed-429",
+		UserID:       businessimage.DevUserID,
+		Platform:     businessproviders.PlatformGeminiBanana,
+		ProviderID:   "member-1",
+		ProviderName: "google-member",
+		Model:        "gemini-3.1-flash-image-preview",
+		Status:       businessjobs.StatusFailed,
+		Stage:        "upstream",
+		ErrorCode:    "provider_error",
+		ErrorMessage: "quota exceeded",
+		PayloadJSON: []byte(`{
+			"modelId":"google/gemini-3.1-flash-image-preview",
+			"modelLabel":"Gemini 3.1 Flash Image Preview",
+			"vendor":"google",
+			"vendorLabel":"Google",
+			"providerSource":"provider_pool",
+			"providerId":"member-1",
+			"providerName":"google-member",
+			"upstreamStatusCode":429,
+			"upstreamErrorCode":"provider_error"
+		}`),
+	}
+
+	view := businessImageJobViewFromJob(job, nil)
+
+	if view.ModelID != "google/gemini-3.1-flash-image-preview" || view.ModelLabel != "Gemini 3.1 Flash Image Preview" || view.VendorLabel != "Google" {
+		t.Fatalf("model view = %#v", view)
+	}
+	if view.UpstreamModel != "gemini-3.1-flash-image-preview" || view.UpstreamStatusCode != http.StatusTooManyRequests {
+		t.Fatalf("upstream view = model:%q status:%d", view.UpstreamModel, view.UpstreamStatusCode)
+	}
+	if view.ProviderSource != imageProviderSourcePool || view.ProviderMemberName != "google-member" {
+		t.Fatalf("provider view = source:%q member:%q", view.ProviderSource, view.ProviderMemberName)
+	}
+	if view.FailureReasonCode != "upstream_rate_limited" || !strings.Contains(view.FailureReasonMessage, "429") {
+		t.Fatalf("failure reason = %q/%q", view.FailureReasonCode, view.FailureReasonMessage)
+	}
+	if _, ok := view.Payload["upstreamStatusCode"]; ok {
+		t.Fatalf("public payload should hide upstreamStatusCode: %#v", view.Payload)
+	}
+}
+
 func TestProviderImageGenerateEnforcesProviderRunningCapacity(t *testing.T) {
 	upstreamCalls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1981,6 +2026,167 @@ func TestProviderImageGenerateProxiesGeminiBananaRequest(t *testing.T) {
 	}
 	if strings.Contains(string(generation.Response), "b64_json") {
 		t.Fatalf("generation response should persist image URL instead of b64_json: %s", generation.Response)
+	}
+}
+
+func TestProviderImageGenerateUsesCatalogGeminiModelAndCost(t *testing.T) {
+	var gotAPIKey string
+	var gotPath string
+	imageB64 := base64.StdEncoding.EncodeToString([]byte("gemini-31-image"))
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAPIKey = r.Header.Get("x-goog-api-key")
+		gotPath = r.URL.Path
+		writeJSON(w, http.StatusOK, map[string]any{
+			"candidates": []map[string]any{
+				{
+					"content": map[string]any{
+						"parts": []map[string]any{
+							{"text": "revised cat"},
+							{"inlineData": map[string]any{
+								"mimeType": "image/png",
+								"data":     imageB64,
+							}},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer upstream.Close()
+
+	ctx := context.Background()
+	cfg := newBusinessImageTestConfig(t)
+	cfg.Storage.ImageDir = "data/business-images"
+
+	modelStore, err := businessmodels.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open model store: %v", err)
+	}
+	defer modelStore.Close()
+	model, ok, err := modelStore.Get(ctx, "google/gemini-3.1-flash-image-preview")
+	if err != nil {
+		t.Fatalf("get catalog model: %v", err)
+	}
+	if !ok {
+		t.Fatal("catalog model not found")
+	}
+	originalModel := model
+	model.Enabled = true
+	model.CompareEnabled = true
+	model.CreditCost = 5
+	if _, err := modelStore.Update(ctx, model.ID, businessImageModelMutationInput(model)); err != nil {
+		t.Fatalf("update catalog model: %v", err)
+	}
+	defer func() {
+		if _, err := modelStore.Update(context.Background(), originalModel.ID, businessImageModelMutationInput(originalModel)); err != nil {
+			t.Errorf("restore catalog model: %v", err)
+		}
+	}()
+
+	providerStore, err := businessproviders.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open provider store: %v", err)
+	}
+	_, err = providerStore.Create(ctx, businessproviders.MutationInput{
+		Name:         "banana",
+		Platform:     businessproviders.PlatformGeminiBanana,
+		BaseURL:      upstream.URL,
+		APIKey:       "banana-key",
+		DefaultModel: "gemini-2.5-flash-image",
+		Enabled:      true,
+		IsDefault:    true,
+	})
+	_ = providerStore.Close()
+	if err != nil {
+		t.Fatalf("create gemini provider: %v", err)
+	}
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 10)
+
+	server := NewServer(cfg, nil, nil)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/image/generate",
+		strings.NewReader(`{"prompt":"cat","modelId":"google/gemini-3.1-flash-image-preview","model":"gemini-3.1-flash-image-preview","platform":"gemini-banana","size":"1248x1248","conversationId":"conv-gemini-31","turnId":"turn-gemini-31","jobId":"job-gemini-31"}`),
+	)
+	rec := httptest.NewRecorder()
+
+	server.handleProviderImageGenerate(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if gotAPIKey != "banana-key" {
+		t.Fatalf("x-goog-api-key = %q, want banana-key", gotAPIKey)
+	}
+	if gotPath != "/v1beta/models/gemini-3.1-flash-image-preview:generateContent" {
+		t.Fatalf("path = %q", gotPath)
+	}
+
+	jobStore, err := businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open job store: %v", err)
+	}
+	defer jobStore.Close()
+	job, ok, err := jobStore.Get(ctx, "job-gemini-31", businessimage.DevUserID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if !ok {
+		t.Fatal("job not found")
+	}
+	if job.Model != "gemini-3.1-flash-image-preview" {
+		t.Fatalf("job model = %q", job.Model)
+	}
+	if job.CreditReserved != 5 || job.CreditRefunded != 0 {
+		t.Fatalf("job credit = reserved:%d refunded:%d, want reserved 5 refunded 0", job.CreditReserved, job.CreditRefunded)
+	}
+
+	creditStore, err := businesscredits.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open credit store: %v", err)
+	}
+	defer creditStore.Close()
+	totals, err := creditStore.GenerationTotals(ctx, businessimage.DevUserID, "job-gemini-31")
+	if err != nil {
+		t.Fatalf("credit totals: %v", err)
+	}
+	if totals.Reserved != 5 || totals.Refunded != 0 {
+		t.Fatalf("credit totals = %#v, want reserved 5 refunded 0", totals)
+	}
+	summary, err := creditStore.Summary(ctx, businessimage.DevUserID)
+	if err != nil {
+		t.Fatalf("credit summary: %v", err)
+	}
+	if summary.Balance != 5 || summary.Spent != 5 {
+		t.Fatalf("credit summary = %#v, want balance 5 spent 5", summary)
+	}
+
+	imageStore, err := businessimage.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open business image store: %v", err)
+	}
+	defer imageStore.Close()
+	generations, err := imageStore.ListGenerations(ctx, "conv-gemini-31", 10)
+	if err != nil {
+		t.Fatalf("list generations: %v", err)
+	}
+	if len(generations) != 1 {
+		t.Fatalf("generations len = %d, want 1", len(generations))
+	}
+	generation := generations[0]
+	if generation.Model != "gemini-3.1-flash-image-preview" {
+		t.Fatalf("generation model = %q", generation.Model)
+	}
+	response := string(generation.Response)
+	for _, want := range []string{
+		`"platform":"gemini-banana"`,
+		`"modelId":"google/gemini-3.1-flash-image-preview"`,
+		`"modelLabel":"Gemini 3.1 Flash Image Preview"`,
+		`"vendorLabel":"Google"`,
+	} {
+		if !strings.Contains(response, want) {
+			t.Fatalf("generation response missing %s: %s", want, response)
+		}
 	}
 }
 
@@ -3448,6 +3654,25 @@ func seedBusinessCredit(t *testing.T, cfg *config.Config, userID string, balance
 	}
 }
 
+func businessImageModelMutationInput(item businessmodels.Model) businessmodels.MutationInput {
+	return businessmodels.MutationInput{
+		ID:             item.ID,
+		Vendor:         item.Vendor,
+		VendorLabel:    item.VendorLabel,
+		DisplayName:    item.DisplayName,
+		Adapter:        item.Adapter,
+		Platform:       item.Platform,
+		UpstreamModel:  item.UpstreamModel,
+		Enabled:        item.Enabled,
+		Preview:        item.Preview,
+		CompareEnabled: item.CompareEnabled,
+		Capabilities:   item.Capabilities,
+		CreditCost:     item.CreditCost,
+		IsDefault:      item.IsDefault,
+		SortOrder:      item.SortOrder,
+	}
+}
+
 func seedBusinessSubscription(t *testing.T, cfg *config.Config, userID string, credits int64) {
 	t.Helper()
 	authStore, err := businessauth.NewStore(cfg)
@@ -3607,6 +3832,17 @@ func reportHasBrokenAsset(report businessStorageReport, fileName string) bool {
 		}
 	}
 	return false
+}
+
+func TestProviderImageRequestModelPrefersPayloadModelForGeminiBanana(t *testing.T) {
+	payload := map[string]any{"model": "gemini-3.1-flash-image-preview"}
+	cfg := imageProviderProxyConfig{
+		Provider: imageProviderGeminiBanana,
+		Model:    "gemini-2.5-flash-image",
+	}
+	if got := providerImageRequestModel(payload, cfg); got != "gemini-3.1-flash-image-preview" {
+		t.Fatalf("model = %q, want gemini-3.1-flash-image-preview", got)
+	}
 }
 
 func loginTestToken(t *testing.T, server *Server, username, password string) string {

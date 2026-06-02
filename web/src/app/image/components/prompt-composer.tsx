@@ -17,8 +17,8 @@ import { ArrowUp, Brain, Brush, Check, ChevronDown, Columns3, Cpu, Mic2, SquareP
 
 import { ChipSelect } from "@/components/chip-select";
 import { HtmlImage as Image } from "@/components/html-image";
-import type { APIAccessPlatform, ImageQuality } from "@/lib/api";
-import type { CompareModelSelection } from "../hooks/use-image-submit";
+import type { BusinessImageModel, ImageQuality } from "@/lib/api";
+import type { ImageModelSelection } from "../hooks/use-image-submit";
 import type { ImageMode, StoredSourceImage } from "@/store/image-conversations";
 import { cn } from "@/lib/utils";
 import { buildSourceImageUrl } from "../view-utils";
@@ -32,14 +32,14 @@ type PromptComposerProps = {
   imageResolutionTierLabel: string;
   imageResolutionTierOptions: Array<{ label: string; value: string; disabled?: boolean }>;
   imageSizeHint: ReactNode;
-  providerPlatform: APIAccessPlatform;
-  providerPlatformOptions: Array<{ label: string; value: APIAccessPlatform; disabled?: boolean }>;
+  selectedModelId: string;
+  modelOptions: BusinessImageModel[];
   imageQuality: ImageQuality;
   imageQualityOptions: Array<{ label: string; value: ImageQuality; description: string }>;
   imageQualityDisabled: boolean;
   imageQualityDisabledReason: string;
   compareEnabled: boolean;
-  compareModelOptions: CompareModelSelection[];
+  compareModelOptions: ImageModelSelection[];
   selectedCompareModelIds: string[];
   sourceImages: StoredSourceImage[];
   imagePrompt: string;
@@ -49,7 +49,7 @@ type PromptComposerProps = {
   onModeChange: (mode: ImageMode) => void;
   onImageAspectRatioChange: (value: string) => void;
   onImageResolutionTierChange: (value: string) => void;
-  onProviderPlatformChange: (value: APIAccessPlatform) => void;
+  onModelChange: (value: string) => void;
   onImageQualityChange: (value: string) => void;
   onCompareEnabledChange: (value: boolean) => void;
   onCompareModelToggle: (id: string) => void;
@@ -290,8 +290,8 @@ export function PromptComposer({
   imageResolutionTierLabel,
   imageResolutionTierOptions,
   imageSizeHint,
-  providerPlatform,
-  providerPlatformOptions,
+  selectedModelId,
+  modelOptions,
   imageQuality,
   imageQualityOptions,
   imageQualityDisabled,
@@ -307,7 +307,7 @@ export function PromptComposer({
   onModeChange,
   onImageAspectRatioChange,
   onImageResolutionTierChange,
-  onProviderPlatformChange,
+  onModelChange,
   onImageQualityChange,
   onCompareEnabledChange,
   onCompareModelToggle,
@@ -324,7 +324,10 @@ export function PromptComposer({
   const imageQualityLabel = imageQualityOptions.find((item) => item.value === imageQuality)?.label ?? imageQuality;
   const imageQualityPrefix = mode === "edit" ? "输出质量" : "清晰度";
   const modeLabel = modeOptions.find((item) => item.value === mode)?.label ?? "模式";
-  const providerLabel = providerPlatformOptions.find((item) => item.value === providerPlatform)?.label ?? providerPlatform;
+  const selectedModel = modelOptions.find((item) => item.id === selectedModelId) ?? modelOptions[0];
+  const modelLabel = selectedModel
+    ? selectedModel.displayName
+    : "选择模型";
   const hasComposerContent = imagePrompt.trim().length > 0 || sourceImages.length > 0;
   const shouldFocusAfterExpandRef = useRef(false);
   const [isDesktopComposer, setIsDesktopComposer] = useState(() => {
@@ -514,7 +517,7 @@ export function PromptComposer({
 
         <div className={cn("mt-3", inlinePlacement || showMobileExpandedSections ? "block" : "hidden md:block")}>
           <div className="flex items-end justify-between gap-3">
-            <div className="hide-scrollbar flex min-w-0 flex-1 items-center gap-2 overflow-x-auto pb-0.5">
+            <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden pb-0.5">
               <button
                 type="button"
                 className="app-btn"
@@ -532,18 +535,26 @@ export function PromptComposer({
                 value={mode}
                 options={modeOptions.map((item) => ({ value: item.value, label: item.label, description: item.description }))}
                 onChange={(value) => onModeChange(value)}
-                triggerClassName={cn(controlButtonClass, "min-w-[92px] justify-center")}
+                triggerClassName={cn(controlButtonClass, "w-[96px] shrink-0 justify-center px-2")}
                 triggerIcon={<SparkModeIcon mode={mode} />}
                 triggerLabel={modeLabel}
               />
 
-              <ChipSelect<APIAccessPlatform>
-                value={providerPlatform}
-                options={providerPlatformOptions.map((item) => ({ value: item.value, label: item.label, disabled: item.disabled }))}
-                onChange={(value) => onProviderPlatformChange(value)}
-                triggerClassName={cn(controlButtonClass, "min-w-[156px]", compareEnabled && mode === "generate" && "is-disabled")}
+              <ChipSelect<string>
+                value={selectedModelId}
+                options={modelOptions.map((item) => ({
+                  value: item.id,
+                  label: `${item.displayName}${item.preview ? " · Preview" : ""}`,
+                  disabled: !item.enabled,
+                }))}
+                onChange={(value) => onModelChange(value)}
+                triggerClassName={cn(
+                  controlButtonClass,
+                  "w-[clamp(160px,20vw,260px)] shrink",
+                  compareEnabled && mode === "generate" && "is-disabled",
+                )}
                 triggerIcon={<Cpu className="size-4" />}
-                triggerLabel={providerLabel}
+                triggerLabel={modelLabel}
                 disabled={compareEnabled && mode === "generate"}
                 title={compareEnabled && mode === "generate" ? "多模型对比将使用下方选中的模型" : undefined}
               />
@@ -553,8 +564,9 @@ export function PromptComposer({
                   type="button"
                   className={cn(
                     controlButtonClass,
-                    "min-w-[146px] justify-center",
-                    compareEnabled && "border-[var(--app-accent-cyan)] text-[var(--app-text-primary)]",
+                    "w-[132px] shrink-0 justify-center px-2",
+                    compareEnabled &&
+                      "border-[var(--app-accent-cyan)] bg-[rgba(91,214,255,0.18)] text-[var(--app-text-primary)] shadow-[0_0_0_1px_rgba(91,214,255,0.34),inset_0_1px_0_rgba(255,255,255,0.08)]",
                   )}
                   onClick={() => onCompareEnabledChange(!compareEnabled)}
                   aria-pressed={compareEnabled}
@@ -562,9 +574,11 @@ export function PromptComposer({
                 >
                   <Columns3 className="size-4" />
                   <span>模型对比</span>
-                  <span className="rounded-full bg-[var(--app-bg-surface-hover)] px-1.5 text-[11px] font-bold text-[var(--app-text-muted)]">
-                    {selectedCompareCount}
-                  </span>
+                  {compareEnabled ? (
+                    <span className="rounded-full bg-[var(--app-accent-cyan)] px-1.5 text-[11px] font-bold text-black">
+                      {selectedCompareCount}
+                    </span>
+                  ) : null}
                 </button>
               ) : null}
 
@@ -574,7 +588,7 @@ export function PromptComposer({
                 resolutionTier={imageResolutionTier}
                 resolutionTierLabel={imageResolutionTierLabel}
                 resolutionTierOptions={imageResolutionTierOptions}
-                triggerClassName={controlButtonClass}
+                triggerClassName={cn(controlButtonClass, "w-[136px] shrink-0 px-2")}
                 onAspectRatioChange={onImageAspectRatioChange}
                 onResolutionTierChange={onImageResolutionTierChange}
               />
@@ -587,7 +601,7 @@ export function PromptComposer({
                   description: item.description,
                 }))}
                 onChange={onImageQualityChange}
-                triggerClassName={cn(controlButtonClass, "min-w-[150px]", imageQualityDisabled && "is-disabled")}
+                triggerClassName={cn(controlButtonClass, "w-[152px] shrink-0 px-2", imageQualityDisabled && "is-disabled")}
                 triggerIcon={<Mic2 className="size-4" />}
                 triggerLabel={`${imageQualityPrefix} ${imageQualityLabel}`}
                 disabled={imageQualityDisabled}
@@ -620,11 +634,12 @@ export function PromptComposer({
                     type="button"
                     className={cn(
                       "inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg-surface)] px-3 text-[12px] font-bold text-[var(--app-text-secondary)] transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)]",
-                      active && "border-[var(--app-accent-cyan)] text-[var(--app-text-primary)]",
+                      active &&
+                        "border-[var(--app-accent-cyan)] bg-[rgba(91,214,255,0.12)] text-[var(--app-text-primary)] shadow-[0_0_0_1px_rgba(91,214,255,0.22)]",
                     )}
                     onClick={() => onCompareModelToggle(item.id)}
                     aria-pressed={active}
-                    title={`${item.platform} · ${item.model}`}
+                    title={`${item.vendorLabel} · ${item.model}`}
                   >
                     <span
                       className={cn(
@@ -635,7 +650,7 @@ export function PromptComposer({
                     >
                       {active ? <Check className="size-3" /> : null}
                     </span>
-                    {item.label}
+                    <span className="max-w-[220px] truncate">{item.vendorLabel} · {item.label}</span>
                   </button>
                 );
               })}

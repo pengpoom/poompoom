@@ -16,6 +16,11 @@ export type EditorTarget = {
   sourceDataUrl: string;
   model?: ImageModel;
   providerPlatform?: APIAccessPlatform;
+  modelId?: string;
+  modelLabel?: string;
+  vendor?: string;
+  vendorLabel?: string;
+  adapter?: string;
 };
 
 type UseImageSourceInputsOptions = {
@@ -85,7 +90,15 @@ export function useImageSourceInputs({
     setSourceImages((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
-  const openSelectionEditor = useCallback((conversationId: string, turn: { model?: ImageModel; providerPlatform?: APIAccessPlatform }, image: StoredImage, imageName: string) => {
+  const openSelectionEditor = useCallback((conversationId: string, turn: {
+    model?: ImageModel;
+    providerPlatform?: APIAccessPlatform;
+    modelId?: string;
+    modelLabel?: string;
+    vendor?: string;
+    vendorLabel?: string;
+    adapter?: string;
+  }, image: StoredImage, imageName: string) => {
     const dataUrl = buildImageDataUrl(image);
     if (!dataUrl) {
       toast.error("当前图片没有可复用的数据");
@@ -98,6 +111,11 @@ export function useImageSourceInputs({
       sourceDataUrl: dataUrl,
       model: turn.model,
       providerPlatform: turn.providerPlatform,
+      modelId: turn.modelId,
+      modelLabel: turn.modelLabel,
+      vendor: turn.vendor,
+      vendorLabel: turn.vendorLabel,
+      adapter: turn.adapter,
     });
   }, []);
 

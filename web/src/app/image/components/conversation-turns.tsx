@@ -15,7 +15,6 @@ import { toast } from "sonner";
 
 import { HtmlImage as Image } from "@/components/html-image";
 import { cn } from "@/lib/utils";
-import type { APIAccessPlatform, ImageModel } from "@/lib/api";
 import type {
   ImageConversationTurn,
   ImageMode,
@@ -59,8 +58,8 @@ type ImageDimensions = {
   height: number;
 };
 
-const resultFrameMaxSide = 350;
-const resultFrameMinWidth = 180;
+const resultFrameMaxSide = 300;
+const resultFrameMinWidth = 168;
 const commonAspectRatios = [
   { label: "1:1", ratio: 1 },
   { label: "2:3", ratio: 2 / 3 },
@@ -242,7 +241,7 @@ type ConversationTurnsProps = {
   formatProcessingDuration: (seconds: number) => string;
   onOpenSelectionEditor: (
     conversationId: string,
-    turn: { model?: ImageModel; providerPlatform?: APIAccessPlatform },
+    turn: ImageConversationTurn,
     image: StoredImage,
     imageName: string,
   ) => void;
@@ -260,14 +259,14 @@ const metaTextClass =
 const metaMutedClass = "text-[var(--app-text-muted)]";
 
 const iconButtonClass =
-  "inline-flex size-9 items-center justify-center rounded-lg border border-white/15 bg-black/55 text-white shadow-[0_8px_24px_rgba(0,0,0,0.24)] backdrop-blur transition hover:bg-black/70";
+  "inline-flex size-9 items-center justify-center rounded-lg border border-white/15 bg-black/55 text-white shadow-[0_8px_24px_rgba(0,0,0,0.24)] backdrop-blur transition hover:bg-black/70 disabled:cursor-not-allowed disabled:opacity-55";
 
 function buildTurnRenderGroups(turns: ImageConversationTurn[]): TurnRenderGroup[] {
   const groups: TurnRenderGroup[] = [];
   const compareGroupIndexes = new Map<string, number>();
 
   for (const turn of turns) {
-    const compareGroupId = String(turn.compareGroupId || "").trim();
+    const compareGroupId = String(turn.compareBatchId || turn.compareGroupId || "").trim();
     if (!compareGroupId) {
       groups.push({
         id: turn.id,
@@ -320,16 +319,19 @@ function isTurnProcessing(
 }
 
 function compareGridClass(count: number) {
-  if (count >= 4) {
-    return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-3";
-  }
   if (count === 3) {
-    return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-3";
+    return "grid-cols-[repeat(3,300px)]";
   }
   if (count === 2) {
-    return "grid-cols-1 sm:grid-cols-2";
+    return "grid-cols-[repeat(2,300px)]";
   }
-  return "grid-cols-[minmax(180px,350px)]";
+  if (count === 4) {
+    return "grid-cols-1 sm:grid-cols-[repeat(2,300px)]";
+  }
+  if (count >= 5) {
+    return "grid-cols-1 sm:grid-cols-[repeat(2,300px)] xl:grid-cols-[repeat(3,300px)]";
+  }
+  return "grid-cols-[300px]";
 }
 
 function compareGroupMetaItems(
@@ -353,6 +355,29 @@ function compareGroupMetaItems(
   return items.filter(Boolean);
 }
 
+function compareBatchStatusText(turns: ImageConversationTurn[]) {
+  const total = turns.length;
+  const succeeded = turns.filter((turn) => turn.status === "success").length;
+  const failed = turns.filter((turn) => turn.status === "error").length;
+  const running = turns.filter((turn) => turn.status === "running" || turn.status === "generating").length;
+  const queued = turns.filter((turn) => turn.status === "queued").length;
+  const cancelled = turns.filter((turn) => turn.status === "cancelled").length;
+  const parts = [`${succeeded}/${total} 完成`];
+  if (failed > 0) {
+    parts.push(`${failed} 失败`);
+  }
+  if (running > 0) {
+    parts.push(`${running} 运行中`);
+  }
+  if (queued > 0) {
+    parts.push(`${queued} 排队中`);
+  }
+  if (cancelled > 0) {
+    parts.push(`${cancelled} 已取消`);
+  }
+  return parts.join(" · ");
+}
+
 type GeneratedImageCardProps = {
   conversationId: string;
   turn: ImageConversationTurn;
@@ -364,7 +389,7 @@ type GeneratedImageCardProps = {
   formatConversationTime: (value: string) => string;
   onOpenSelectionEditor: (
     conversationId: string,
-    turn: { model?: ImageModel; providerPlatform?: APIAccessPlatform },
+    turn: ImageConversationTurn,
     image: StoredImage,
     imageName: string,
   ) => void;
@@ -396,6 +421,30 @@ function GeneratedImageCard({
   const cancelRequested = Boolean(turn.cancelRequested);
   const showQueuedState = turn.status === "queued";
   const showRunningState = turn.status === "running" || turn.status === "generating";
+  const showSuccessActions = image.status === "success" && imageDataUrl && !imageLoadFailed;
+  const showRetryAction = image.status === "error" || (image.status === "success" && imageLoadFailed);
+  const showCancelAction = (showQueuedState || showRunningState) && Boolean(turn.jobId);
+  const modelLabel = turn.compareModelLabel || turn.modelLabel || turn.model || turn.providerPlatform;
+  const statusLabel = image.status === "success"
+    ? imageLoadFailed
+      ? "图片不可用"
+      : "完成"
+    : image.status === "error"
+      ? "失败"
+      : turn.status === "cancelled"
+        ? "已取消"
+        : cancelRequested
+          ? "取消中"
+          : showQueuedState
+            ? "排队中"
+            : "生成中";
+  const statusClass = image.status === "success" && !imageLoadFailed
+    ? "text-emerald-300"
+    : image.status === "error" || imageLoadFailed
+      ? "text-rose-300"
+      : cancelRequested || turn.status === "cancelled"
+        ? "text-amber-300"
+        : "text-[var(--app-text-muted)]";
   const frameMetrics = resultFrameMetrics(actualDimensions ?? parseSizeDimensions(turn.size));
   const aspectRatioLabel = formatAspectRatioLabel(actualDimensions, turn.size);
   const frameStyle = {
@@ -411,6 +460,7 @@ function GeneratedImageCard({
   return (
     <div
       data-generated-image-card
+      data-job-id={image.jobId || turn.jobId || undefined}
       className="w-full min-w-0 max-w-full"
       style={{ maxWidth: frameMetrics.style.maxWidth }}
     >
@@ -443,70 +493,24 @@ function GeneratedImageCard({
                 className="block h-full w-full cursor-zoom-in object-contain"
               />
             </Zoom>
-            <div className="absolute bottom-3 right-3 z-10 flex items-center gap-2">
-              <button
-                type="button"
-                className={iconButtonClass}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void copyImageToClipboard(imageDataUrl);
-                }}
-                title="复制"
-                aria-label="复制"
-              >
-                <Copy className="size-4" />
-              </button>
-              <a
-                href={imageDataUrl}
-                download={downloadName}
-                className={iconButtonClass}
-                onClick={(event) => event.stopPropagation()}
-                title="下载"
-                aria-label="下载"
-              >
-                <Download className="size-4" />
-              </a>
-              <button
-                type="button"
-                className={iconButtonClass}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onOpenSelectionEditor(conversationId, turn, image, downloadName);
-                }}
-                title="编辑"
-                aria-label="编辑"
-              >
-                <Brush className="size-4" />
-              </button>
-            </div>
           </>
         ) : image.status === "success" && imageLoadFailed ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--app-img-fail-bg)] px-6 py-8 text-center text-[var(--app-img-fail-fg)]">
+          <div className="flex h-full flex-col items-center justify-center gap-3 bg-[var(--app-img-fail-bg)] px-6 pb-16 pt-8 text-center text-[var(--app-img-fail-fg)]">
             <div className="rounded-full bg-[var(--app-img-fail-ic-bg)] p-3">
               <X className="size-5" />
             </div>
             <p className="text-sm font-semibold leading-7">图片地址暂时不可用，请稍后刷新或重试。</p>
-            <button
-              type="button"
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
-              style={{ borderColor: "var(--app-img-fail-btn-bd)", color: "var(--app-img-fail-btn-fg)" }}
-              onClick={() => void onRetryTurn(conversationId, turn, index)}
-              disabled={turnProcessing}
-            >
-              <RotateCcw className="size-3.5" />
-              重试
-            </button>
           </div>
         ) : turn.status === "cancelled" ? (
           <div className="flex h-full items-center justify-center px-6 py-8 text-center text-sm font-semibold leading-7 text-[var(--app-text-muted)]">
             本次生成已取消
           </div>
         ) : image.status === "error" ? (
-          <div className="flex h-full items-center justify-center whitespace-pre-line bg-[var(--app-img-fail-bg)] px-6 py-8 text-center text-sm font-semibold leading-7 text-[var(--app-img-fail-fg)]">
+          <div className="flex h-full items-center justify-center whitespace-pre-line bg-[var(--app-img-fail-bg)] px-6 pb-16 pt-8 text-center text-sm font-semibold leading-7 text-[var(--app-img-fail-fg)]">
             {formatImageErrorMessage(image.error || "处理失败")}
           </div>
         ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-8 text-center text-[var(--app-text-muted)]">
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 pb-16 pt-8 text-center text-[var(--app-text-muted)]">
             {cancelRequested ? (
               <div className="rounded-full bg-rose-500/10 p-3 text-rose-300">
                 <X className="size-5" />
@@ -528,78 +532,134 @@ function GeneratedImageCard({
             </p>
           </div>
         )}
+        {showSuccessActions || showRetryAction || showCancelAction ? (
+          <div className="absolute bottom-3 right-3 z-10 flex items-center gap-2">
+            {showSuccessActions ? (
+              <>
+                <button
+                  type="button"
+                  className={iconButtonClass}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void copyImageToClipboard(imageDataUrl);
+                  }}
+                  title="复制"
+                  aria-label="复制"
+                >
+                  <Copy className="size-4" />
+                </button>
+                <a
+                  href={imageDataUrl}
+                  download={downloadName}
+                  className={iconButtonClass}
+                  onClick={(event) => event.stopPropagation()}
+                  title="下载"
+                  aria-label="下载"
+                >
+                  <Download className="size-4" />
+                </a>
+                <button
+                  type="button"
+                  className={iconButtonClass}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenSelectionEditor(conversationId, turn, image, downloadName);
+                  }}
+                  title="编辑"
+                  aria-label="编辑"
+                >
+                  <Brush className="size-4" />
+                </button>
+              </>
+            ) : null}
+            {showRetryAction ? (
+              <button
+                type="button"
+                className={iconButtonClass}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void onRetryTurn(conversationId, turn, index);
+                }}
+                disabled={turnProcessing}
+                title={turnProcessing ? "处理中" : "重试"}
+                aria-label="重试"
+              >
+                <RotateCcw className="size-4" />
+              </button>
+            ) : null}
+            {showCancelAction ? (
+              <button
+                type="button"
+                className={iconButtonClass}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void onCancelTurn(conversationId, turn);
+                }}
+                disabled={cancelRequested}
+                title={cancelRequested ? "取消中" : "取消任务"}
+                aria-label={cancelRequested ? "取消中" : "取消任务"}
+              >
+                <X className="size-4" />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div
         className={cn(
-          "mt-3 flex min-h-6 min-w-0 items-center gap-x-2 gap-y-1 overflow-hidden text-[12px]",
+          "mt-2 flex min-h-7 items-center gap-x-1.5 text-[12px]",
           compactMeta
-            ? "w-full flex-wrap"
-            : "w-max max-w-[min(760px,calc(100vw-2rem))] flex-nowrap",
+            ? "w-full min-w-0 max-w-full overflow-hidden"
+            : "w-max max-w-[min(760px,calc(100vw-2rem))] flex-nowrap overflow-visible",
         )}
       >
-        <span className={cn(metaTextClass, "max-w-full truncate")}>
+        <span
+          className={cn(
+            metaTextClass,
+            compactMeta
+              ? "min-w-0 flex-1 truncate"
+              : "shrink-0 whitespace-nowrap",
+          )}
+        >
           <span className={metaMutedClass}>模型</span>{" "}
-          {turn.compareModelLabel || turn.providerPlatform || turn.model}
+          {modelLabel}
+        </span>
+        <span className={cn(metaTextClass, "shrink-0 whitespace-nowrap", statusClass)}>
+          {statusLabel}
         </span>
         {!compactMeta ? (
           <>
-            <span className="text-[var(--app-text-muted)]">·</span>
-            <span className={cn(metaTextClass, "shrink-0")}>
+            <span className="shrink-0 text-[var(--app-text-muted)]">·</span>
+            <span className={cn(metaTextClass, "shrink-0 whitespace-nowrap")}>
               <span className={metaMutedClass}>模式</span> {modeLabelMap[turn.mode]}
             </span>
           </>
         ) : null}
         {!compactMeta && aspectRatioLabel ? (
           <>
-            <span className="text-[var(--app-text-muted)]">·</span>
-            <span className={cn(metaTextClass, "shrink-0")}>
+            <span className="shrink-0 text-[var(--app-text-muted)]">·</span>
+            <span className={cn(metaTextClass, "shrink-0 whitespace-nowrap")}>
               <span className={metaMutedClass}>尺寸</span> {aspectRatioLabel}
             </span>
           </>
         ) : null}
         {!compactMeta && turn.quality ? (
           <>
-            <span className="text-[var(--app-text-muted)]">·</span>
-            <span className={cn(metaTextClass, "shrink-0")}>
+            <span className="shrink-0 text-[var(--app-text-muted)]">·</span>
+            <span className={cn(metaTextClass, "shrink-0 whitespace-nowrap")}>
               <span className={metaMutedClass}>清晰度</span> {turn.quality}
             </span>
           </>
         ) : null}
         {!compactMeta ? (
           <>
-            <span className="text-[var(--app-text-muted)]">·</span>
-            <span className={cn(metaTextClass, "inline-flex shrink-0 items-center gap-1")}>
+            <span className="shrink-0 text-[var(--app-text-muted)]">·</span>
+            <span className={cn(metaTextClass, "inline-flex shrink-0 items-center gap-1 whitespace-nowrap")}>
               <Clock3 className="size-3.5 shrink-0 text-[var(--app-text-muted)]" />
               {formatConversationTime(turn.createdAt)}
             </span>
           </>
-        ) : null}
-
-        {image.status === "error" ? (
-          <button
-            type="button"
-            className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-rose-300 transition hover:bg-[var(--app-bg-surface-hover)] disabled:cursor-not-allowed disabled:opacity-60"
-            onClick={() => void onRetryTurn(conversationId, turn, index)}
-            disabled={turnProcessing}
-            title={turnProcessing ? "处理中" : "重试"}
-            aria-label="重试"
-          >
-            <RotateCcw className="size-4" />
-          </button>
-        ) : null}
-
-        {(showQueuedState || showRunningState) && turn.jobId ? (
-          <button
-            type="button"
-            onClick={() => void onCancelTurn(conversationId, turn)}
-            disabled={cancelRequested}
-            className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-rose-300 transition hover:bg-[var(--app-bg-surface-hover)] disabled:cursor-not-allowed disabled:opacity-60"
-            title={cancelRequested ? "取消中" : "取消任务"}
-            aria-label={cancelRequested ? "取消中" : "取消任务"}
-          >
-            <X className="size-4" />
-          </button>
         ) : null}
       </div>
     </div>
@@ -633,6 +693,7 @@ export const ConversationTurns = memo(function ConversationTurns({
               formatConversationTime,
             )
           : [];
+        const compareStatusText = group.compare ? compareBatchStatusText(group.turns) : "";
         return (
           <div key={group.id} data-image-turn={primaryTurn.id} className="space-y-10">
             <div className="flex justify-end">
@@ -688,6 +749,12 @@ export const ConversationTurns = memo(function ConversationTurns({
                     模型对比
                   </span>
                   <span>{group.turns.length} 个结果</span>
+                  {compareStatusText ? (
+                    <>
+                      <span className="text-[var(--app-text-muted)]">·</span>
+                      <span>{compareStatusText}</span>
+                    </>
+                  ) : null}
                   {groupMetaItems.map((item) => (
                     <Fragment key={item}>
                       <span className="text-[var(--app-text-muted)]">·</span>

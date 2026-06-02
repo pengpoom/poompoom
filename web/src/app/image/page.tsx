@@ -13,14 +13,17 @@ import {
   cancelBusinessImageJob,
   fetchAccounts,
   fetchBusinessImageJob,
+  fetchBusinessImageModels,
   fetchBusinessSystemSettings,
   type APIAccessPlatform,
   type Account,
   type BusinessImageJob,
+  type BusinessImageModel,
   type ImageQuality,
 } from "@/lib/api";
 import webConfig from "@/constants/common-env";
 import { cn } from "@/lib/utils";
+import { normalizeAPIAccessPlatform as normalizeProviderPlatform } from "@/lib/provider-platforms";
 import { toast } from "sonner";
 import {
   normalizeConversation,
@@ -38,7 +41,7 @@ import { PromptComposer } from "./components/prompt-composer";
 import { WorkspaceHeader } from "./components/workspace-header";
 import { useImageHistory } from "./hooks/use-image-history";
 import { useImageSourceInputs } from "./hooks/use-image-source-inputs";
-import { useImageSubmit, type CompareModelSelection } from "./hooks/use-image-submit";
+import { useImageSubmit, type ImageModelSelection } from "./hooks/use-image-submit";
 import { buildConversationPreviewSource } from "./view-utils";
 
 type ImageAspectRatio = "auto" | "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "9:16" | "16:9" | "21:9";
@@ -158,34 +161,118 @@ const imageQualityOptions: Array<{
     description: "高质量，耗时更长，适合最终出图",
   },
 ];
-const providerPlatformOptions: Array<{
-  label: string;
-  value: APIAccessPlatform;
-}> = [
-  { label: "gpt-image", value: "gpt-image" },
-  { label: "gemini-banana", value: "gemini-banana" },
-];
-const compareModelOptions: CompareModelSelection[] = [
+const fallbackImageModelOptions: BusinessImageModel[] = [
   {
-    id: "gpt-image-2",
-    label: "GPT Image 2",
+    id: "openai/gpt-image-2",
+    vendor: "openai",
+    vendorLabel: "OpenAI",
+    displayName: "GPT Image 2",
+    adapter: "openai-images",
     platform: "gpt-image",
-    model: "gpt-image-2",
+    upstreamModel: "gpt-image-2",
+    enabled: true,
+    compareEnabled: true,
+    capabilities: {
+      generate: true,
+      edit: true,
+      referenceImage: true,
+      mask: true,
+      maxImages: 1,
+      maxReferenceImages: 8,
+    },
+    creditCost: 10,
+    sortOrder: 10,
   },
   {
-    id: "gpt-image-1",
-    label: "GPT Image 1",
+    id: "openai/gpt-image-1.5",
+    vendor: "openai",
+    vendorLabel: "OpenAI",
+    displayName: "GPT Image 1.5",
+    adapter: "openai-images",
     platform: "gpt-image",
-    model: "gpt-image-1",
+    upstreamModel: "gpt-image-1.5",
+    enabled: true,
+    compareEnabled: true,
+    capabilities: {
+      generate: true,
+      edit: true,
+      referenceImage: true,
+      mask: true,
+      maxImages: 1,
+      maxReferenceImages: 8,
+    },
+    creditCost: 10,
+    sortOrder: 20,
   },
   {
-    id: "gemini-2.5-flash-image",
-    label: "NanoBanana",
+    id: "google/gemini-3.1-flash-image-preview",
+    vendor: "google",
+    vendorLabel: "Google",
+    displayName: "Gemini 3.1 Flash Image Preview",
+    adapter: "gemini",
     platform: "gemini-banana",
-    model: "gemini-2.5-flash-image",
+    upstreamModel: "gemini-3.1-flash-image-preview",
+    enabled: true,
+    preview: true,
+    compareEnabled: true,
+    capabilities: {
+      generate: true,
+      edit: true,
+      referenceImage: true,
+      mask: true,
+      maxImages: 1,
+      maxReferenceImages: 8,
+    },
+    creditCost: 10,
+    sortOrder: 30,
+  },
+  {
+    id: "google/gemini-3-pro-image-preview",
+    vendor: "google",
+    vendorLabel: "Google",
+    displayName: "Gemini 3 Pro Image Preview",
+    adapter: "gemini",
+    platform: "gemini-banana",
+    upstreamModel: "gemini-3-pro-image-preview",
+    enabled: true,
+    preview: true,
+    compareEnabled: true,
+    capabilities: {
+      generate: true,
+      edit: true,
+      referenceImage: true,
+      mask: true,
+      maxImages: 1,
+      maxReferenceImages: 8,
+    },
+    creditCost: 10,
+    sortOrder: 40,
+  },
+  {
+    id: "google/gemini-2.5-flash-image",
+    vendor: "google",
+    vendorLabel: "Google",
+    displayName: "Gemini 2.5 Flash Image",
+    adapter: "gemini",
+    platform: "gemini-banana",
+    upstreamModel: "gemini-2.5-flash-image",
+    enabled: true,
+    compareEnabled: true,
+    capabilities: {
+      generate: true,
+      edit: true,
+      referenceImage: true,
+      mask: true,
+      maxImages: 1,
+      maxReferenceImages: 8,
+    },
+    creditCost: 10,
+    sortOrder: 50,
   },
 ];
-const defaultCompareModelIds = compareModelOptions
+const defaultImageModelId = fallbackImageModelOptions[0].id;
+const defaultCompareModelIds = fallbackImageModelOptions
+  .filter((item) => item.compareEnabled)
   .slice(0, 3)
   .map((item) => item.id);
 
@@ -278,6 +365,7 @@ function isBusinessProxyMode() {
 }
 
 const COMPOSER_SAFE_BOTTOM_OFFSET = 188;
+const COMPARE_COMPOSER_EXTRA_BOTTOM_OFFSET = 132;
 const IMAGE_COMPOSER_SETTINGS_KEY = "image-studio.composer.settings.v1";
 
 type StoredImageComposerSettings = {
@@ -286,6 +374,7 @@ type StoredImageComposerSettings = {
   resolutionTier?: ImageResolutionTier;
   quality?: ImageQuality;
   providerPlatform?: APIAccessPlatform;
+  modelId?: string;
   compareEnabled?: boolean;
   compareModelIds?: string[];
 };
@@ -362,20 +451,45 @@ function normalizeStoredImageQuality(value: unknown): ImageQuality | undefined {
 }
 
 function normalizeStoredProviderPlatform(value: unknown): APIAccessPlatform | undefined {
-  return value === "gpt-image" || value === "gemini-banana" ? value : undefined;
+  return normalizeProviderPlatform(value);
 }
 
-function normalizeStoredCompareModelIds(value: unknown): string[] {
+function imageModelSelectionFromOption(option: BusinessImageModel): ImageModelSelection {
+  return {
+    id: option.id,
+    label: option.displayName,
+    vendor: option.vendor,
+    vendorLabel: option.vendorLabel,
+    adapter: option.adapter,
+    platform: option.platform as APIAccessPlatform,
+    model: option.upstreamModel,
+  };
+}
+
+function normalizeStoredModelId(
+  value: unknown,
+  options: BusinessImageModel[],
+): string {
+  const next = String(value || "").trim();
+  return options.some((item) => item.id === next) ? next : options[0]?.id ?? defaultImageModelId;
+}
+
+function normalizeStoredCompareModelIds(
+  value: unknown,
+  options: BusinessImageModel[],
+): string[] {
+  const compareOptions = options.filter((item) => item.compareEnabled);
+  const fallbackIds = compareOptions.slice(0, 3).map((item) => item.id);
   if (!Array.isArray(value)) {
-    return defaultCompareModelIds;
+    return fallbackIds.length >= 2 ? fallbackIds : defaultCompareModelIds;
   }
-  const allowed = new Set(compareModelOptions.map((item) => item.id));
+  const allowed = new Set(compareOptions.map((item) => item.id));
   const items = value
     .map((item) => String(item || "").trim())
     .filter((item, index, array) =>
       allowed.has(item) && array.indexOf(item) === index,
     );
-  return items.length >= 2 ? items : defaultCompareModelIds;
+  return items.length >= 2 ? items : fallbackIds.length >= 2 ? fallbackIds : defaultCompareModelIds;
 }
 
 function formatProcessingDuration(totalSeconds: number) {
@@ -395,6 +509,11 @@ type ProcessingJobTarget = {
   jobId: string;
   conversationId: string;
 };
+type JobStatusRecoveryTarget = ProcessingJobTarget & {
+  createdAt: string;
+};
+
+const JOB_STATUS_RECOVERY_LIMIT = 40;
 
 function isProcessingTurn(turn: ImageConversationTurn) {
   if (turn.status === "cancelled") {
@@ -437,6 +556,37 @@ function collectProcessingJobTargets(
   return [...byJobId.values()].sort((a, b) =>
     a.jobId.localeCompare(b.jobId),
   );
+}
+
+function collectJobStatusRecoveryTargets(
+  conversations: ImageConversation[],
+): JobStatusRecoveryTarget[] {
+  const byJobId = new Map<string, JobStatusRecoveryTarget>();
+  for (const conversation of conversations) {
+    for (const turn of conversation.turns || []) {
+      const jobId = String(turn.jobId || "").trim();
+      if (!jobId) {
+        continue;
+      }
+      const createdAt =
+        turn.finishedAt ||
+        turn.startedAt ||
+        turn.createdAt ||
+        conversation.createdAt ||
+        "";
+      const previous = byJobId.get(jobId);
+      if (!previous || String(createdAt).localeCompare(previous.createdAt) > 0) {
+        byJobId.set(jobId, {
+          jobId,
+          conversationId: conversation.id,
+          createdAt,
+        });
+      }
+    }
+  }
+  return [...byJobId.values()]
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+    .slice(0, JOB_STATUS_RECOVERY_LIMIT);
 }
 
 function buildBusinessJobSignature(job: BusinessImageJob) {
@@ -543,6 +693,7 @@ export default function ImagePage() {
   const previousTurnCountRef = useRef(0);
   const previousLastTurnKeyRef = useRef("");
   const jobPollingSignaturesRef = useRef<Map<string, string>>(new Map());
+  const recoveredJobIdsRef = useRef<Set<string>>(new Set());
   const initialComposerSettingsRef = useRef(loadStoredImageComposerSettings());
   const didApplyServerComposerDefaultsRef = useRef(false);
 
@@ -559,6 +710,12 @@ export default function ImagePage() {
   const [imageQuality, setImageQuality] = useState<ImageQuality>(
     () => normalizeStoredImageQuality(initialComposerSettingsRef.current.quality) ?? "high",
   );
+  const [imageModelOptions, setImageModelOptions] = useState<BusinessImageModel[]>(
+    fallbackImageModelOptions,
+  );
+  const [selectedModelId, setSelectedModelId] = useState(
+    () => normalizeStoredModelId(initialComposerSettingsRef.current.modelId, fallbackImageModelOptions),
+  );
   const [providerPlatform, setProviderPlatform] =
     useState<APIAccessPlatform>(
       () => normalizeStoredProviderPlatform(initialComposerSettingsRef.current.providerPlatform) ?? "gpt-image",
@@ -567,10 +724,10 @@ export default function ImagePage() {
     () => initialComposerSettingsRef.current.compareEnabled === true,
   );
   const [selectedCompareModelIds, setSelectedCompareModelIds] = useState(
-    () => normalizeStoredCompareModelIds(initialComposerSettingsRef.current.compareModelIds),
+    () => normalizeStoredCompareModelIds(initialComposerSettingsRef.current.compareModelIds, fallbackImageModelOptions),
   );
-  const [selectionEditorProviderPlatform, setSelectionEditorProviderPlatform] =
-    useState<APIAccessPlatform>("gpt-image");
+  const [selectionEditorModelId, setSelectionEditorModelId] =
+    useState(defaultImageModelId);
   const [composerResetKey, setComposerResetKey] = useState(0);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [isDesktopLayout, setIsDesktopLayout] = useState(() =>
@@ -620,14 +777,61 @@ export default function ImagePage() {
     selectedConversationId,
     makeId,
   });
+  const selectedModelOption = useMemo(
+    () =>
+      imageModelOptions.find((item) => item.id === selectedModelId) ??
+      imageModelOptions[0] ??
+      fallbackImageModelOptions[0],
+    [imageModelOptions, selectedModelId],
+  );
+  const selectedModel = useMemo(
+    () => imageModelSelectionFromOption(selectedModelOption),
+    [selectedModelOption],
+  );
+  useEffect(() => {
+    setProviderPlatform(selectedModel.platform);
+  }, [selectedModel.platform]);
+  const editableModelOptions = useMemo(
+    () =>
+      imageModelOptions
+        .filter((item) => item.enabled && item.capabilities.edit !== false)
+        .sort((a, b) => a.sortOrder - b.sortOrder),
+    [imageModelOptions],
+  );
+  const editableModels = useMemo(
+    () => editableModelOptions.map(imageModelSelectionFromOption),
+    [editableModelOptions],
+  );
+  const compareModelOptions = useMemo(
+    () =>
+      imageModelOptions
+        .filter((item) => item.enabled && item.compareEnabled)
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map(imageModelSelectionFromOption),
+    [imageModelOptions],
+  );
   useEffect(() => {
     if (!editorTarget) {
       return;
     }
-    setSelectionEditorProviderPlatform(
-      editorTarget.providerPlatform ?? providerPlatform,
+    const inheritedModel =
+      (editorTarget.modelId
+        ? editableModelOptions.find((item) => item.id === editorTarget.modelId)
+        : undefined) ??
+      (editorTarget.providerPlatform && editorTarget.model
+        ? editableModelOptions.find(
+            (item) =>
+              item.platform === editorTarget.providerPlatform &&
+              item.upstreamModel === editorTarget.model,
+          )
+        : undefined);
+    const currentModel = editableModelOptions.find(
+      (item) => item.id === selectedModel.id,
     );
-  }, [editorTarget, providerPlatform]);
+    setSelectionEditorModelId(
+      inheritedModel?.id ?? currentModel?.id ?? editableModelOptions[0]?.id ?? "",
+    );
+  }, [editableModelOptions, editorTarget, selectedModel.id]);
   const displayedConversations = conversations;
   const processingConversationIds = useMemo(
     () =>
@@ -648,6 +852,17 @@ export default function ImagePage() {
         .map((item) => `${item.jobId}:${item.conversationId}`)
         .join("|"),
     [processingJobTargets],
+  );
+  const jobStatusRecoveryTargets = useMemo(
+    () => collectJobStatusRecoveryTargets(displayedConversations),
+    [displayedConversations],
+  );
+  const jobStatusRecoveryTargetKey = useMemo(
+    () =>
+      jobStatusRecoveryTargets
+        .map((item) => `${item.jobId}:${item.conversationId}`)
+        .join("|"),
+    [jobStatusRecoveryTargets],
   );
   const legacyProcessingConversationKey = useMemo(
     () =>
@@ -845,9 +1060,13 @@ export default function ImagePage() {
     () =>
       selectedCompareModelIds
         .map((id) => compareModelOptions.find((item) => item.id === id))
-        .filter((item): item is CompareModelSelection => Boolean(item)),
-    [selectedCompareModelIds],
+        .filter((item): item is ImageModelSelection => Boolean(item)),
+    [compareModelOptions, selectedCompareModelIds],
   );
+  const isCompareComposerExpanded = mode === "generate" && compareEnabled;
+  const composerSafeBottomOffset =
+    COMPOSER_SAFE_BOTTOM_OFFSET +
+    (isCompareComposerExpanded ? COMPARE_COMPOSER_EXTRA_BOTTOM_OFFSET : 0);
   const processingStatus = useMemo(
     () =>
       activeRequest
@@ -903,6 +1122,59 @@ export default function ImagePage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!isBusinessProxyMode() || !jobStatusRecoveryTargetKey) {
+      return;
+    }
+
+    const targets = jobStatusRecoveryTargetKey
+      .split("|")
+      .map((item) => {
+        const [jobId, conversationId] = item.split(":");
+        return { jobId, conversationId };
+      })
+      .filter((item) => item.jobId && item.conversationId)
+      .filter((item) => {
+        if (recoveredJobIdsRef.current.has(item.jobId)) {
+          return false;
+        }
+        recoveredJobIdsRef.current.add(item.jobId);
+        return true;
+      });
+
+    if (targets.length === 0) {
+      return;
+    }
+
+    let disposed = false;
+    const recoverJobStatuses = async () => {
+      const refreshedConversationIds = new Set<string>();
+      await Promise.all(
+        targets.map(async ({ jobId, conversationId }) => {
+          try {
+            const payload = await fetchBusinessImageJob(jobId);
+            if (disposed) {
+              return;
+            }
+            const nextConversationId = payload.item.conversationId || conversationId;
+            if (!nextConversationId || refreshedConversationIds.has(nextConversationId)) {
+              return;
+            }
+            refreshedConversationIds.add(nextConversationId);
+            await refreshConversation(nextConversationId, { silent: true });
+          } catch {
+            // 恢复检查是兜底路径；失败不影响处理中任务的常规轮询。
+          }
+        }),
+      );
+    };
+
+    void recoverJobStatuses();
+    return () => {
+      disposed = true;
+    };
+  }, [jobStatusRecoveryTargetKey, refreshConversation]);
 
   useEffect(() => {
     if (!isBusinessProxyMode() || !processingJobTargetKey) {
@@ -1007,12 +1279,33 @@ export default function ImagePage() {
       try {
         if (isBusinessProxyMode()) {
           try {
-            const settingsData = await fetchBusinessSystemSettings();
+            const [settingsData, modelData] = await Promise.all([
+              fetchBusinessSystemSettings(),
+              fetchBusinessImageModels(),
+            ]);
+            const models = modelData.items.length > 0
+              ? modelData.items
+              : fallbackImageModelOptions;
+            setImageModelOptions(models);
             const generation = settingsData.settings.generation;
             if (Object.keys(initialComposerSettingsRef.current).length === 0) {
               didApplyServerComposerDefaultsRef.current = true;
-              setProviderPlatform(generation.defaultPlatform);
+              const defaultModel =
+                models.find((item) => item.platform === generation.defaultPlatform) ??
+                models[0];
+              if (defaultModel) {
+                setSelectedModelId(defaultModel.id);
+                setProviderPlatform(defaultModel.platform as APIAccessPlatform);
+                setSelectedCompareModelIds((current) =>
+                  normalizeStoredCompareModelIds(current, models),
+                );
+              }
               setImageQuality(generation.defaultQuality);
+            } else {
+              setSelectedModelId((current) => normalizeStoredModelId(current, models));
+              setSelectedCompareModelIds((current) =>
+                normalizeStoredCompareModelIds(current, models),
+              );
             }
           } catch {
             // 系统设置读取失败不阻塞工作台基础加载。
@@ -1068,6 +1361,7 @@ export default function ImagePage() {
       resolutionTier: imageResolutionTier,
       quality: imageQuality,
       providerPlatform,
+      modelId: selectedModelId,
       compareEnabled,
       compareModelIds: selectedCompareModelIds,
     });
@@ -1077,6 +1371,7 @@ export default function ImagePage() {
     imageResolutionTier,
     imageQuality,
     providerPlatform,
+    selectedModelId,
     compareEnabled,
     selectedCompareModelIds,
   ]);
@@ -1488,6 +1783,11 @@ export default function ImagePage() {
             mode: "generate" as const,
             prompt: turn.prompt,
             model: turn.model,
+            modelId: turn.modelId,
+            modelLabel: turn.modelLabel,
+            vendor: turn.vendor,
+            vendorLabel: turn.vendorLabel,
+            adapter: turn.adapter,
             count: turn.count,
             images: turn.images,
             createdAt: turn.createdAt,
@@ -1544,7 +1844,8 @@ export default function ImagePage() {
     useImageSubmit({
       mode,
       imagePrompt,
-      imageModel: "gpt-image-2",
+      selectedModel,
+      editModels: editableModels,
       compareEnabled,
       compareModels: selectedCompareModels,
       imageSources,
@@ -1577,8 +1878,8 @@ export default function ImagePage() {
       imageResolutionTierLabel={imageResolutionTierLabel}
       imageResolutionTierOptions={imageResolutionTierOptions}
       imageSizeHint={imageSizeHint}
-      providerPlatform={providerPlatform}
-      providerPlatformOptions={providerPlatformOptions}
+      selectedModelId={selectedModelId}
+      modelOptions={imageModelOptions}
       imageQuality={imageQuality}
       imageQualityOptions={imageQualityOptions}
       imageQualityDisabled={!isImageQualityEnabled}
@@ -1598,7 +1899,13 @@ export default function ImagePage() {
       onImageResolutionTierChange={(value) =>
         setImageResolutionTier(value as ImageResolutionTier)
       }
-      onProviderPlatformChange={setProviderPlatform}
+      onModelChange={(value) => {
+        const nextModel = imageModelOptions.find((item) => item.id === value);
+        setSelectedModelId(value);
+        if (nextModel) {
+          setProviderPlatform(nextModel.platform as APIAccessPlatform);
+        }
+      }}
       onImageQualityChange={(value) => setImageQuality(value as ImageQuality)}
       onCompareEnabledChange={setCompareEnabled}
       onCompareModelToggle={handleCompareModelToggle}
@@ -1672,8 +1979,12 @@ export default function ImagePage() {
           className={cn(
             "hide-scrollbar min-h-[240px] overflow-visible md:h-full md:min-h-0 md:overflow-y-auto md:pb-0",
             isMobileComposerCollapsed
-              ? "pb-[180px] sm:pb-[190px]"
-              : "pb-[248px] sm:pb-[264px]",
+              ? isCompareComposerExpanded
+                ? "pb-[316px] sm:pb-[328px]"
+                : "pb-[180px] sm:pb-[190px]"
+              : isCompareComposerExpanded
+                ? "pb-[382px] sm:pb-[400px]"
+                : "pb-[248px] sm:pb-[264px]",
           )}
         >
           <div ref={resultsContentRef}>
@@ -1701,7 +2012,7 @@ export default function ImagePage() {
             )}
             <div
               ref={bottomAnchorRef}
-              style={{ height: COMPOSER_SAFE_BOTTOM_OFFSET }}
+              style={{ height: composerSafeBottomOffset }}
               aria-hidden="true"
             />
           </div>
@@ -1760,15 +2071,15 @@ export default function ImagePage() {
         imageQualityOptions={imageQualityOptions}
         imageQualityDisabled={!isImageQualityEnabled}
         imageQualityDisabledReason={imageQualityDisabledReason}
-        providerPlatform={selectionEditorProviderPlatform}
-        providerPlatformOptions={providerPlatformOptions}
+        modelId={selectionEditorModelId}
+        modelOptions={editableModelOptions}
         onImageAspectRatioChange={(value) =>
           setImageAspectRatio(value as ImageAspectRatio)
         }
         onImageResolutionTierChange={(value) =>
           setImageResolutionTier(value as ImageResolutionTier)
         }
-        onProviderPlatformChange={setSelectionEditorProviderPlatform}
+        onModelChange={setSelectionEditorModelId}
         onImageQualityChange={(value) => setImageQuality(value as ImageQuality)}
         onClose={closeSelectionEditor}
         onSubmit={async (payload) => {

@@ -23,6 +23,7 @@ import {
   createBusinessProviderMember,
   deleteBusinessProviderGroup,
   deleteBusinessProviderMember,
+  fetchAdminBusinessImageModels,
   fetchBusinessProviderPools,
   fetchBusinessSystemSettings,
   previewBusinessProviderDispatch,
@@ -35,6 +36,7 @@ import {
   type APIAccessPlatform,
   type BusinessAPIProviderTestResponse,
   type BusinessBillingLevel,
+  type BusinessImageModel,
   type BusinessProviderDispatchPreviewPool,
   type BusinessProviderDispatchPreviewInput,
   type BusinessProviderDispatchPreviewResponse,
@@ -45,16 +47,17 @@ import {
   type BusinessProviderMemberStatus,
   type BusinessProviderPool,
 } from "@/lib/api";
+import {
+  defaultModelForPlatform,
+  isGeminiPlatform,
+  providerPlatformLabel,
+  providerPlatformOptions,
+} from "@/lib/provider-platforms";
 
 import { ConfigSection, Field, TooltipDetails } from "./shared";
 import { settingsTableWrapClass } from "./styles";
 
 const allFilterValue = "all";
-
-const platformOptions: Array<{ label: string; value: APIAccessPlatform }> = [
-  { label: "gpt-image", value: "gpt-image" },
-  { label: "gemini-banana", value: "gemini-banana" },
-];
 
 const statusOptions: Array<{ label: string; value: BusinessProviderMemberStatus }> = [
   { label: "active", value: "active" },
@@ -66,13 +69,6 @@ const matchModeOptions: Array<{ label: string; value: BusinessProviderGroupInput
   { label: "兜底池", value: "fallback" },
   { label: "命中任一标签", value: "any" },
   { label: "命中全部标签", value: "all" },
-];
-
-const geminiBananaModelOptions = [
-  "gemini-3.1-flash-image-preview",
-  "gemini-3-pro-image-preview",
-  "gemini-2.5-flash-image",
-  "gemini-2.5-flash-image-preview",
 ];
 
 const defaultSubscriptionLevelOptions: BusinessBillingLevel[] = [
@@ -109,10 +105,6 @@ type ProviderTestResult = {
 type PreviewDraft = BusinessProviderDispatchPreviewInput & {
   extraTagsText: string;
 };
-
-function defaultModelForPlatform(platform: APIAccessPlatform) {
-  return platform === "gemini-banana" ? "gemini-2.5-flash-image" : "gpt-image-2";
-}
 
 function createEmptyGroupDraft(): BusinessProviderGroupInput {
   return {
@@ -217,7 +209,7 @@ function formatProviderTime(value: string) {
 }
 
 function platformLabel(value: APIAccessPlatform) {
-  return platformOptions.find((item) => item.value === value)?.label ?? value;
+  return providerPlatformLabel(value);
 }
 
 function statusBadgeClass(status: BusinessProviderMemberStatus) {
@@ -331,6 +323,33 @@ function enabledMemberCount(pools: BusinessProviderPool[]) {
   );
 }
 
+function configuredModelsForPlatform(
+  models: BusinessImageModel[],
+  platform: APIAccessPlatform,
+  currentModel: string,
+) {
+  const configured = models
+    .filter((model) => model.enabled && model.platform === platform)
+    .map((model) => model.upstreamModel.trim())
+    .filter(Boolean);
+  const fallback = defaultModelForPlatform(platform);
+  const source = configured.length > 0 ? configured : [fallback];
+  const seen = new Set<string>();
+  const options = source.filter((model) => {
+    const key = model.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+  const current = currentModel.trim();
+  if (current && !seen.has(current.toLowerCase()) && current !== fallback) {
+    return [current, ...options];
+  }
+  return options;
+}
+
 function testResultFromResponse(result: BusinessAPIProviderTestResponse): ProviderTestResult {
   return {
     status: result.ok ? "succeeded" : "failed",
@@ -344,6 +363,7 @@ function testResultFromResponse(result: BusinessAPIProviderTestResponse): Provid
 
 export function ProviderPoolSection() {
   const [pools, setPools] = useState<BusinessProviderPool[]>([]);
+  const [imageModels, setImageModels] = useState<BusinessImageModel[]>([]);
   const [groupDraft, setGroupDraft] = useState<BusinessProviderGroupInput>(createEmptyGroupDraft);
   const [memberDraft, setMemberDraft] = useState<BusinessProviderMemberInput>(createEmptyMemberDraft);
   const [dialog, setDialog] = useState<DialogState>({ type: "none" });
@@ -382,13 +402,12 @@ export function ProviderPoolSection() {
     [memberDraft.groupId, pools],
   );
 
-  const geminiModelOptionsForMember = useMemo(() => {
-    const currentModel = memberDraft.defaultModel.trim();
-    if (!currentModel || geminiBananaModelOptions.includes(currentModel)) {
-      return geminiBananaModelOptions;
-    }
-    return [currentModel, ...geminiBananaModelOptions];
-  }, [memberDraft.defaultModel]);
+  const memberPlatform = memberGroup?.platform ?? memberDraft.platform;
+
+  const memberModelOptions = useMemo(
+    () => configuredModelsForPlatform(imageModels, memberPlatform, memberDraft.defaultModel),
+    [imageModels, memberDraft.defaultModel, memberPlatform],
+  );
 
   const previewSubscriptionOptions = useMemo(
     () => billingLevelOptions(subscriptionLevels, defaultSubscriptionLevelOptions),
@@ -434,10 +453,23 @@ export function ProviderPoolSection() {
     }
   };
 
+  const loadImageModels = async () => {
+    try {
+      const payload = await fetchAdminBusinessImageModels();
+      setImageModels(payload.items || []);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "读取模型目录失败");
+    }
+  };
+
   useEffect(() => {
     void loadPools();
     void loadBillingLevels();
+    void loadImageModels();
   }, []);
+
+  const configuredDefaultModel = (platform: APIAccessPlatform) =>
+    configuredModelsForPlatform(imageModels, platform, "")[0] || defaultModelForPlatform(platform);
 
   const closeDialog = () => {
     setDialog({ type: "none" });
@@ -460,7 +492,9 @@ export function ProviderPoolSection() {
       toast.error("请先创建 Provider 池");
       return;
     }
-    setMemberDraft(createEmptyMemberDraft(pool ?? pools[0]));
+    const draft = createEmptyMemberDraft(pool ?? pools[0]);
+    draft.defaultModel = configuredDefaultModel(draft.platform);
+    setMemberDraft(draft);
     setDialog({ type: "member" });
   };
 
@@ -490,7 +524,7 @@ export function ProviderPoolSection() {
         if (group) {
           next.platform = group.platform;
           if (!current.defaultModel || current.defaultModel === defaultModelForPlatform(current.platform)) {
-            next.defaultModel = defaultModelForPlatform(group.platform);
+            next.defaultModel = configuredDefaultModel(group.platform);
           }
         }
       }
@@ -503,7 +537,7 @@ export function ProviderPoolSection() {
       const next = { ...current, [key]: value };
       if (key === "platform") {
         const platform = value as APIAccessPlatform;
-        next.model = defaultModelForPlatform(platform);
+        next.model = configuredDefaultModel(platform);
       }
       return next;
     });
@@ -777,7 +811,7 @@ export function ProviderPoolSection() {
               onChange={(value) => setPlatformFilter(value as typeof allFilterValue | APIAccessPlatform)}
               options={[
                 { value: allFilterValue, label: "全部平台" },
-                ...platformOptions.map((item) => ({ value: item.value, label: item.label })),
+                ...providerPlatformOptions.map((item) => ({ value: item.value, label: item.label })),
               ]}
             />
           </div>
@@ -846,7 +880,7 @@ export function ProviderPoolSection() {
               <AppSelect
                 value={previewDraft.platform}
                 onChange={(value) => updatePreviewDraft("platform", value as APIAccessPlatform)}
-                options={platformOptions}
+                options={providerPlatformOptions}
               />
             </label>
             <label className="app-fld">
@@ -1252,8 +1286,9 @@ export function ProviderPoolSection() {
             tooltip={
               <TooltipDetails
                 items={[
-                  { title: "gpt-image", body: <>OpenAI 兼容图片接口。</> },
-                  { title: "gemini-banana", body: <>Gemini 图片接口。</> },
+                  { title: "OpenAI", body: <>OpenAI 兼容图片接口。</> },
+                  { title: "Google", body: <>Gemini 图片接口。</> },
+                  { title: "其他平台", body: <>OpenAI 兼容图片接口，按模型目录路由。</> },
                 ]}
               />
             }
@@ -1261,7 +1296,7 @@ export function ProviderPoolSection() {
             <AppSelect
               value={groupDraft.platform}
               onChange={(value) => updateGroupDraft("platform", value as APIAccessPlatform)}
-              options={platformOptions.map((item) => ({ value: item.value, label: item.label }))}
+              options={providerPlatformOptions.map((item) => ({ value: item.value, label: item.label }))}
             />
           </Field>
           <Field label="优先级" hint="数字越小越优先。默认池会先于非默认池。">
@@ -1356,7 +1391,7 @@ export function ProviderPoolSection() {
             />
           </Field>
           <Field label="平台" hint="由所属池决定，成员平台必须一致。">
-            <input className="app-input" value={memberGroup?.platform ?? memberDraft.platform} disabled readOnly />
+            <input className="app-input" value={platformLabel(memberPlatform)} disabled readOnly />
           </Field>
           <Field label="优先级" hint="同一池内数字越小越优先。">
             <input
@@ -1391,30 +1426,21 @@ export function ProviderPoolSection() {
               value={memberDraft.baseUrl}
               onChange={(event) => updateMemberDraft("baseUrl", event.target.value)}
               placeholder={
-                (memberGroup?.platform ?? memberDraft.platform) === "gemini-banana"
+                isGeminiPlatform(memberPlatform)
                   ? "https://generativelanguage.googleapis.com"
                   : "http://127.0.0.1:8080"
               }
             />
           </Field>
           <Field
-            label={(memberGroup?.platform ?? memberDraft.platform) === "gemini-banana" ? "请求模型" : "默认模型"}
-            hint="后端请求上游时使用的模型。"
+            label={isGeminiPlatform(memberPlatform) ? "请求模型" : "默认模型"}
+            hint="读取模型目录中同平台启用模型的上游模型。"
           >
-            {(memberGroup?.platform ?? memberDraft.platform) === "gemini-banana" ? (
-              <AppSelect
-                value={memberDraft.defaultModel || defaultModelForPlatform(memberGroup?.platform ?? memberDraft.platform)}
-                onChange={(value) => updateMemberDraft("defaultModel", value)}
-                options={geminiModelOptionsForMember.map((model) => ({ value: model, label: model }))}
-              />
-            ) : (
-              <input
-                className="app-input"
-                value={memberDraft.defaultModel}
-                onChange={(event) => updateMemberDraft("defaultModel", event.target.value)}
-                placeholder={defaultModelForPlatform(memberGroup?.platform ?? memberDraft.platform)}
-              />
-            )}
+            <AppSelect
+              value={memberDraft.defaultModel || configuredDefaultModel(memberPlatform)}
+              onChange={(value) => updateMemberDraft("defaultModel", value)}
+              options={memberModelOptions.map((model) => ({ value: model, label: model }))}
+            />
           </Field>
           <Field label="API Key" hint="后端请求上游时使用。">
             <input
@@ -1422,7 +1448,7 @@ export function ProviderPoolSection() {
               type="password"
               value={memberDraft.apiKey}
               onChange={(event) => updateMemberDraft("apiKey", event.target.value)}
-              placeholder={(memberGroup?.platform ?? memberDraft.platform) === "gemini-banana" ? "AIza..." : "sk-..."}
+              placeholder={isGeminiPlatform(memberPlatform) ? "AIza..." : "sk-..."}
             />
           </Field>
           <Field label="状态" hint="active 会参与调度；limited 会在冷却结束后参与；unavailable 不参与。">

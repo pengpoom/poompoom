@@ -1,119 +1,22 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Activity, LoaderCircle, RefreshCcw, RefreshCw, Save } from "lucide-react";
-import { toast } from "sonner";
+import { Activity } from "lucide-react";
 
 import { AdminHeader, AdminPage } from "@/components/admin-layout";
-import {
-  fetchConfig,
-  fetchDefaultConfig,
-  updateConfig,
-  type ConfigPayload,
-} from "@/lib/api";
-import {
-  defaultConfigPayload,
-  normalizeConfigPayload,
-} from "@/app/settings/config-utils";
-import { clearCachedSyncStatus } from "@/store/sync-status-cache";
 import { APIAccessSection } from "@/app/settings/components/api-access-section";
-import { IntegrationSection } from "@/app/settings/components/integration-section";
 import { ProviderPoolSection } from "@/app/settings/components/provider-pool-section";
 
 export default function AccountsPage() {
-  const [config, setConfig] = useState<ConfigPayload>(defaultConfigPayload);
-  const [defaultConfig, setDefaultConfig] = useState<ConfigPayload>(defaultConfigPayload);
-  const [savedConfig, setSavedConfig] = useState<ConfigPayload | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-
-  const isDirty = useMemo(() => {
-    if (!savedConfig) {
-      return false;
-    }
-    return JSON.stringify(config) !== JSON.stringify(savedConfig);
-  }, [config, savedConfig]);
-
-  const loadConfig = async () => {
-    setIsLoading(true);
-    try {
-      const [currentConfig, defaults] = await Promise.all([
-        fetchConfig(),
-        fetchDefaultConfig(),
-      ]);
-      const normalizedConfig = normalizeConfigPayload(currentConfig);
-      setConfig(normalizedConfig);
-      setSavedConfig(normalizedConfig);
-      setDefaultConfig(normalizeConfigPayload(defaults));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "读取上游配置失败");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    void loadConfig();
-  }, []);
-
-  const setSection = <K extends keyof ConfigPayload>(
-    section: K,
-    nextValue: ConfigPayload[K],
-  ) => {
-    setConfig((current) => ({
-      ...current,
-      [section]: nextValue,
-    }));
-  };
-
-  const saveConfig = async () => {
-    setIsSaving(true);
-    try {
-      const result = await updateConfig(normalizeConfigPayload(config));
-      const normalizedConfig = normalizeConfigPayload(result.config);
-      clearCachedSyncStatus();
-      setConfig(normalizedConfig);
-      setSavedConfig(normalizedConfig);
-      toast.success("上游配置已保存并立即生效");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "保存上游配置失败");
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const restoreDefaults = () => {
-    setConfig(defaultConfig);
-    toast.success("已恢复为默认配置草稿，点击“保存配置”后才会真正生效");
-  };
-
   return (
     <AdminPage>
-        <AdminHeader
-          title="上游管理"
-          description="管理图片生成上游、兼容服务和同步接入配置。"
-          icon={Activity}
-          actions={
-            <>
-              <button className="app-btn" type="button" onClick={() => void loadConfig()} disabled={isLoading || isSaving}>
-                {isLoading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-                重新读取
-              </button>
-              <button className="app-btn" type="button" onClick={restoreDefaults} disabled={isLoading || isSaving}>
-                <RefreshCcw className="size-4" />
-                恢复默认
-              </button>
-              <button className="app-btn-primary" type="button" onClick={() => void saveConfig()} disabled={!isDirty || isLoading || isSaving}>
-                {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : <Save className="size-4" />}
-                保存配置
-              </button>
-            </>
-          }
-        />
+      <AdminHeader
+        title="上游管理"
+        description="管理图片生成上游、Provider 号池和 API 接入配置。"
+        icon={Activity}
+      />
 
-        <APIAccessSection />
-        <ProviderPoolSection />
-        <IntegrationSection config={config} setSection={setSection} />
+      <ProviderPoolSection />
+      <APIAccessSection />
     </AdminPage>
   );
 }
