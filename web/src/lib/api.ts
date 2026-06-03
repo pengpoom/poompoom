@@ -1185,6 +1185,7 @@ export type BusinessUser = {
 export type BusinessMe = {
   user: BusinessUser;
   credit: BusinessCreditSummary;
+  apiAccessEnabled?: boolean;
 };
 
 export type BusinessCreditSummary = {
@@ -3133,4 +3134,105 @@ export async function generateImageWithOptions(
       : undefined,
     body,
   });
+}
+
+export type BusinessAPIKeyStatus = "active" | "disabled" | "revoked";
+
+export type BusinessAPIKey = {
+  id: string;
+  userId: string;
+  name: string;
+  keyPrefix: string;
+  keyLast4: string;
+  status: BusinessAPIKeyStatus;
+  creditLimit: number;
+  usedCredits: number;
+  rateLimitPerMinute: number;
+  concurrencyLimit: number;
+  allowedModels: string[];
+  lastUsedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  revokedAt?: string;
+};
+
+export type AdminCreateAPIKeyInput = {
+  userId: string;
+  name: string;
+  env: "live" | "test";
+  creditLimit?: number;
+  rateLimitPerMinute?: number;
+  concurrencyLimit?: number;
+  allowedModels?: string[];
+};
+
+export type AdminUpdateAPIKeyInput = {
+  name?: string;
+  status?: BusinessAPIKeyStatus;
+  creditLimit?: number;
+  rateLimitPerMinute?: number;
+  concurrencyLimit?: number;
+  allowedModels?: string[];
+};
+
+export type BusinessAPIKeyCreateResult = {
+  item: BusinessAPIKey;
+  secret: string;
+};
+
+// 管理员侧（requireAdminAuth）
+export async function fetchAdminAPIKeys(userId?: string) {
+  const suffix = userId ? `?userId=${encodeURIComponent(userId)}` : "";
+  return httpRequest<{ items: BusinessAPIKey[] }>(`/api/business/admin/api-keys${suffix}`);
+}
+
+export async function createAdminAPIKey(payload: AdminCreateAPIKeyInput) {
+  return httpRequest<BusinessAPIKeyCreateResult>("/api/business/admin/api-keys", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateAdminAPIKey(id: string, payload: AdminUpdateAPIKeyInput) {
+  return httpRequest<{ item: BusinessAPIKey }>(
+    `/api/business/admin/api-keys/${encodeURIComponent(id)}`,
+    { method: "PATCH", body: payload },
+  );
+}
+
+export async function revokeAdminAPIKey(id: string) {
+  return httpRequest<{ item: BusinessAPIKey }>(
+    `/api/business/admin/api-keys/${encodeURIComponent(id)}/revoke`,
+    { method: "POST" },
+  );
+}
+
+export async function fetchAdminUsersAPIAccess() {
+  return httpRequest<{ enabledUserIds: string[] }>("/api/business/admin/users-api-access");
+}
+
+export async function updateBusinessUserAPIAccess(userId: string, enabled: boolean) {
+  return httpRequest<{ ok: boolean; apiAccessEnabled: boolean }>(
+    `/api/business/users/${encodeURIComponent(userId)}/api-access`,
+    { method: "PATCH", body: { enabled } },
+  );
+}
+
+// 用户自助侧（requireUIAuth + 本人已开通）
+export async function fetchMyAPIKeys() {
+  return httpRequest<{ items: BusinessAPIKey[] }>("/api/business/api-keys");
+}
+
+export async function createMyAPIKey(name: string) {
+  return httpRequest<BusinessAPIKeyCreateResult>("/api/business/api-keys", {
+    method: "POST",
+    body: { name },
+  });
+}
+
+export async function revokeMyAPIKey(id: string) {
+  return httpRequest<{ item: BusinessAPIKey }>(
+    `/api/business/api-keys/${encodeURIComponent(id)}/revoke`,
+    { method: "POST" },
+  );
 }
