@@ -717,6 +717,37 @@ func (s *Server) handleGetBusinessMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, businessMeResponse{User: user, Credit: credit})
 }
 
+func (s *Server) handleUpdateBusinessUserAPIAccess(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		return
+	}
+	userID := strings.TrimSpace(r.PathValue("id"))
+	if userID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "user id is required"})
+		return
+	}
+	store, err := s.newBusinessAuthStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
+		return
+	}
+	defer store.Close()
+	ok, err := store.SetUserAPIAccessEnabled(r.Context(), userID, body.Enabled)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "user not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "apiAccessEnabled": body.Enabled})
+}
+
 func (s *Server) handleChangeBusinessMePassword(w http.ResponseWriter, r *http.Request) {
 	session, ok := requestAuthSession(r)
 	if !ok {

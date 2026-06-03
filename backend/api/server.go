@@ -544,6 +544,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/business/users", s.requireAdminAuth(http.HandlerFunc(s.handleCreateBusinessUser)))
 	mux.Handle("GET /api/business/users/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleGetBusinessUserDetail)))
 	mux.Handle("PATCH /api/business/users/{id}/status", s.requireAdminAuth(http.HandlerFunc(s.handleUpdateBusinessUserStatus)))
+	mux.Handle("PATCH /api/business/users/{id}/api-access", s.requireAdminAuth(http.HandlerFunc(s.handleUpdateBusinessUserAPIAccess)))
 	mux.Handle("PATCH /api/business/users/{id}/billing-levels", s.requireAdminAuth(http.HandlerFunc(s.handleUpdateBusinessUserBillingLevels)))
 	mux.Handle("PATCH /api/business/users/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleUpdateBusinessUser)))
 	mux.Handle("DELETE /api/business/users/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleDeleteBusinessUser)))
