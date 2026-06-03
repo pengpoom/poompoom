@@ -401,3 +401,56 @@ func (s *Server) handleV1CancelImageJob(w http.ResponseWriter, r *http.Request) 
 		Metadata: metadataOrNil(item.APIMetadata),
 	})
 }
+
+func (s *Server) handleV1ListModels(w http.ResponseWriter, r *http.Request) {
+	items, err := s.businessImageModels(r.Context(), false)
+	if err != nil {
+		writeV1Error(w, http.StatusInternalServerError, "model_list_failed", err.Error())
+		return
+	}
+	data := make([]map[string]any, 0, len(items))
+	for _, m := range items {
+		if !m.Enabled || !m.Availability.Available {
+			continue
+		}
+		data = append(data, map[string]any{
+			"id":           m.ID,
+			"object":       "model",
+			"owned_by":     firstNonEmpty(m.Vendor, "poomimage"),
+			"display_name": m.DisplayName,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
+}
+
+func (s *Server) handleV1Credits(w http.ResponseWriter, r *http.Request) {
+	key, ok := apiKeyFromContext(r.Context())
+	if !ok {
+		writeV1Error(w, http.StatusUnauthorized, "invalid_api_key", "missing api key")
+		return
+	}
+	creditStore, err := s.newBusinessCreditStore()
+	if err != nil {
+		writeV1Error(w, http.StatusInternalServerError, "store_unavailable", "credit store failed")
+		return
+	}
+	defer creditStore.Close()
+	summary, err := creditStore.Summary(r.Context(), key.UserID)
+	if err != nil {
+		writeV1Error(w, http.StatusInternalServerError, "credit_lookup_failed", err.Error())
+		return
+	}
+	resp := map[string]any{
+		"balance":          summary.Balance,
+		"key_credit_limit": key.CreditLimit,
+		"key_used_credits": key.UsedCredits,
+	}
+	if key.CreditLimit > 0 {
+		remaining := key.CreditLimit - key.UsedCredits
+		if remaining < 0 {
+			remaining = 0
+		}
+		resp["key_remaining"] = remaining
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
