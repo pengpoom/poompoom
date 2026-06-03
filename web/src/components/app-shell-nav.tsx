@@ -16,6 +16,7 @@ import {
   Gauge,
   History,
   ImageIcon,
+  KeyRound,
   LogOut,
   Menu,
   Moon,
@@ -38,6 +39,7 @@ import { AnnounceModal, AppModal, AppToastStack, type AppToastItem } from "@/com
 import { useTheme, type ThemeMode } from "@/components/theme-provider";
 import {
   fetchBusinessCredit,
+  fetchBusinessMe,
   fetchBusinessNotifications,
   fetchVersionInfo,
   logout,
@@ -77,6 +79,7 @@ const adminItems: readonly ShellNavItem[] = [
   { href: "/affiliate", matchPrefix: "/affiliate", label: "返利", icon: Share2 },
   { href: "/admin/usage", matchPrefix: "/admin/usage", label: "记录", icon: History },
   { href: "/storage", matchPrefix: "/storage", label: "存储", icon: Database },
+  { href: "/api-keys", matchPrefix: "/api-keys", label: "分发", icon: KeyRound },
 ];
 
 const userItems: readonly ShellNavItem[] = [
@@ -97,11 +100,15 @@ function isActive(pathname: string, item: ShellNavItem) {
   return pathname === item.matchPrefix || pathname.startsWith(`${item.matchPrefix}/`);
 }
 
-function navItemsForRole(role: AuthRole | null) {
+function navItemsForRole(role: AuthRole | null, apiAccessEnabled: boolean) {
   if (role === "admin") {
     return [...adminItems, ...userItems, ...libraryItems, ...usageItems];
   }
-  return [...userItems, ...libraryItems, ...usageItems];
+  const items = [...userItems, ...libraryItems, ...usageItems];
+  if (apiAccessEnabled) {
+    items.push({ href: "/api-access", matchPrefix: "/api-access", label: "API 接入", icon: KeyRound });
+  }
+  return items;
 }
 
 function formatVersionLabel(value: string) {
@@ -238,6 +245,7 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
   const moreMenuPanelRef = useRef<HTMLDivElement | null>(null);
   const railNavRef = useRef<HTMLElement | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
+  const [apiAccessEnabled, setApiAccessEnabled] = useState(false);
   const [username, setUsername] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
@@ -291,6 +299,28 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
       window.removeEventListener(BUSINESS_CREDIT_CHANGED_EVENT, handleCreditChanged as EventListener);
     };
   }, []);
+
+  useEffect(() => {
+    if (role !== "user") {
+      setApiAccessEnabled(false);
+      return;
+    }
+    let cancelled = false;
+    void fetchBusinessMe()
+      .then((me) => {
+        if (!cancelled) {
+          setApiAccessEnabled(!!me.apiAccessEnabled);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setApiAccessEnabled(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [role]);
 
   useEffect(() => {
     let cancelled = false;
@@ -526,7 +556,7 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
     finishIntentionalLogout();
   };
 
-  const navItems = navItemsForRole(role);
+  const navItems = navItemsForRole(role, apiAccessEnabled);
   const displayUsername = username || (role === "admin" ? "管理员" : "用户");
   const infoDialogTitle = infoDialog === "terms" ? "平台协议" : "更新日志";
   const closeMoreMenu = () => {

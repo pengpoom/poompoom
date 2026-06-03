@@ -7,6 +7,8 @@ import { resetUnauthorizedRedirectState } from "@/lib/request";
 import { usePublicSiteSettings } from "@/lib/site-settings";
 import { AUTH_STATE_CHANGED_EVENT, clearStoredAuthKey, getStoredAuthRole, type AuthRole } from "@/store/auth";
 
+const APIAccessPage = lazy(() => import("@/app/api-access/page"));
+const APIKeysPage = lazy(() => import("@/app/api-keys/page"));
 const AccountsPage = lazy(() => import("@/app/accounts/page"));
 const AffiliatePage = lazy(() => import("@/app/affiliate/page"));
 const AdminUsagePage = lazy(() => import("@/app/admin-usage/page"));
@@ -229,12 +231,14 @@ export default function App() {
             <Route path="/usage" element={<ProtectedRoute role={role}><MyUsagePage /></ProtectedRoute>} />
             <Route path="/credits" element={<ProtectedRoute role={role}><CreditsPage /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute role={role}><ProfilePage /></ProtectedRoute>} />
+            <Route path="/api-access" element={<ProtectedRoute role={role}><APIAccessPage /></ProtectedRoute>} />
             <Route path="/admin/dashboard" element={<ProtectedRoute role={role} adminOnly><DashboardPage /></ProtectedRoute>} />
             <Route path="/admin/usage" element={<ProtectedRoute role={role} adminOnly><AdminUsagePage /></ProtectedRoute>} />
             <Route path="/admin/operations" element={<ProtectedRoute role={role} adminOnly><OperationsPage /></ProtectedRoute>} />
             <Route path="/risk-control" element={<ProtectedRoute role={role} adminOnly><RiskControlPage /></ProtectedRoute>} />
             <Route path="/notifications" element={<ProtectedRoute role={role} adminOnly><NotificationsPage /></ProtectedRoute>} />
             <Route path="/codes" element={<ProtectedRoute role={role} adminOnly><CodesPage /></ProtectedRoute>} />
+            <Route path="/api-keys" element={<ProtectedRoute role={role} adminOnly><APIKeysPage /></ProtectedRoute>} />
             <Route path="/affiliate" element={<ProtectedRoute role={role} adminOnly><AffiliatePage /></ProtectedRoute>} />
             <Route path="/payments" element={<ProtectedRoute role={role} adminOnly><PaymentsPage /></ProtectedRoute>} />
             <Route path="/users" element={<ProtectedRoute role={role} adminOnly><UsersPage /></ProtectedRoute>} />
