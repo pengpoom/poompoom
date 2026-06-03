@@ -19,11 +19,13 @@ import {
   clearBusinessUserData,
   createBusinessUser,
   deleteBusinessUser,
+  fetchAdminUsersAPIAccess,
   fetchBusinessSystemSettings,
   fetchBusinessUsers,
   purgeBusinessUser,
   restoreBusinessUser,
   updateBusinessUser,
+  updateBusinessUserAPIAccess,
   updateBusinessUserBillingLevels,
   updateBusinessUserStatus,
   type BusinessBillingLevel,
@@ -134,6 +136,7 @@ export default function UsersPage() {
     setDrawerReload(null);
   }, [navigate]);
   const [users, setUsers] = useState<BusinessUser[]>([]);
+  const [apiAccessIds, setApiAccessIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
@@ -219,11 +222,13 @@ export default function UsersPage() {
   const loadUsers = async () => {
     setLoading(true);
     try {
-      const [payload, settingsPayload] = await Promise.all([
+      const [payload, settingsPayload, apiAccessPayload] = await Promise.all([
         fetchBusinessUsers({ includeDeleted }),
         fetchBusinessSystemSettings(),
+        fetchAdminUsersAPIAccess(),
       ]);
       setUsers(payload.items);
+      setApiAccessIds(new Set(apiAccessPayload.enabledUserIds || []));
       setSubscriptionLevels((settingsPayload.settings.billing.subscriptionLevels || []).filter((level) => level.enabled));
       setWalletLevels((settingsPayload.settings.billing.walletLevels || []).filter((level) => level.enabled));
     } catch (error) {
@@ -279,6 +284,28 @@ export default function UsersPage() {
       toast.success(nextStatus === "active" ? "用户已启用" : "用户已禁用");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "更新用户状态失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleToggleApiAccess = async (user: BusinessUser) => {
+    const enabled = !apiAccessIds.has(user.id);
+    setSubmitting(true);
+    try {
+      await updateBusinessUserAPIAccess(user.id, enabled);
+      setApiAccessIds((current) => {
+        const next = new Set(current);
+        if (enabled) {
+          next.add(user.id);
+        } else {
+          next.delete(user.id);
+        }
+        return next;
+      });
+      toast.success(enabled ? "已开通 API 接入" : "已关闭 API 接入");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "更新 API 接入失败");
     } finally {
       setSubmitting(false);
     }
@@ -519,19 +546,20 @@ export default function UsersPage() {
                   <th>图片</th>
                   <th>存储</th>
                   <th>最近生成</th>
+                  <th>API 接入</th>
                   <th style={{ textAlign: "right" }}>操作</th>
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={10} style={{ padding: "48px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
+                    <td colSpan={11} style={{ padding: "48px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
                       <LoaderCircle className="mx-auto mb-2 size-5 animate-spin" /> 读取中
                     </td>
                   </tr>
                 ) : filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan={10} style={{ padding: "48px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
+                    <td colSpan={11} style={{ padding: "48px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
                       暂无匹配用户
                     </td>
                   </tr>
@@ -566,6 +594,16 @@ export default function UsersPage() {
                       <td>{usageNumber(user.usage?.image_count)}</td>
                       <td>{formatBytes(user.usage?.storage_bytes)}</td>
                       <td>{formatDateTime(user.usage?.last_generated_at || "")}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className={`app-switch ${apiAccessIds.has(user.id) ? "on" : "off"}`}
+                          onClick={() => void handleToggleApiAccess(user)}
+                          disabled={submitting || user.status === "deleted"}
+                          aria-label={apiAccessIds.has(user.id) ? "关闭 API 接入" : "开通 API 接入"}
+                          title={apiAccessIds.has(user.id) ? "关闭 API 接入" : "开通 API 接入"}
+                        />
+                      </td>
                       <td>
                         <div style={{ display: "flex", justifyContent: "flex-end" }}>
                           <div className="app-act">
