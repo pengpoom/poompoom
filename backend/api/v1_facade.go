@@ -349,3 +349,55 @@ func parseRFC3339Unix(s string) int64 {
 	}
 	return t.Unix()
 }
+
+func (s *Server) handleV1CancelImageJob(w http.ResponseWriter, r *http.Request) {
+	key, ok := apiKeyFromContext(r.Context())
+	if !ok {
+		writeV1Error(w, http.StatusUnauthorized, "invalid_api_key", "missing api key")
+		return
+	}
+	store, err := s.newBusinessJobStore()
+	if err != nil {
+		writeV1Error(w, http.StatusInternalServerError, "store_unavailable", "job store failed")
+		return
+	}
+	defer store.Close()
+	id := r.PathValue("id")
+	before, beforeOK, _ := store.Get(r.Context(), id, key.UserID)
+	if !beforeOK || before.APIKeyID != key.ID {
+		writeV1Error(w, http.StatusNotFound, "job_not_found", "job not found")
+		return
+	}
+	item, ok2, err := store.RequestCancel(r.Context(), id, key.UserID)
+	if err != nil {
+		writeV1Error(w, http.StatusInternalServerError, "cancel_failed", err.Error())
+		return
+	}
+	if !ok2 {
+		writeV1Error(w, http.StatusNotFound, "job_not_found", "job not found")
+		return
+	}
+	if businessImageJobBeforeUpstream(before) &&
+		(item.Status == businessjobs.StatusCancelled || item.Status == businessjobs.StatusCancelRequested) {
+		item = s.refundCancelledPreUpstreamBusinessImageJob(context.Background(), item)
+	}
+	if item.Status == businessjobs.StatusCancelRequested || item.Status == businessjobs.StatusCancelled {
+		if s.cancelActiveBusinessImageJob(item.ID) && item.Status == businessjobs.StatusCancelRequested {
+			item.Status = businessjobs.StatusCancelled
+			item.Stage = "cancelled"
+			item.FinishedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			if saved, saveErr := store.Save(context.Background(), item); saveErr == nil {
+				item = saved
+			}
+		}
+	}
+	s.markBusinessImageGenerationCancelled(context.Background(), key.UserID, item.GenerationID)
+	writeJSON(w, http.StatusOK, v1ImageJobResponse{
+		ID:       item.ID,
+		Object:   "image.generation.job",
+		Status:   toPublicStatus(item.Status),
+		Model:    item.Model,
+		Created:  parseRFC3339Unix(item.CreatedAt),
+		Metadata: metadataOrNil(item.APIMetadata),
+	})
+}
