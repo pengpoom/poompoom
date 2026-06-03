@@ -66,3 +66,23 @@ func TestAuthorizeBusinessImageFileSignature(t *testing.T) {
 		t.Fatal("cross-file sig accepted")
 	}
 }
+
+func TestExternalAPIKeyMiddlewareGate(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	sOff := &Server{cfg: &config.Config{}}
+	rr := httptest.NewRecorder()
+	sOff.requireExternalAPIKey(next).ServeHTTP(rr, httptest.NewRequest("GET", "/v1/images/models", nil))
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("disabled: want 503 got %d", rr.Code)
+	}
+
+	cfgOn := &config.Config{}
+	cfgOn.ExternalAPI.Enabled = true
+	sOn := &Server{cfg: cfgOn}
+	rr2 := httptest.NewRecorder()
+	sOn.requireExternalAPIKey(next).ServeHTTP(rr2, httptest.NewRequest("GET", "/v1/images/models", nil))
+	if rr2.Code != http.StatusUnauthorized {
+		t.Fatalf("no token: want 401 got %d", rr2.Code)
+	}
+}
