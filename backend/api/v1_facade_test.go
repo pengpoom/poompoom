@@ -1,6 +1,13 @@
 package api
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"imagestudio/internal/config"
+)
 
 func TestToPublicStatus(t *testing.T) {
 	cases := map[string]string{
@@ -36,5 +43,26 @@ func TestSignedImageURL(t *testing.T) {
 	q := signImageFileQuery(secret, name, exp)
 	if q == "" || q[0] != '?' {
 		t.Fatalf("query=%q", q)
+	}
+}
+
+func TestAuthorizeBusinessImageFileSignature(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.ExternalAPI.SigningSecret = "sek"
+	s := &Server{cfg: cfg}
+	name := "business-abc.png"
+	exp := time.Now().UTC().Add(time.Hour).Unix()
+	good := httptest.NewRequest("GET", "/v1/files/image/"+name+signImageFileQuery("sek", name, exp), nil)
+	if st, ok := s.authorizeBusinessImageFile(good, name); !ok || st != http.StatusOK {
+		t.Fatalf("valid sig rejected: st=%d ok=%v", st, ok)
+	}
+	staleExp := time.Now().UTC().Add(-time.Hour).Unix()
+	stale := httptest.NewRequest("GET", "/v1/files/image/"+name+signImageFileQuery("sek", name, staleExp), nil)
+	if _, ok := s.authorizeBusinessImageFile(stale, name); ok {
+		t.Fatal("expired sig accepted")
+	}
+	cross := httptest.NewRequest("GET", "/v1/files/image/"+name+signImageFileQuery("sek", "business-other.png", exp), nil)
+	if _, ok := s.authorizeBusinessImageFile(cross, name); ok {
+		t.Fatal("cross-file sig accepted")
 	}
 }

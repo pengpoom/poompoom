@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"imagestudio/internal/businessauth"
 )
@@ -150,6 +152,21 @@ func (s *Server) handleImageFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authorizeBusinessImageFile(r *http.Request, name string) (int, bool) {
+	if expRaw := strings.TrimSpace(r.URL.Query().Get("exp")); expRaw != "" {
+		sig := strings.TrimSpace(r.URL.Query().Get("sig"))
+		exp, err := strconv.ParseInt(expRaw, 10, 64)
+		if err != nil || sig == "" {
+			return http.StatusForbidden, false
+		}
+		if time.Now().UTC().Unix() > exp {
+			return http.StatusForbidden, false
+		}
+		secret := strings.TrimSpace(s.cfg.ExternalAPI.SigningSecret)
+		if secret == "" || !verifyImageFileToken(secret, name, exp, sig) {
+			return http.StatusForbidden, false
+		}
+		return http.StatusOK, true
+	}
 	session, ok, err := s.authSessionForRequest(r)
 	if err != nil {
 		return http.StatusServiceUnavailable, false
