@@ -98,3 +98,14 @@ request_timeout = 20
 
 [log]
 log_all_requests = false
+
+[external_api]
+enabled = false
+base_url = "https://api.example.com"
+default_rate_limit_per_minute = 60
+default_concurrency_limit = 2
+default_idempotency_ttl_hours = 168
+max_prompt_bytes = 20000
+max_metadata_bytes = 4096
+signing_secret = ""
+signed_url_ttl_seconds = 3600

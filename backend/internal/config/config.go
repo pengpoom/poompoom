@@ -156,20 +156,33 @@ type Config struct {
 	loaded bool         `toml:"-"`
 	paths  Paths        `toml:"-"`
 
-	App       AppConfig       `toml:"app"`
-	Server    ServerConfig    `toml:"server"`
-	ChatGPT   ChatGPTConfig   `toml:"chatgpt"`
-	Accounts  AccountsConfig  `toml:"accounts"`
-	Database  DatabaseConfig  `toml:"database"`
-	JobQueue  JobQueueConfig  `toml:"job_queue"`
-	Storage   StorageConfig   `toml:"storage"`
-	Sync      SyncConfig      `toml:"sync"`
-	Log       LogConfig       `toml:"log"`
-	Proxy     ProxyConfig     `toml:"proxy"`
-	APIAccess APIAccessConfig `toml:"api_access"`
-	CPA       CPAConfig       `toml:"cpa"`
-	NewAPI    NewAPIConfig    `toml:"newapi"`
-	Sub2API   Sub2APIConfig   `toml:"sub2api"`
+	App         AppConfig         `toml:"app"`
+	Server      ServerConfig      `toml:"server"`
+	ChatGPT     ChatGPTConfig     `toml:"chatgpt"`
+	Accounts    AccountsConfig    `toml:"accounts"`
+	Database    DatabaseConfig    `toml:"database"`
+	JobQueue    JobQueueConfig    `toml:"job_queue"`
+	Storage     StorageConfig     `toml:"storage"`
+	Sync        SyncConfig        `toml:"sync"`
+	Log         LogConfig         `toml:"log"`
+	Proxy       ProxyConfig       `toml:"proxy"`
+	APIAccess   APIAccessConfig   `toml:"api_access"`
+	CPA         CPAConfig         `toml:"cpa"`
+	NewAPI      NewAPIConfig      `toml:"newapi"`
+	Sub2API     Sub2APIConfig     `toml:"sub2api"`
+	ExternalAPI ExternalAPIConfig `toml:"external_api"`
+}
+
+type ExternalAPIConfig struct {
+	Enabled                    bool   `toml:"enabled"`
+	BaseURL                    string `toml:"base_url"`
+	DefaultRateLimitPerMinute  int    `toml:"default_rate_limit_per_minute"`
+	DefaultConcurrencyLimit    int    `toml:"default_concurrency_limit"`
+	DefaultIdempotencyTTLHours int    `toml:"default_idempotency_ttl_hours"`
+	MaxPromptBytes             int    `toml:"max_prompt_bytes"`
+	MaxMetadataBytes           int    `toml:"max_metadata_bytes"`
+	SigningSecret              string `toml:"signing_secret"`
+	SignedURLTTLSeconds        int    `toml:"signed_url_ttl_seconds"`
 }
 
 func New(rootDir string) *Config {
@@ -463,6 +476,7 @@ func (c *Config) copyFrom(other *Config) {
 	c.CPA = other.CPA
 	c.NewAPI = other.NewAPI
 	c.Sub2API = other.Sub2API
+	c.ExternalAPI = other.ExternalAPI
 	c.paths = other.paths
 }
 

@@ -217,6 +217,11 @@ func applyEnvConfigOverrides(cfg *config.Config) error {
 			}
 		}
 	}
+	putBool := func(envKey, section, key string) {
+		if value := os.Getenv(envKey); strings.TrimSpace(value) != "" {
+			put(section, key, strings.EqualFold(strings.TrimSpace(value), "true"))
+		}
+	}
 
 	putString("APP_AUTH_KEY", "app", "auth_key")
 	putString("APP_API_KEY", "app", "api_key")
@@ -251,6 +256,11 @@ func applyEnvConfigOverrides(cfg *config.Config) error {
 	putString("SUB2API_PASSWORD", "sub2api", "password")
 	putString("SUB2API_API_KEY", "sub2api", "api_key")
 	putString("SUB2API_GROUP_ID", "sub2api", "group_id")
+	putBool("EXTERNAL_API_ENABLED", "external_api", "enabled")
+	putString("EXTERNAL_API_BASE_URL", "external_api", "base_url")
+	putString("EXTERNAL_API_SIGNING_SECRET", "external_api", "signing_secret")
+	putInt("EXTERNAL_API_DEFAULT_RATE_LIMIT_PER_MINUTE", "external_api", "default_rate_limit_per_minute")
+	putInt("EXTERNAL_API_DEFAULT_CONCURRENCY_LIMIT", "external_api", "default_concurrency_limit")
 
 	if len(overrides) == 0 {
 		return nil
