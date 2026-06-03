@@ -161,8 +161,9 @@ type businessUsageRecordWithUser struct {
 var errBusinessUserNotDeleted = errors.New("business user is not deleted")
 
 type businessMeResponse struct {
-	User   businessauth.User       `json:"user"`
-	Credit businesscredits.Summary `json:"credit"`
+	User             businessauth.User       `json:"user"`
+	Credit           businesscredits.Summary `json:"credit"`
+	ApiAccessEnabled bool                    `json:"apiAccessEnabled"`
 }
 
 type businessCreditLedgerResponse struct {
@@ -714,7 +715,12 @@ func (s *Server) handleGetBusinessMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, businessMeResponse{User: user, Credit: credit})
+	apiAccess, err := userStore.IsUserAPIAccessEnabled(r.Context(), session.UserID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, businessMeResponse{User: user, Credit: credit, ApiAccessEnabled: apiAccess})
 }
 
 func (s *Server) handleUpdateBusinessUserAPIAccess(w http.ResponseWriter, r *http.Request) {

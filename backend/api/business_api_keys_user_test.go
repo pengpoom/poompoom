@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
 	"strings"
@@ -71,5 +72,41 @@ func TestAdminToggleUserAPIAccess(t *testing.T) {
 	enabled, err := authStore.IsUserAPIAccessEnabled(ctx, userID)
 	if err != nil || !enabled {
 		t.Fatalf("after toggle, enabled=%v err=%v, want true", enabled, err)
+	}
+}
+
+func TestMeReportsAPIAccess(t *testing.T) {
+	server, handler := apiAccessTestServer(t)
+	ctx := context.Background()
+	suffix := time.Now().UTC().Format("20060102150405.000000")
+	userID := "apiaccess_me_" + suffix
+	authStore, err := server.newBusinessAuthStore()
+	if err != nil {
+		t.Fatalf("newBusinessAuthStore: %v", err)
+	}
+	defer authStore.Close()
+	if err := authStore.EnsureBootstrapUser(ctx, businessauth.BootstrapUser{
+		ID: userID, Username: userID, Email: userID + "@example.com", Password: "p", Role: businessauth.RoleUser,
+	}); err != nil {
+		t.Fatalf("EnsureBootstrapUser: %v", err)
+	}
+	if _, err := authStore.SetUserAPIAccessEnabled(ctx, userID, true); err != nil {
+		t.Fatalf("SetUserAPIAccessEnabled: %v", err)
+	}
+	token := postgresAPICreateSession(t, ctx, server, loginAccount{
+		Username: userID, Email: userID + "@example.com", Role: businessauth.RoleUser, UserID: userID,
+	})
+	rec := postgresAPIServeJSON(t, handler, http.MethodGet, "/api/business/me", token, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("me status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		ApiAccessEnabled bool `json:"apiAccessEnabled"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode me: %v", err)
+	}
+	if !payload.ApiAccessEnabled {
+		t.Fatalf("me.apiAccessEnabled = false, want true")
 	}
 }
