@@ -131,3 +131,23 @@ func TestMetadataOrNilAndParseTime(t *testing.T) {
 		t.Fatal("garbage should be 0")
 	}
 }
+
+func TestV1RoutesRegistered(t *testing.T) {
+	h := (&Server{cfg: &config.Config{}}).Handler()
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{"POST", "/v1/images/generations"},
+		{"GET", "/v1/images/jobs/abc"},
+		{"DELETE", "/v1/images/jobs/abc"},
+		{"GET", "/v1/images/models"},
+		{"GET", "/v1/images/credits"},
+	} {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(tc.method, tc.path, strings.NewReader("{}")))
+		if rr.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s %s: want 503 (disabled) got %d", tc.method, tc.path, rr.Code)
+		}
+	}
+}
