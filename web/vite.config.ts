@@ -36,7 +36,7 @@ export default defineConfig({
     port: 5270,
     proxy: {
       "/auth": backendProxyTarget,
-      "/api": backendProxyTarget,
+      "/api/": backendProxyTarget,
       "/v1/files/image": backendProxyTarget,
       "/v1": "http://127.0.0.1:8080",
       "/version": backendProxyTarget,
