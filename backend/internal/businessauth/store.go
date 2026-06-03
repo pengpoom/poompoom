@@ -1718,3 +1718,24 @@ func (s *Store) SetUserAPIAccessEnabled(ctx context.Context, id string, enabled 
 	}
 	return affected > 0, nil
 }
+
+func (s *Store) ListAPIAccessEnabledUserIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, s.rebind(
+		`SELECT id FROM business_users WHERE api_access_enabled = ? ORDER BY id`), true)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}

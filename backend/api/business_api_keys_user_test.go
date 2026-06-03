@@ -188,3 +188,62 @@ func TestUserSelfServeAPIKeys(t *testing.T) {
 }
 
 func serverDB(s *Server) *sql.DB { return s.db }
+
+func TestAdminListUsersAPIAccess(t *testing.T) {
+	server, handler := apiAccessTestServer(t)
+	ctx := context.Background()
+	suffix := time.Now().UTC().Format("20060102150405.000000")
+	adminID := "apiaccess_lister_" + suffix
+	onID := "apiaccess_on_" + suffix
+	offID := "apiaccess_off_" + suffix
+	authStore, err := server.newBusinessAuthStore()
+	if err != nil {
+		t.Fatalf("newBusinessAuthStore: %v", err)
+	}
+	defer authStore.Close()
+	for _, u := range []businessauth.BootstrapUser{
+		{ID: adminID, Username: adminID, Email: adminID + "@example.com", Password: "p", Role: businessauth.RoleAdmin},
+		{ID: onID, Username: onID, Email: onID + "@example.com", Password: "p", Role: businessauth.RoleUser},
+		{ID: offID, Username: offID, Email: offID + "@example.com", Password: "p", Role: businessauth.RoleUser},
+	} {
+		if err := authStore.EnsureBootstrapUser(ctx, u); err != nil {
+			t.Fatalf("EnsureBootstrapUser(%s): %v", u.ID, err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = serverDB(server).Exec("DELETE FROM business_users WHERE id IN ($1, $2, $3)", adminID, onID, offID)
+	})
+	if _, err := authStore.SetUserAPIAccessEnabled(ctx, onID, true); err != nil {
+		t.Fatalf("SetUserAPIAccessEnabled: %v", err)
+	}
+
+	adminToken := postgresAPICreateSession(t, ctx, server, loginAccount{
+		Username: adminID, Email: adminID + "@example.com", Role: businessauth.RoleAdmin, UserID: adminID,
+	})
+	rec := postgresAPIServeJSON(t, handler, http.MethodGet, "/api/business/admin/users-api-access", adminToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		EnabledUserIDs []string `json:"enabledUserIds"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	set := map[string]bool{}
+	for _, id := range payload.EnabledUserIDs {
+		set[id] = true
+	}
+	if !set[onID] {
+		t.Fatalf("enabled list missing %s", onID)
+	}
+	if set[offID] {
+		t.Fatalf("enabled list unexpectedly contains %s", offID)
+	}
+
+	// 无 admin session → 401
+	rec = postgresAPIServeJSON(t, handler, http.MethodGet, "/api/business/admin/users-api-access", "", nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no-token status = %d, want 401", rec.Code)
+	}
+}

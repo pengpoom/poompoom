@@ -754,6 +754,21 @@ func (s *Server) handleUpdateBusinessUserAPIAccess(w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "apiAccessEnabled": body.Enabled})
 }
 
+func (s *Server) handleListUsersAPIAccess(w http.ResponseWriter, r *http.Request) {
+	store, err := s.newBusinessAuthStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
+		return
+	}
+	defer store.Close()
+	ids, err := store.ListAPIAccessEnabledUserIDs(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enabledUserIds": ids})
+}
+
 func (s *Server) handleChangeBusinessMePassword(w http.ResponseWriter, r *http.Request) {
 	session, ok := requestAuthSession(r)
 	if !ok {

@@ -538,6 +538,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/business/admin/api-keys", s.requireAdminAuth(http.HandlerFunc(s.handleAdminCreateAPIKey)))
 	mux.Handle("PATCH /api/business/admin/api-keys/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminUpdateAPIKey)))
 	mux.Handle("POST /api/business/admin/api-keys/{id}/revoke", s.requireAdminAuth(http.HandlerFunc(s.handleAdminRevokeAPIKey)))
+	mux.Handle("GET /api/business/admin/users-api-access", s.requireAdminAuth(http.HandlerFunc(s.handleListUsersAPIAccess)))
 	mux.Handle("GET /api/business/system-settings", s.requireAdminAuth(http.HandlerFunc(s.handleGetBusinessSystemSettings)))
 	mux.Handle("PUT /api/business/system-settings", s.requireAdminAuth(http.HandlerFunc(s.handleUpdateBusinessSystemSettings)))
 	mux.Handle("GET /api/business/users", s.requireAdminAuth(http.HandlerFunc(s.handleListBusinessUsers)))
