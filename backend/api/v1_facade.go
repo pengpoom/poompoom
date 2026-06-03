@@ -200,6 +200,10 @@ func (s *Server) handleV1CreateImageGeneration(w http.ResponseWriter, r *http.Re
 		return
 	}
 	payload := map[string]any{"prompt": prompt}
+	genID := businessjobs.NewJobID()
+	payload["jobId"] = genID
+	payload["turnId"] = genID
+	payload["conversationId"] = key.ID
 	if m := strings.TrimSpace(req.Model); m != "" {
 		payload["model"] = m
 	}

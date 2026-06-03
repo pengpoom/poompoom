@@ -2,14 +2,21 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"imagestudio/internal/businessapikeys"
+	"imagestudio/internal/businessauth"
+	"imagestudio/internal/businesscredits"
+	"imagestudio/internal/businessproviders"
 	"imagestudio/internal/config"
+	"imagestudio/internal/database"
 )
 
 func TestToPublicStatus(t *testing.T) {
@@ -149,5 +156,155 @@ func TestV1RoutesRegistered(t *testing.T) {
 		if rr.Code != http.StatusServiceUnavailable {
 			t.Fatalf("%s %s: want 503 (disabled) got %d", tc.method, tc.path, rr.Code)
 		}
+	}
+}
+
+func facadeServe(t *testing.T, handler http.Handler, method, target, bearer, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	var req *http.Request
+	if body == "" {
+		req = httptest.NewRequest(method, target, nil)
+	} else {
+		req = httptest.NewRequest(method, target, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestV1FacadeEndToEnd(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	imageB64 := base64.StdEncoding.EncodeToString([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 1,
+			"data":    []map[string]any{{"b64_json": imageB64}},
+		})
+	}))
+	defer upstream.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cfg := config.New(t.TempDir())
+	if err := cfg.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	cfg.Database.Driver = "postgres"
+	cfg.Database.DSN = dsn
+	cfg.Database.MaxOpenConns = 5
+	cfg.Database.MaxIdleConns = 2
+	cfg.Storage.ImageDir = t.TempDir()
+	cfg.JobQueue.Backend = "local"
+	cfg.ExternalAPI.Enabled = true
+	cfg.ExternalAPI.SigningSecret = "facade-secret"
+	cfg.ExternalAPI.BaseURL = ""
+	cfg.ExternalAPI.SignedURLTTLSeconds = 3600
+
+	db, err := database.Open(ctx, cfg)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	suffix := strings.ReplaceAll(time.Now().UTC().Format("20060102150405.000000000"), ".", "")
+	userID := "facade_user_" + suffix
+	authStore := businessauth.NewStoreWithDB(db, cfg.Database.Driver)
+	if err := authStore.EnsureBootstrapUsers(ctx, []businessauth.BootstrapUser{
+		{ID: userID, Username: "facade_" + suffix, Email: "facade_" + suffix + "@example.test", Password: "pass", Role: businessauth.RoleUser},
+	}); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+
+	providerStore := businessproviders.NewStoreWithDB(db, cfg.Database.Driver)
+	if _, err := providerStore.Create(ctx, businessproviders.MutationInput{
+		Name:         "Facade Test Provider",
+		Platform:     businessproviders.PlatformGPTImage,
+		BaseURL:      upstream.URL,
+		APIKey:       "provider-key",
+		DefaultModel: "gpt-image-test",
+		Enabled:      true,
+		IsDefault:    true,
+	}); err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+
+	creditStore := businesscredits.NewStoreWithDB(db, cfg.Database.Driver)
+	if _, _, err := creditStore.SetBalance(ctx, userID, 100, "test"); err != nil {
+		t.Fatalf("set credit: %v", err)
+	}
+
+	server := NewServerWithDatabase(cfg, nil, nil, db)
+	handler := server.Handler()
+
+	keyStore, err := server.newBusinessAPIKeyStore()
+	if err != nil {
+		t.Fatalf("key store: %v", err)
+	}
+	defer keyStore.Close()
+	_, plaintext, err := keyStore.Create(ctx, businessapikeys.CreateInput{UserID: userID, Name: "facade key"})
+	if err != nil {
+		t.Fatalf("create key: %v", err)
+	}
+
+	rec := facadeServe(t, handler, http.MethodPost, "/v1/images/generations", plaintext, `{"prompt":"facade smoke","metadata":{"scene":"demo"}}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("submit: want 202 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var created v1ImageJobResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode submit: %v", err)
+	}
+	if created.ID == "" || created.Status != "queued" {
+		t.Fatalf("submit resp = %#v", created)
+	}
+
+	var done v1ImageJobResponse
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		pr := facadeServe(t, handler, http.MethodGet, "/v1/images/jobs/"+created.ID, plaintext, "")
+		if pr.Code != http.StatusOK {
+			t.Fatalf("poll: status %d body %s", pr.Code, pr.Body.String())
+		}
+		done = v1ImageJobResponse{}
+		_ = json.Unmarshal(pr.Body.Bytes(), &done)
+		if done.Status == "succeeded" || done.Status == "failed" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if done.Status != "succeeded" {
+		t.Fatalf("job not succeeded: %#v", done)
+	}
+	if len(done.Images) == 0 || done.Images[0].URL == "" {
+		t.Fatalf("no image url: %#v", done.Images)
+	}
+	if string(done.Metadata) != `{"scene":"demo"}` {
+		t.Fatalf("metadata not echoed: %q", string(done.Metadata))
+	}
+
+	ir := httptest.NewRecorder()
+	handler.ServeHTTP(ir, httptest.NewRequest(http.MethodGet, done.Images[0].URL, nil))
+	if ir.Code != http.StatusOK {
+		t.Fatalf("signed image fetch: want 200 got %d body=%s", ir.Code, ir.Body.String())
+	}
+
+	_, plaintext2, err := keyStore.Create(ctx, businessapikeys.CreateInput{UserID: userID, Name: "other key"})
+	if err != nil {
+		t.Fatalf("create key2: %v", err)
+	}
+	cr := facadeServe(t, handler, http.MethodGet, "/v1/images/jobs/"+created.ID, plaintext2, "")
+	if cr.Code != http.StatusNotFound {
+		t.Fatalf("cross-key isolation: want 404 got %d", cr.Code)
 	}
 }
