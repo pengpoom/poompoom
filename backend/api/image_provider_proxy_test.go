@@ -25,6 +25,7 @@ import (
 	"imagestudio/internal/businesstracker"
 	"imagestudio/internal/config"
 	"imagestudio/internal/database"
+	"imagestudio/internal/riskcontrol"
 )
 
 func newBusinessImageTestConfig(t *testing.T) *config.Config {
@@ -64,6 +65,7 @@ func resetBusinessImageProxyTestData(t *testing.T, cfg *config.Config) {
 		business_image_conversations,
 		business_image_jobs,
 		business_image_tracker,
+		business_risk_control_logs,
 		business_notification_reads,
 		business_notifications,
 		business_credit_ledger,
@@ -88,6 +90,60 @@ func TestExtractProviderImageGenerateMetadataPrefersJobID(t *testing.T) {
 
 	if metadata.JobID != "job-current" {
 		t.Fatalf("JobID = %q, want job-current", metadata.JobID)
+	}
+}
+
+func TestRiskControlProviderImageErrorMapsInternalErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		decision   riskcontrol.Decision
+		statusCode int
+		code       string
+		message    string
+	}{
+		{
+			name: "blocked",
+			decision: riskcontrol.Decision{
+				Allowed: false,
+				Action:  riskcontrol.ActionBlock,
+				Message: "blocked by policy",
+			},
+			statusCode: http.StatusForbidden,
+			code:       "risk_control_blocked",
+			message:    "blocked by policy",
+		},
+		{
+			name: "unavailable",
+			decision: riskcontrol.Decision{
+				Allowed:           false,
+				Action:            riskcontrol.ActionError,
+				InternalErrorCode: riskcontrol.DecisionErrorUnavailable,
+			},
+			statusCode: http.StatusServiceUnavailable,
+			code:       "risk_control_unavailable",
+			message:    "风控服务暂不可用，请稍后重试",
+		},
+		{
+			name: "config error",
+			decision: riskcontrol.Decision{
+				Allowed:           false,
+				Action:            riskcontrol.ActionError,
+				InternalErrorCode: riskcontrol.DecisionErrorConfig,
+			},
+			statusCode: http.StatusInternalServerError,
+			code:       "risk_control_config_error",
+			message:    "风控配置异常，请联系管理员",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := riskControlProviderImageError(tt.decision)
+
+			if result.StatusCode != tt.statusCode || result.ErrorCode != tt.code || result.ErrorMessage != tt.message {
+				t.Fatalf("result = %#v, want status/code/message = %d/%q/%q", result, tt.statusCode, tt.code, tt.message)
+			}
+		})
 	}
 }
 
@@ -334,6 +390,164 @@ func TestProviderImageGenerateKeepsSourceImagesForHistoryOnly(t *testing.T) {
 	}
 	if url := strings.TrimSpace(stringValue(source["url"])); !strings.HasPrefix(url, "/v1/files/image/business-") {
 		t.Fatalf("source url = %q", url)
+	}
+}
+
+func TestProviderImageGenerateRiskControlBlocksImagesAndRecordsFailure(t *testing.T) {
+	var providerCalled bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerCalled = true
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 123,
+			"data":    []map[string]any{{"b64_json": base64.StdEncoding.EncodeToString([]byte("generated"))}},
+		})
+	}))
+	defer upstream.Close()
+
+	var moderationRequests int
+	moderation := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		moderationRequests++
+		if r.URL.Path != "/v1/moderations" {
+			t.Fatalf("moderation path = %q, want /v1/moderations", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer moderation-key" {
+			t.Fatalf("moderation Authorization = %q", r.Header.Get("Authorization"))
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode moderation payload: %v", err)
+		}
+		items, ok := payload["input"].([]any)
+		if !ok || len(items) != 2 {
+			t.Fatalf("moderation input = %#v, want text and one image", payload["input"])
+		}
+		textItem, ok := items[0].(map[string]any)
+		if !ok || textItem["type"] != "text" || textItem["text"] != "blocked prompt" {
+			t.Fatalf("moderation text item = %#v", items[0])
+		}
+		imageItem, ok := items[1].(map[string]any)
+		if !ok || imageItem["type"] != "image_url" {
+			t.Fatalf("moderation image item = %#v", items[1])
+		}
+		imageURL, ok := imageItem["image_url"].(map[string]any)
+		if !ok || !strings.HasPrefix(strings.TrimSpace(stringValue(imageURL["url"])), "data:image/png;base64,") {
+			t.Fatalf("moderation image_url = %#v", imageItem["image_url"])
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"results": []map[string]any{{
+				"flagged": true,
+				"category_scores": map[string]float64{
+					"violence": 1,
+				},
+			}},
+		})
+	}))
+	defer moderation.Close()
+
+	t.Setenv("IMAGE_PROVIDER", "openai_compatible")
+	t.Setenv("IMAGE_BASE_URL", upstream.URL)
+	t.Setenv("IMAGE_API_KEY", "provider-key")
+	t.Setenv("IMAGE_MODEL", "gpt-image-test")
+
+	cfg := newBusinessImageTestConfig(t)
+	cfg.Storage.ImageDir = "data/business-images"
+	seedBusinessCredit(t, cfg, businessimage.DevUserID, 5)
+	riskStore, err := riskcontrol.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open risk control store: %v", err)
+	}
+	enabled := true
+	mode := riskcontrol.ModePreBlock
+	baseURL := moderation.URL
+	apiKey := "moderation-key"
+	model := "omni-moderation-test"
+	if _, err := riskStore.UpdateConfig(context.Background(), riskcontrol.UpdateConfigInput{
+		Enabled: &enabled,
+		Mode:    &mode,
+		BaseURL: &baseURL,
+		APIKey:  &apiKey,
+		Model:   &model,
+	}); err != nil {
+		t.Fatalf("update risk control config: %v", err)
+	}
+	if err := riskStore.Close(); err != nil {
+		t.Fatalf("close risk control store: %v", err)
+	}
+
+	server := NewServer(cfg, nil, nil)
+	sourcePNG := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3}
+	maskPNG := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 4, 5, 6}
+	sourceImage := "data:image/png;base64," + base64.StdEncoding.EncodeToString(sourcePNG)
+	sourceMask := "data:image/png;base64," + base64.StdEncoding.EncodeToString(maskPNG)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/image/generate",
+		strings.NewReader(`{"mode":"edit","prompt":"blocked prompt","n":1,"conversationId":"conv-risk-blocked","turnId":"turn-risk-blocked","jobId":"job-risk-blocked","sourceImages":[{"id":"src","role":"image","name":"source.png","dataUrl":"`+sourceImage+`"},{"id":"mask","role":"mask","name":"mask.png","dataUrl":"`+sourceMask+`"}]}`),
+	)
+	rec := httptest.NewRecorder()
+
+	server.handleProviderImageGenerate(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if providerCalled {
+		t.Fatal("provider upstream should not be called after risk control block")
+	}
+	if moderationRequests != 1 {
+		t.Fatalf("moderation requests = %d, want 1", moderationRequests)
+	}
+
+	jobStore, err := businessjobs.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open job store: %v", err)
+	}
+	defer jobStore.Close()
+	job, ok, err := jobStore.Get(context.Background(), "job-risk-blocked", businessimage.DevUserID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if !ok {
+		t.Fatal("job not found")
+	}
+	if job.Status != businessjobs.StatusFailed || job.Stage != "risk_control" || job.ErrorCode != "risk_control_blocked" {
+		t.Fatalf("job risk fields = status:%q stage:%q code:%q", job.Status, job.Stage, job.ErrorCode)
+	}
+	if job.CreditReserved != 0 || job.CreditRefunded != 0 || job.UpstreamSent {
+		t.Fatalf("job billing/upstream = reserved:%d refunded:%d upstream:%v", job.CreditReserved, job.CreditRefunded, job.UpstreamSent)
+	}
+
+	imageStore, err := businessimage.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open image store: %v", err)
+	}
+	defer imageStore.Close()
+	generations, err := imageStore.ListGenerations(context.Background(), "conv-risk-blocked", businessimage.DevUserID, 10)
+	if err != nil {
+		t.Fatalf("list generations: %v", err)
+	}
+	if len(generations) != 1 || generations[0].Status != "failed" || generations[0].Error != "risk_control_blocked" {
+		t.Fatalf("generation = %#v", generations)
+	}
+
+	creditStore, err := businesscredits.NewStore(cfg)
+	if err != nil {
+		t.Fatalf("open credit store: %v", err)
+	}
+	defer creditStore.Close()
+	summary, err := creditStore.Summary(context.Background(), businessimage.DevUserID)
+	if err != nil {
+		t.Fatalf("credit summary: %v", err)
+	}
+	if summary.Balance != 5 || summary.Spent != 0 {
+		t.Fatalf("credit summary = %#v, want unchanged balance 5", summary)
+	}
+	totals, err := creditStore.GenerationTotals(context.Background(), businessimage.DevUserID, "job-risk-blocked")
+	if err != nil {
+		t.Fatalf("credit totals: %v", err)
+	}
+	if totals.Reserved != 0 || totals.Refunded != 0 {
+		t.Fatalf("credit totals = %#v, want zero", totals)
 	}
 }
 

@@ -65,7 +65,7 @@ const imageAspectRatioOptions: Array<{
   label: string;
   value: ImageAspectRatio;
 }> = [
-  { label: "智能比例", value: "auto" },
+  { label: "Auto", value: "auto" },
   { label: "1:1", value: "1:1" },
   { label: "2:3", value: "2:3" },
   { label: "3:2", value: "3:2" },

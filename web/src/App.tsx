@@ -23,6 +23,7 @@ const PaymentsPage = lazy(() => import("@/app/payments/page"));
 const HomePage = lazy(() => import("@/app/page"));
 const ProfilePage = lazy(() => import("@/app/profile/page"));
 const NotificationsPage = lazy(() => import("@/app/notifications/page"));
+const RiskControlPage = lazy(() => import("@/app/risk-control/page"));
 const SettingsPage = lazy(() => import("@/app/settings/page"));
 const StartupCheckPage = lazy(() => import("@/app/startup-check/page"));
 const StoragePage = lazy(() => import("@/app/storage/page"));
@@ -231,6 +232,7 @@ export default function App() {
             <Route path="/admin/dashboard" element={<ProtectedRoute role={role} adminOnly><DashboardPage /></ProtectedRoute>} />
             <Route path="/admin/usage" element={<ProtectedRoute role={role} adminOnly><AdminUsagePage /></ProtectedRoute>} />
             <Route path="/admin/operations" element={<ProtectedRoute role={role} adminOnly><OperationsPage /></ProtectedRoute>} />
+            <Route path="/risk-control" element={<ProtectedRoute role={role} adminOnly><RiskControlPage /></ProtectedRoute>} />
             <Route path="/notifications" element={<ProtectedRoute role={role} adminOnly><NotificationsPage /></ProtectedRoute>} />
             <Route path="/codes" element={<ProtectedRoute role={role} adminOnly><CodesPage /></ProtectedRoute>} />
             <Route path="/affiliate" element={<ProtectedRoute role={role} adminOnly><AffiliatePage /></ProtectedRoute>} />

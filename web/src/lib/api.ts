@@ -1753,6 +1753,96 @@ export type BusinessImageModelTestResponse = {
   availability?: BusinessImageModelAvailability;
 };
 
+export type BusinessRiskControlMode = "observe" | "pre_block";
+export type BusinessRiskControlProvider = "openai";
+export type BusinessRiskControlConfig = {
+  enabled: boolean;
+  mode: BusinessRiskControlMode;
+  provider: BusinessRiskControlProvider;
+  baseUrl: string;
+  model: string;
+  apiKeyConfigured: boolean;
+  apiKeyMasked: string;
+  timeoutMs: number;
+  recordNonHits: boolean;
+  blockMessage: string;
+  thresholds: Record<string, number>;
+};
+export type BusinessRiskControlConfigInput = Partial<{
+  enabled: boolean;
+  mode: BusinessRiskControlMode;
+  provider: BusinessRiskControlProvider;
+  baseUrl: string;
+  apiKey: string;
+  clearApiKey: boolean;
+  model: string;
+  timeoutMs: number;
+  recordNonHits: boolean;
+  blockMessage: string;
+  thresholds: Record<string, number>;
+}>;
+export type BusinessRiskControlStatus = {
+  enabled: boolean;
+  mode: BusinessRiskControlMode;
+  provider: BusinessRiskControlProvider;
+  apiKeyConfigured: boolean;
+  last24hTotal: number;
+  last24hFlagged: number;
+  last24hBlocked: number;
+  last24hErrors: number;
+};
+export type BusinessRiskControlLog = {
+  id: string;
+  userId: string;
+  jobId: string;
+  conversationId: string;
+  turnId: string;
+  platform: string;
+  model: string;
+  mode: BusinessRiskControlMode | string;
+  action: "allow" | "block" | "error" | string;
+  flagged: boolean;
+  highestCategory: string;
+  highestScore: number;
+  categoryScores: Record<string, number>;
+  inputExcerpt: string;
+  error: string;
+  latencyMs: number;
+  createdAt: string;
+};
+export type BusinessRiskControlLogsQuery = {
+  page?: number;
+  pageSize?: number;
+  result?: string;
+  platform?: string;
+  search?: string;
+  from?: string;
+  to?: string;
+};
+export type BusinessRiskControlLogsResponse = {
+  items: BusinessRiskControlLog[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pages: number;
+};
+export type BusinessRiskControlDecision = {
+  allowed: boolean;
+  action: string;
+  flagged: boolean;
+  highestCategory: string;
+  highestScore: number;
+  categoryScores: Record<string, number>;
+  message?: string;
+  error?: string;
+};
+export type BusinessRiskControlTestResponse = {
+  result: {
+    decision: BusinessRiskControlDecision;
+    latencyMs: number;
+  };
+};
+
 export type BusinessTrackerPlatformSummary = {
   platform: string;
   total: number;
@@ -2182,6 +2272,48 @@ export async function fetchAdminBusinessImageJobs(query: BusinessImageJobQuery =
 export async function fetchAdminBusinessImageCompareBatch(id: string) {
   return httpRequest<BusinessImageCompareBatchResponse>(
     `/api/business/admin/compare-batches/${encodeURIComponent(id)}`,
+  );
+}
+
+export async function fetchBusinessRiskControlConfig() {
+  return httpRequest<{ config: BusinessRiskControlConfig }>(
+    "/api/business/admin/risk-control/config",
+  );
+}
+
+export async function updateBusinessRiskControlConfig(payload: BusinessRiskControlConfigInput) {
+  return httpRequest<{ config: BusinessRiskControlConfig }>(
+    "/api/business/admin/risk-control/config",
+    { method: "PUT", body: payload },
+  );
+}
+
+export async function fetchBusinessRiskControlStatus() {
+  return httpRequest<{ status: BusinessRiskControlStatus }>(
+    "/api/business/admin/risk-control/status",
+  );
+}
+
+export async function fetchBusinessRiskControlLogs(query: BusinessRiskControlLogsQuery = {}) {
+  return httpRequest<BusinessRiskControlLogsResponse>(
+    `/api/business/admin/risk-control/logs${buildQuery(query)}`,
+  );
+}
+
+export async function testBusinessRiskControl(payload: {
+  prompt: string;
+  mode?: BusinessRiskControlMode;
+  baseUrl?: string;
+  apiKey?: string;
+  clearApiKey?: boolean;
+  model?: string;
+  timeoutMs?: number;
+  blockMessage?: string;
+  thresholds?: Record<string, number>;
+}) {
+  return httpRequest<BusinessRiskControlTestResponse>(
+    "/api/business/admin/risk-control/test",
+    { method: "POST", body: payload },
   );
 }
 

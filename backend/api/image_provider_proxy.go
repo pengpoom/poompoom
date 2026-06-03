@@ -29,6 +29,7 @@ import (
 	"imagestudio/internal/businessproviders"
 	"imagestudio/internal/businesssettings"
 	"imagestudio/internal/businesstracker"
+	"imagestudio/internal/riskcontrol"
 )
 
 const maxImageProviderRequestBytes = 96 << 20
@@ -179,6 +180,63 @@ func providerImageGenerateAdmissionError(err error) providerImageGenerateResult 
 
 func providerImageCapacityError(code string) providerImageGenerateResult {
 	return providerImageGenerateError(http.StatusTooManyRequests, code, businessJobCapacityMessage(code))
+}
+
+func riskControlProviderImageMessage(decision riskcontrol.Decision) string {
+	if decision.Action == riskcontrol.ActionError {
+		switch decision.InternalErrorCode {
+		case riskcontrol.DecisionErrorConfig:
+			return "风控配置异常，请联系管理员"
+		default:
+			return "风控服务暂不可用，请稍后重试"
+		}
+	}
+	return firstNonEmpty(strings.TrimSpace(decision.Message), "内容审计命中风险规则，请调整输入后重试")
+}
+
+func riskControlProviderImageError(decision riskcontrol.Decision) providerImageGenerateResult {
+	if decision.Action == riskcontrol.ActionError {
+		code := firstNonEmpty(decision.InternalErrorCode, riskcontrol.DecisionErrorUnavailable)
+		statusCode := http.StatusServiceUnavailable
+		if code == riskcontrol.DecisionErrorConfig {
+			statusCode = http.StatusInternalServerError
+		}
+		return providerImageGenerateError(statusCode, code, riskControlProviderImageMessage(decision))
+	}
+	return providerImageGenerateError(http.StatusForbidden, "risk_control_blocked", riskControlProviderImageMessage(decision))
+}
+
+func (s *Server) checkProviderImageRiskControl(ctx context.Context, userID string, metadata providerImageGenerateMetadata, providerCfg imageProviderProxyConfig, prompt string, images []riskcontrol.ModerationImage) riskcontrol.Decision {
+	store, err := s.newRiskControlStore()
+	if err != nil {
+		return riskcontrol.ErrorDecision(err)
+	}
+	defer store.Close()
+	service := riskcontrol.NewService(store)
+	decision, err := service.Check(ctx, riskcontrol.CheckInput{
+		UserID:         userID,
+		JobID:          metadata.JobID,
+		ConversationID: metadata.ConversationID,
+		TurnID:         metadata.TurnID,
+		Platform:       providerCfg.Platform,
+		Model:          providerCfg.Model,
+		Prompt:         prompt,
+		Images:         images,
+	})
+	if err != nil {
+		return riskcontrol.ErrorDecision(err)
+	}
+	return decision
+}
+
+func riskControlJobErrorCode(decision riskcontrol.Decision) string {
+	if decision.Action == riskcontrol.ActionError {
+		return "risk_control_error"
+	}
+	if decision.Action == riskcontrol.ActionAllow {
+		return "risk_control_skipped"
+	}
+	return "risk_control_blocked"
 }
 
 func (result providerImageGenerateResult) write(w http.ResponseWriter) {
@@ -374,28 +432,92 @@ func (s *Server) prepareProviderImagePayload(ctx context.Context, userID string,
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	if !providerPayloadIsEdit(payload) {
+	sources := providerImageSourcesFromPayload(payload["sourceImages"])
+	if len(sources) == 0 {
 		return payload, providerResolvedEditInput{}, nil
 	}
-	editInput, err := s.resolveProviderEditInputs(payload)
+	sourceInput, err := s.resolveProviderSourceImages(sources, providerPayloadIsEdit(payload))
 	if err != nil {
 		return payload, providerResolvedEditInput{}, err
 	}
 	nextPayload := cloneProviderPayload(payload)
-	sourceImages := make([]map[string]any, 0, len(editInput.Images)+1)
+	sourceImageCapacity := len(sourceInput.Images)
+	if sourceInput.Mask != nil {
+		sourceImageCapacity++
+	}
+	sourceImages := make([]map[string]any, 0, sourceImageCapacity)
 	conversationID := strings.TrimSpace(stringValue(nextPayload["conversationId"]))
 	generationID := firstNonEmpty(
 		strings.TrimSpace(stringValue(nextPayload["jobId"])),
 		strings.TrimSpace(stringValue(nextPayload["turnId"])),
 	)
-	for index, image := range editInput.Images {
+	for index, image := range sourceInput.Images {
 		sourceImages = append(sourceImages, s.providerEditAssetPayload(ctx, userID, conversationID, generationID, index, image))
 	}
-	if editInput.Mask != nil {
-		sourceImages = append(sourceImages, s.providerEditAssetPayload(ctx, userID, conversationID, generationID, len(sourceImages), *editInput.Mask))
+	if sourceInput.Mask != nil {
+		sourceImages = append(sourceImages, s.providerEditAssetPayload(ctx, userID, conversationID, generationID, len(sourceImages), *sourceInput.Mask))
 	}
 	nextPayload["sourceImages"] = sourceImages
-	return nextPayload, editInput, nil
+	if providerPayloadIsEdit(payload) {
+		return nextPayload, sourceInput, nil
+	}
+	return nextPayload, providerResolvedEditInput{}, nil
+}
+
+func (s *Server) providerRiskControlImagesFromPayload(payload map[string]any) ([]riskcontrol.ModerationImage, error) {
+	sources := providerImageSourcesFromPayload(payload["sourceImages"])
+	if len(sources) == 0 {
+		return nil, nil
+	}
+	images := make([]riskcontrol.ModerationImage, 0, len(sources))
+	for _, source := range sources {
+		if strings.EqualFold(strings.TrimSpace(source.Role), "mask") {
+			continue
+		}
+		data, err := s.resolveProviderSourceImageBytes(source)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) == 0 {
+			continue
+		}
+		images = append(images, riskcontrol.ModerationImage{
+			MimeType: http.DetectContentType(data),
+			Data:     data,
+		})
+	}
+	return images, nil
+}
+
+func (s *Server) resolveProviderEditInputs(payload map[string]any) (providerResolvedEditInput, error) {
+	return s.resolveProviderSourceImages(providerImageSourcesFromPayload(payload["sourceImages"]), true)
+}
+
+func (s *Server) resolveProviderSourceImages(sources []providerImageSource, requireImage bool) (providerResolvedEditInput, error) {
+	result := providerResolvedEditInput{Images: make([]providerEditAsset, 0, len(sources))}
+	for _, source := range sources {
+		data, err := s.resolveProviderSourceImageBytes(source)
+		if err != nil {
+			return providerResolvedEditInput{}, err
+		}
+		asset := providerEditAsset{
+			Source: source,
+			Data:   data,
+		}
+		if strings.EqualFold(strings.TrimSpace(source.Role), "mask") {
+			result.Mask = &asset
+			continue
+		}
+		result.Images = append(result.Images, asset)
+	}
+	if requireImage && len(result.Images) == 0 {
+		return providerResolvedEditInput{}, &providerGenerationError{
+			HTTPStatus: http.StatusBadRequest,
+			Code:       "image_required",
+			Message:    "编辑模式至少需要一张源图",
+		}
+	}
+	return result, nil
 }
 
 func cloneProviderPayload(payload map[string]any) map[string]any {
@@ -520,6 +642,22 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 		}
 		return businessjobs.Job{}, err
 	}
+	riskImages, err := s.providerRiskControlImagesFromPayload(payload)
+	if err != nil {
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
+		providerErr := providerGenerationErrorDetails(err)
+		return businessjobs.Job{}, newProviderImageGenerateSubmitError(providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, providerErr.Message))
+	}
+	if decision := s.checkProviderImageRiskControl(ctx, userID, metadata, providerCfg, prompt, riskImages); !decision.Allowed {
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
+		result := riskControlProviderImageError(decision)
+		jobResult := result
+		jobResult.ErrorCode = riskControlJobErrorCode(decision)
+		if job, saveErr := s.saveFailedProviderImageSubmitJob(ctx, userID, payload, metadata, jobResult, startedAt); saveErr == nil && job.ID != "" {
+			return businessjobs.Job{}, newProviderImageGenerateJobSubmitError(result, job)
+		}
+		return businessjobs.Job{}, newProviderImageGenerateSubmitError(result)
+	}
 	generationID := firstNonEmpty(metadata.JobID, metadata.TurnID)
 	job := businessjobs.Job{
 		ID:                metadata.JobID,
@@ -586,11 +724,19 @@ func (s *Server) recordFailedProviderImageSubmit(ctx context.Context, userID str
 	message := "提交任务失败"
 	var submitErr *providerImageGenerateSubmitError
 	if errors.As(err, &submitErr) {
-		message = firstNonEmpty(strings.TrimSpace(submitErr.result.ErrorMessage), message)
+		message = providerImageGenerationFailureReason(submitErr.result, message)
 	} else if err != nil {
 		message = firstNonEmpty(strings.TrimSpace(err.Error()), message)
 	}
 	s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", message, startedAt)
+}
+
+func providerImageGenerationFailureReason(result providerImageGenerateResult, fallback string) string {
+	code := strings.TrimSpace(result.ErrorCode)
+	if strings.HasPrefix(code, "risk_control_") {
+		return code
+	}
+	return firstNonEmpty(strings.TrimSpace(result.ErrorMessage), fallback)
 }
 
 func (s *Server) saveFailedProviderImageSubmitJob(ctx context.Context, userID string, payload map[string]any, metadata providerImageGenerateMetadata, result providerImageGenerateResult, startedAt time.Time) (businessjobs.Job, error) {
@@ -826,6 +972,17 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	job.Platform = providerCfg.Platform
 	job.ProviderID = providerCfg.ProviderID
 	job.ProviderName = providerCfg.ProviderName
+	blockRiskControl := func(decision riskcontrol.Decision) providerImageGenerateResult {
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
+		result := riskControlProviderImageError(decision)
+		jobErrorCode := riskControlJobErrorCode(decision)
+		job.PayloadJSON = providerImagePayloadJSON(payload)
+		saveJob(job)
+		s.recordProviderImageGeneration(context.Background(), userID, metadata, payload, nil, "failed", jobErrorCode, startedAt)
+		finishJob(businessjobs.StatusFailed, "risk_control", jobErrorCode, result.ErrorMessage)
+		finishTracker(businesstracker.StatusFailed, "risk_control", jobErrorCode, result.ErrorMessage)
+		return result
+	}
 	prompt := strings.TrimSpace(stringValue(payload["prompt"]))
 	if prompt == "" {
 		job.Prompt = prompt
@@ -860,6 +1017,31 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		finishJob(businessjobs.StatusFailed, "validation", "invalid_request", fmt.Sprintf("单次最多生成 %d 张图片", systemSettings.Generation.MaxCount))
 		finishTracker(businesstracker.StatusFailed, "validation", "invalid_request", fmt.Sprintf("单次最多生成 %d 张图片", systemSettings.Generation.MaxCount))
 		return providerImageGenerateError(http.StatusBadRequest, "invalid_request", fmt.Sprintf("单次最多生成 %d 张图片", systemSettings.Generation.MaxCount))
+	}
+	var editInput providerResolvedEditInput
+	payload, editInput, err = s.prepareProviderImagePayload(ctx, userID, payload)
+	if err != nil {
+		job.PayloadJSON = providerImagePayloadJSON(payload)
+		providerErr := providerGenerationErrorDetails(err)
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
+		s.recordProviderImageGeneration(ctx, userID, metadata, payload, providerErr.ResponseBody, "failed", providerErr.Message, startedAt)
+		finishJob(businessjobs.StatusFailed, "validation", providerErr.Code, providerErr.Message)
+		finishTracker(businesstracker.StatusFailed, "validation", providerErr.Code, providerErr.Message)
+		return providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, providerErr.Message)
+	}
+	if !execution.TrustedPayload {
+		riskImages, err := s.providerRiskControlImagesFromPayload(payload)
+		if err != nil {
+			providerErr := providerGenerationErrorDetails(err)
+			s.reportProviderPoolRelease(context.Background(), providerCfg)
+			s.recordProviderImageGeneration(ctx, userID, metadata, payload, providerErr.ResponseBody, "failed", providerErr.Message, startedAt)
+			finishJob(businessjobs.StatusFailed, "validation", providerErr.Code, providerErr.Message)
+			finishTracker(businesstracker.StatusFailed, "validation", providerErr.Code, providerErr.Message)
+			return providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, providerErr.Message)
+		}
+		if decision := s.checkProviderImageRiskControl(ctx, userID, metadata, providerCfg, prompt, riskImages); !decision.Allowed {
+			return blockRiskControl(decision)
+		}
 	}
 	creditCost := providerImageCreditCost(systemSettings, metadata, providerCfg.Platform, requestedCount)
 	generationID := firstNonEmpty(metadata.JobID, metadata.TurnID)
@@ -1083,19 +1265,6 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	}
 	if strings.TrimSpace(stringValue(payload["response_format"])) == "" {
 		payload["response_format"] = "b64_json"
-	}
-	var editInput providerResolvedEditInput
-	payload, editInput, err = s.prepareProviderImagePayload(ctx, userID, payload)
-	if err != nil {
-		job.PayloadJSON = providerImagePayloadJSON(payload)
-		saveJob(job)
-		providerErr := providerGenerationErrorDetails(err)
-		refundCredits(creditCost)
-		job.CreditRefunded = refundedCredits
-		s.recordProviderImageGeneration(ctx, userID, metadata, payload, providerErr.ResponseBody, "failed", providerErr.Message, startedAt)
-		finishJob(businessjobs.StatusFailed, "validation", providerErr.Code, providerErr.Message)
-		finishTracker(businesstracker.StatusFailed, "validation", providerErr.Code, providerErr.Message)
-		return providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, providerErr.Message)
 	}
 	job.PayloadJSON = providerImagePayloadJSON(payload)
 	saveJob(job)
@@ -1522,34 +1691,6 @@ func providerImageSourcesFromPayload(raw any) []providerImageSource {
 		sources = append(sources, normalized)
 	}
 	return sources
-}
-
-func (s *Server) resolveProviderEditInputs(payload map[string]any) (providerResolvedEditInput, error) {
-	sources := providerImageSourcesFromPayload(payload["sourceImages"])
-	result := providerResolvedEditInput{Images: make([]providerEditAsset, 0, len(sources))}
-	for _, source := range sources {
-		data, err := s.resolveProviderSourceImageBytes(source)
-		if err != nil {
-			return providerResolvedEditInput{}, err
-		}
-		asset := providerEditAsset{
-			Source: source,
-			Data:   data,
-		}
-		if strings.EqualFold(strings.TrimSpace(source.Role), "mask") {
-			result.Mask = &asset
-			continue
-		}
-		result.Images = append(result.Images, asset)
-	}
-	if len(result.Images) == 0 {
-		return providerResolvedEditInput{}, &providerGenerationError{
-			HTTPStatus: http.StatusBadRequest,
-			Code:       "image_required",
-			Message:    "编辑模式至少需要一张源图",
-		}
-	}
-	return result, nil
 }
 
 func (s *Server) resolveProviderSourceImageBytes(source providerImageSource) ([]byte, error) {

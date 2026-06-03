@@ -711,7 +711,7 @@ export function businessImageConversationDetailToConversation(
       const hasAttachment = businessHasAttachmentFromJob(job);
       const compareMetadata = businessCompareMetadataFromJob(job);
       const modelMetadata = businessModelMetadataFromJob(job, generation);
-      const jobId = job?.id || undefined;
+      const jobId = job?.id || String(generation.id || "").trim() || undefined;
       const prompt = generation.prompt || job?.prompt || "";
       return {
         id: turnID,
