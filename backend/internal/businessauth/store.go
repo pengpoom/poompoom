@@ -1682,3 +1682,39 @@ func newVerificationID() string {
 	}
 	return "verify_" + base64.RawURLEncoding.EncodeToString(raw[:])
 }
+
+func (s *Store) IsUserAPIAccessEnabled(ctx context.Context, id string) (bool, error) {
+	id = cleanID(id)
+	if id == "" {
+		return false, nil
+	}
+	var enabled bool
+	err := s.db.QueryRowContext(ctx, s.rebind(
+		`SELECT api_access_enabled FROM business_users WHERE id = ?`), id).Scan(&enabled)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return enabled, nil
+}
+
+func (s *Store) SetUserAPIAccessEnabled(ctx context.Context, id string, enabled bool) (bool, error) {
+	id = cleanID(id)
+	if id == "" {
+		return false, nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	result, err := s.db.ExecContext(ctx, s.rebind(
+		`UPDATE business_users SET api_access_enabled = ?, updated_at = ? WHERE id = ?`),
+		enabled, s.dbTimeText(now), id)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}

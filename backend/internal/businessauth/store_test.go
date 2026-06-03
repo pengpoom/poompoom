@@ -456,3 +456,63 @@ func TestDeleteUserRevokesSessionsAndProtectsLastAdmin(t *testing.T) {
 		t.Fatalf("restored user = %#v ok=%v", restored, ok)
 	}
 }
+
+func TestUserAPIAccessToggle(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	cfg := config.New(t.TempDir())
+	if err := cfg.Load(); err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	cfg.Database.Driver = "postgres"
+	cfg.Database.DSN = dsn
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, cfg)
+	if err != nil {
+		t.Fatalf("Open() error: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+		t.Fatalf("Migrate() error: %v", err)
+	}
+	store := NewStoreWithDB(db, cfg.Database.Driver)
+
+	userID := "apiaccess_user_" + time.Now().UTC().Format("20060102150405.000000")
+	if err := store.EnsureBootstrapUser(ctx, BootstrapUser{
+		ID: userID, Username: userID, Email: userID + "@example.com", Password: "p", Role: RoleAdmin,
+	}); err != nil {
+		t.Fatalf("EnsureBootstrapUser() error: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec("DELETE FROM business_users WHERE id = $1", userID) })
+
+	// 默认应为 false
+	enabled, err := store.IsUserAPIAccessEnabled(ctx, userID)
+	if err != nil {
+		t.Fatalf("IsUserAPIAccessEnabled() error: %v", err)
+	}
+	if enabled {
+		t.Fatalf("default api_access_enabled = true, want false")
+	}
+
+	// 打开
+	ok, err := store.SetUserAPIAccessEnabled(ctx, userID, true)
+	if err != nil || !ok {
+		t.Fatalf("SetUserAPIAccessEnabled(true) ok=%v err=%v", ok, err)
+	}
+	enabled, _ = store.IsUserAPIAccessEnabled(ctx, userID)
+	if !enabled {
+		t.Fatalf("after enable, api_access_enabled = false, want true")
+	}
+
+	// 不存在的用户
+	ok, err = store.SetUserAPIAccessEnabled(ctx, "no_such_user", true)
+	if err != nil {
+		t.Fatalf("SetUserAPIAccessEnabled(missing) error: %v", err)
+	}
+	if ok {
+		t.Fatalf("SetUserAPIAccessEnabled(missing) ok=true, want false")
+	}
+}
