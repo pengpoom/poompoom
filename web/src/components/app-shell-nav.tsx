@@ -106,7 +106,7 @@ function navItemsForRole(role: AuthRole | null, apiAccessEnabled: boolean) {
       ? [...adminItems, ...userItems, ...libraryItems, ...usageItems]
       : [...userItems, ...libraryItems, ...usageItems];
   if (apiAccessEnabled) {
-    items.push({ href: "/api-access", matchPrefix: "/api-access", label: "API 接入", icon: KeyRound });
+    items.push({ href: "/api-access", matchPrefix: "/api-access", label: "API", icon: KeyRound });
   }
   return items;
 }
