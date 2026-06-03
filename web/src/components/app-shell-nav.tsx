@@ -71,6 +71,7 @@ const adminItems: readonly ShellNavItem[] = [
   { href: "/admin/dashboard", matchPrefix: "/admin/dashboard", label: "仪表盘", icon: BarChart3 },
   { href: "/admin/operations", matchPrefix: "/admin/operations", label: "运维", icon: Gauge },
   { href: "/accounts", matchPrefix: "/accounts", label: "接入", icon: Activity },
+  { href: "/api-keys", matchPrefix: "/api-keys", label: "分发", icon: KeyRound },
   { href: "/risk-control", matchPrefix: "/risk-control", label: "风控", icon: ShieldCheck },
   { href: "/users", matchPrefix: "/users", label: "用户", icon: UsersRound },
   { href: "/payments", matchPrefix: "/payments", label: "支付", icon: CreditCard },
@@ -79,7 +80,6 @@ const adminItems: readonly ShellNavItem[] = [
   { href: "/affiliate", matchPrefix: "/affiliate", label: "返利", icon: Share2 },
   { href: "/admin/usage", matchPrefix: "/admin/usage", label: "记录", icon: History },
   { href: "/storage", matchPrefix: "/storage", label: "存储", icon: Database },
-  { href: "/api-keys", matchPrefix: "/api-keys", label: "分发", icon: KeyRound },
 ];
 
 const userItems: readonly ShellNavItem[] = [
@@ -101,10 +101,10 @@ function isActive(pathname: string, item: ShellNavItem) {
 }
 
 function navItemsForRole(role: AuthRole | null, apiAccessEnabled: boolean) {
-  if (role === "admin") {
-    return [...adminItems, ...userItems, ...libraryItems, ...usageItems];
-  }
-  const items = [...userItems, ...libraryItems, ...usageItems];
+  const items =
+    role === "admin"
+      ? [...adminItems, ...userItems, ...libraryItems, ...usageItems]
+      : [...userItems, ...libraryItems, ...usageItems];
   if (apiAccessEnabled) {
     items.push({ href: "/api-access", matchPrefix: "/api-access", label: "API 接入", icon: KeyRound });
   }
@@ -301,7 +301,7 @@ export function AppShellNav({ role = null }: { role?: AuthRole | null }) {
   }, []);
 
   useEffect(() => {
-    if (role !== "user") {
+    if (!role) {
       setApiAccessEnabled(false);
       return;
     }
