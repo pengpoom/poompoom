@@ -98,6 +98,27 @@ func TestAdminAPIKeyLifecycle(t *testing.T) {
 		t.Fatalf("list returned %d, want 1", len(listed.Items))
 	}
 
+	// list all (no userId) -> includes the created key
+	rec = postgresAPIServeJSON(t, handler, http.MethodGet, "/api/business/admin/api-keys", adminToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list-all status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var listedAll struct {
+		Items []businessapikeys.APIKey `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listedAll); err != nil {
+		t.Fatalf("decode list-all: %v", err)
+	}
+	foundKey := false
+	for _, it := range listedAll.Items {
+		if it.ID == keyID {
+			foundKey = true
+		}
+	}
+	if !foundKey {
+		t.Fatalf("list-all (no userId) did not include key %s among %d items", keyID, len(listedAll.Items))
+	}
+
 	// patch -> disabled
 	rec = postgresAPIServeJSON(t, handler, http.MethodPatch, "/api/business/admin/api-keys/"+keyID, adminToken, map[string]any{
 		"status": "disabled",

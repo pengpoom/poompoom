@@ -38,17 +38,18 @@ type apiKeyUpdatePayload struct {
 
 func (s *Server) handleAdminListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	userID := strings.TrimSpace(r.URL.Query().Get("userId"))
-	if userID == "" {
-		writeAPIError(w, http.StatusBadRequest, "invalid_request", "userId is required")
-		return
-	}
 	store, err := s.newBusinessAPIKeyStore()
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "store_unavailable", "api key store failed")
 		return
 	}
 	defer store.Close()
-	keys, err := store.ListByUser(r.Context(), userID)
+	var keys []businessapikeys.APIKey
+	if userID == "" {
+		keys, err = store.List(r.Context())
+	} else {
+		keys, err = store.ListByUser(r.Context(), userID)
+	}
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "list_failed", err.Error())
 		return

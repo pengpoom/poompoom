@@ -152,3 +152,27 @@ func TestListByUserAndUpdateLimits(t *testing.T) {
 		t.Fatalf("reloaded creditLimit = %d, want 5000", reloaded.CreditLimit)
 	}
 }
+
+func TestListAllAPIKeys(t *testing.T) {
+	store, _, userID := newAPIKeyTestStore(t)
+	ctx := context.Background()
+	a, _, err := store.Create(ctx, CreateInput{UserID: userID, Name: "all-1", Env: "live"})
+	if err != nil {
+		t.Fatalf("Create all-1 error: %v", err)
+	}
+	b, _, err := store.Create(ctx, CreateInput{UserID: userID, Name: "all-2", Env: "test"})
+	if err != nil {
+		t.Fatalf("Create all-2 error: %v", err)
+	}
+	keys, err := store.List(ctx)
+	if err != nil {
+		t.Fatalf("List() error: %v", err)
+	}
+	found := map[string]bool{}
+	for _, k := range keys {
+		found[k.ID] = true
+	}
+	if !found[a.ID] || !found[b.ID] {
+		t.Fatalf("List() missing created keys: a=%v b=%v (total %d)", found[a.ID], found[b.ID], len(keys))
+	}
+}

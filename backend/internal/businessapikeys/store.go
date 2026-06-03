@@ -201,6 +201,27 @@ func (s *Store) ListByUser(ctx context.Context, userID string) ([]APIKey, error)
 	return keys, nil
 }
 
+func (s *Store) List(ctx context.Context) ([]APIKey, error) {
+	rows, err := s.db.QueryContext(ctx, s.rebind(
+		`SELECT `+apiKeyColumns+` FROM business_api_keys ORDER BY created_at DESC`))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	keys := make([]APIKey, 0)
+	for rows.Next() {
+		key, err := scanAPIKey(rows)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
 type UpdateInput struct {
 	Name               *string
 	Status             *string
