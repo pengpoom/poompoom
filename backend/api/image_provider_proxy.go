@@ -683,6 +683,10 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 		CreatedAt:         startedAt.Format(time.RFC3339Nano),
 		QueuedAt:          startedAt.Format(time.RFC3339Nano),
 	}
+	if keyID, md, ok := externalAttributionFromContext(ctx); ok {
+		job.APIKeyID = keyID
+		job.APIMetadata = md
+	}
 	store, err := s.newBusinessJobStore()
 	if err != nil {
 		return businessjobs.Job{}, err

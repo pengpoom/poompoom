@@ -1,11 +1,14 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"imagestudio/internal/businessapikeys"
 	"imagestudio/internal/config"
 )
 
@@ -84,5 +87,27 @@ func TestExternalAPIKeyMiddlewareGate(t *testing.T) {
 	sOn.requireExternalAPIKey(next).ServeHTTP(rr2, httptest.NewRequest("GET", "/v1/images/models", nil))
 	if rr2.Code != http.StatusUnauthorized {
 		t.Fatalf("no token: want 401 got %d", rr2.Code)
+	}
+}
+
+func TestV1CreateImageGenerationValidation(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.ExternalAPI.Enabled = true
+	cfg.ExternalAPI.MaxMetadataBytes = 10
+	s := &Server{cfg: cfg}
+	ctx := context.WithValue(context.Background(), ctxKeyAPIKey, businessapikeys.APIKey{ID: "k1", UserID: "u1", Status: "active"})
+
+	r1 := httptest.NewRequest("POST", "/v1/images/generations", strings.NewReader(`{}`)).WithContext(ctx)
+	w1 := httptest.NewRecorder()
+	s.handleV1CreateImageGeneration(w1, r1)
+	if w1.Code != http.StatusBadRequest {
+		t.Fatalf("missing prompt: want 400 got %d", w1.Code)
+	}
+
+	r2 := httptest.NewRequest("POST", "/v1/images/generations", strings.NewReader(`{"prompt":"x","metadata":{"aaaaaaaaaa":"bbbbbbbbbb"}}`)).WithContext(ctx)
+	w2 := httptest.NewRecorder()
+	s.handleV1CreateImageGeneration(w2, r2)
+	if w2.Code != http.StatusBadRequest {
+		t.Fatalf("oversized metadata: want 400 got %d", w2.Code)
 	}
 }
