@@ -38,6 +38,7 @@ export default defineConfig({
       "/auth": backendProxyTarget,
       "/api/": backendProxyTarget,
       "/v1/files/image": backendProxyTarget,
+      "/v1/images": backendProxyTarget,
       "/v1": "http://127.0.0.1:8080",
       "/version": backendProxyTarget,
       "/health": backendProxyTarget,
