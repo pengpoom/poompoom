@@ -4,17 +4,20 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"imagestudio/internal/businessapikeys"
+	"imagestudio/internal/businessjobs"
 )
 
 func toPublicStatus(internal string) string {
@@ -249,4 +252,100 @@ func writeProviderResultAsV1(w http.ResponseWriter, res providerImageGenerateRes
 		status = http.StatusBadRequest
 	}
 	writeV1Error(w, status, firstNonEmpty(res.ErrorCode, "image_job_failed"), firstNonEmpty(res.ErrorMessage, "image job submit failed"))
+}
+
+func (s *Server) handleV1GetImageJob(w http.ResponseWriter, r *http.Request) {
+	key, ok := apiKeyFromContext(r.Context())
+	if !ok {
+		writeV1Error(w, http.StatusUnauthorized, "invalid_api_key", "missing api key")
+		return
+	}
+	jobStore, err := s.newBusinessJobStore()
+	if err != nil {
+		writeV1Error(w, http.StatusInternalServerError, "store_unavailable", "job store failed")
+		return
+	}
+	defer jobStore.Close()
+	s.reconcileStaleBusinessImageJobs(r.Context())
+	job, found, err := jobStore.Get(r.Context(), r.PathValue("id"), key.UserID)
+	if err != nil {
+		writeV1Error(w, http.StatusInternalServerError, "job_lookup_failed", err.Error())
+		return
+	}
+	if !found || job.APIKeyID != key.ID {
+		writeV1Error(w, http.StatusNotFound, "job_not_found", "job not found")
+		return
+	}
+	public := toPublicStatus(job.Status)
+	resp := v1ImageJobResponse{
+		ID:       job.ID,
+		Object:   "image.generation.job",
+		Status:   public,
+		Model:    job.Model,
+		Created:  parseRFC3339Unix(job.CreatedAt),
+		Metadata: metadataOrNil(job.APIMetadata),
+	}
+	switch public {
+	case "succeeded":
+		images, ierr := s.v1JobImages(r.Context(), job, key.UserID, strings.EqualFold(r.URL.Query().Get("response_format"), "b64_json"))
+		if ierr != nil {
+			writeV1Error(w, http.StatusInternalServerError, "asset_lookup_failed", ierr.Error())
+			return
+		}
+		resp.Images = images
+	case "failed":
+		if job.ErrorCode != "" || job.ErrorMessage != "" {
+			resp.Error = &v1JobError{Code: job.ErrorCode, Message: job.ErrorMessage}
+		}
+	case "queued", "running":
+		resp.StatusURL = s.v1StatusURL(job.ID)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) v1JobImages(ctx context.Context, job businessjobs.Job, userID string, asB64 bool) ([]v1ImageOut, error) {
+	imgStore, err := s.newBusinessImageStore()
+	if err != nil {
+		return nil, err
+	}
+	defer imgStore.Close()
+	assets, err := imgStore.AssetsByGeneration(ctx, job.GenerationID, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1ImageOut, 0, len(assets))
+	secret := strings.TrimSpace(s.cfg.ExternalAPI.SigningSecret)
+	ttl := int64(s.cfg.ExternalAPI.SignedURLTTLSeconds)
+	if ttl <= 0 {
+		ttl = 3600
+	}
+	base := strings.TrimRight(strings.TrimSpace(s.cfg.ExternalAPI.BaseURL), "/")
+	for _, a := range assets {
+		if asB64 {
+			b, rerr := os.ReadFile(s.resolveImageFilePath(a.FileName))
+			if rerr != nil {
+				return nil, rerr
+			}
+			out = append(out, v1ImageOut{B64JSON: base64.StdEncoding.EncodeToString(b)})
+			continue
+		}
+		exp := time.Now().UTC().Add(time.Duration(ttl) * time.Second).Unix()
+		out = append(out, v1ImageOut{URL: base + "/v1/files/image/" + a.FileName + signImageFileQuery(secret, a.FileName, exp)})
+	}
+	return out, nil
+}
+
+func metadataOrNil(raw []byte) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "{}" {
+		return nil
+	}
+	return json.RawMessage(raw)
+}
+
+func parseRFC3339Unix(s string) int64 {
+	t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(s))
+	if err != nil {
+		return 0
+	}
+	return t.Unix()
 }

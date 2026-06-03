@@ -111,3 +111,23 @@ func TestV1CreateImageGenerationValidation(t *testing.T) {
 		t.Fatalf("oversized metadata: want 400 got %d", w2.Code)
 	}
 }
+
+func TestMetadataOrNilAndParseTime(t *testing.T) {
+	if metadataOrNil(nil) != nil {
+		t.Fatal("nil bytes should map to nil")
+	}
+	if metadataOrNil([]byte("{}")) != nil {
+		t.Fatal("empty object should map to nil")
+	}
+	if string(metadataOrNil([]byte(`{"a":1}`))) != `{"a":1}` {
+		t.Fatal("non-empty metadata should pass through")
+	}
+	ts := "2026-06-04T12:00:00Z"
+	want, _ := time.Parse(time.RFC3339, ts)
+	if got := parseRFC3339Unix(ts); got != want.Unix() {
+		t.Fatalf("parseRFC3339Unix=%d want %d", got, want.Unix())
+	}
+	if parseRFC3339Unix("garbage") != 0 {
+		t.Fatal("garbage should be 0")
+	}
+}
