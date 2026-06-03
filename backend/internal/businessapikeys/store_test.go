@@ -86,3 +86,69 @@ func TestAuthenticateWrongKeyRejected(t *testing.T) {
 		t.Fatalf("Authenticate(wrong) error = %v, want sql.ErrNoRows", err)
 	}
 }
+
+func TestRevokeThenAuthenticateRejected(t *testing.T) {
+	store, _, userID := newAPIKeyTestStore(t)
+	ctx := context.Background()
+	key, plaintext, err := store.Create(ctx, CreateInput{UserID: userID, Name: "to-revoke", Env: "live"})
+	if err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+	revoked, err := store.Revoke(ctx, key.ID)
+	if err != nil {
+		t.Fatalf("Revoke() error: %v", err)
+	}
+	if revoked.Status != StatusRevoked {
+		t.Fatalf("status = %q, want revoked", revoked.Status)
+	}
+	if _, err := store.Authenticate(ctx, plaintext); err != sql.ErrNoRows {
+		t.Fatalf("Authenticate(after revoke) error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestUpdateDisabledRejectsAuthenticate(t *testing.T) {
+	store, _, userID := newAPIKeyTestStore(t)
+	ctx := context.Background()
+	key, plaintext, _ := store.Create(ctx, CreateInput{UserID: userID, Name: "to-disable", Env: "live"})
+	disabled := StatusDisabled
+	if _, err := store.Update(ctx, key.ID, UpdateInput{Status: &disabled}); err != nil {
+		t.Fatalf("Update() error: %v", err)
+	}
+	if _, err := store.Authenticate(ctx, plaintext); err != sql.ErrNoRows {
+		t.Fatalf("Authenticate(disabled) error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestListByUserAndUpdateLimits(t *testing.T) {
+	store, _, userID := newAPIKeyTestStore(t)
+	ctx := context.Background()
+	if _, _, err := store.Create(ctx, CreateInput{UserID: userID, Name: "k1", Env: "live"}); err != nil {
+		t.Fatalf("Create k1 error: %v", err)
+	}
+	second, _, err := store.Create(ctx, CreateInput{UserID: userID, Name: "k2", Env: "test"})
+	if err != nil {
+		t.Fatalf("Create k2 error: %v", err)
+	}
+	keys, err := store.ListByUser(ctx, userID)
+	if err != nil {
+		t.Fatalf("ListByUser() error: %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("ListByUser returned %d keys, want 2", len(keys))
+	}
+	newLimit := int64(5000)
+	updated, err := store.Update(ctx, second.ID, UpdateInput{CreditLimit: &newLimit})
+	if err != nil {
+		t.Fatalf("Update() error: %v", err)
+	}
+	if updated.CreditLimit != 5000 {
+		t.Fatalf("creditLimit = %d, want 5000", updated.CreditLimit)
+	}
+	reloaded, err := store.GetByID(ctx, second.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error: %v", err)
+	}
+	if reloaded.CreditLimit != 5000 {
+		t.Fatalf("reloaded creditLimit = %d, want 5000", reloaded.CreditLimit)
+	}
+}

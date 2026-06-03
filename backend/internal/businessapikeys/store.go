@@ -172,3 +172,93 @@ func (s *Store) Authenticate(ctx context.Context, plaintext string) (APIKey, err
 	key.LastUsedAt = now
 	return key, nil
 }
+
+func (s *Store) GetByID(ctx context.Context, id string) (APIKey, error) {
+	row := s.db.QueryRowContext(ctx, s.rebind(
+		`SELECT `+apiKeyColumns+` FROM business_api_keys WHERE id = ?`), strings.TrimSpace(id))
+	return scanAPIKey(row)
+}
+
+func (s *Store) ListByUser(ctx context.Context, userID string) ([]APIKey, error) {
+	rows, err := s.db.QueryContext(ctx, s.rebind(
+		`SELECT `+apiKeyColumns+` FROM business_api_keys WHERE user_id = ? ORDER BY created_at DESC`),
+		strings.TrimSpace(userID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	keys := make([]APIKey, 0)
+	for rows.Next() {
+		key, err := scanAPIKey(rows)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+type UpdateInput struct {
+	Name               *string
+	Status             *string
+	CreditLimit        *int64
+	RateLimitPerMinute *int
+	ConcurrencyLimit   *int
+	AllowedModels      *[]string
+}
+
+func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (APIKey, error) {
+	current, err := s.GetByID(ctx, id)
+	if err != nil {
+		return APIKey{}, err
+	}
+	if in.Name != nil {
+		current.Name = strings.TrimSpace(*in.Name)
+	}
+	if in.Status != nil {
+		current.Status = strings.TrimSpace(*in.Status)
+	}
+	if in.CreditLimit != nil {
+		current.CreditLimit = *in.CreditLimit
+	}
+	if in.RateLimitPerMinute != nil {
+		current.RateLimitPerMinute = *in.RateLimitPerMinute
+	}
+	if in.ConcurrencyLimit != nil {
+		current.ConcurrencyLimit = *in.ConcurrencyLimit
+	}
+	if in.AllowedModels != nil {
+		current.AllowedModels = *in.AllowedModels
+	}
+	if current.AllowedModels == nil {
+		current.AllowedModels = []string{}
+	}
+	modelsJSON, err := json.Marshal(current.AllowedModels)
+	if err != nil {
+		return APIKey{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err = s.db.ExecContext(ctx, s.rebind(`UPDATE business_api_keys SET
+		name = ?, status = ?, credit_limit = ?, rate_limit_per_minute = ?,
+		concurrency_limit = ?, allowed_models = ?, updated_at = ? WHERE id = ?`),
+		current.Name, current.Status, current.CreditLimit, current.RateLimitPerMinute,
+		current.ConcurrencyLimit, string(modelsJSON), now, current.ID)
+	if err != nil {
+		return APIKey{}, err
+	}
+	current.UpdatedAt = now
+	return current, nil
+}
+
+func (s *Store) Revoke(ctx context.Context, id string) (APIKey, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := s.db.ExecContext(ctx, s.rebind(`UPDATE business_api_keys
+		SET status = ?, revoked_at = ?, updated_at = ? WHERE id = ?`),
+		StatusRevoked, now, now, strings.TrimSpace(id)); err != nil {
+		return APIKey{}, err
+	}
+	return s.GetByID(ctx, id)
+}
