@@ -56,7 +56,7 @@ const jobSelectColumns = `id, user_id, conversation_id, generation_id, turn_id, 
 	persist_duration_ms, total_duration_ms, storage_bytes,
 	credit_reserved, credit_refunded, payload_json, created_at, queued_at,
 	started_at, finished_at, updated_at, claimed_by, claimed_at, lease_until,
-	attempts, last_error, next_run_at`
+	attempts, last_error, next_run_at, api_key_id, api_metadata`
 
 type Job struct {
 	ID                 string `json:"id"`
@@ -101,6 +101,8 @@ type Job struct {
 	StartedAt          string `json:"startedAt,omitempty"`
 	FinishedAt         string `json:"finishedAt,omitempty"`
 	UpdatedAt          string `json:"updatedAt"`
+	APIKeyID           string `json:"apiKeyId,omitempty"`
+	APIMetadata        []byte `json:"-"`
 }
 
 type Store struct {
@@ -578,8 +580,8 @@ func (s *Store) execSave(ctx context.Context, exec jobExecer, job Job) error {
 			persist_duration_ms, total_duration_ms, storage_bytes,
 			credit_reserved, credit_refunded, payload_json, created_at, queued_at,
 			started_at, finished_at, updated_at, claimed_by, claimed_at, lease_until,
-			attempts, last_error, next_run_at
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			attempts, last_error, next_run_at, api_key_id, api_metadata
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			conversation_id = excluded.conversation_id,
 			generation_id = excluded.generation_id,
@@ -633,6 +635,14 @@ func (s *Store) execSave(ctx context.Context, exec jobExecer, job Job) error {
 			END,
 			last_error = excluded.last_error,
 			next_run_at = excluded.next_run_at,
+			api_key_id = CASE
+				WHEN excluded.api_key_id != '' THEN excluded.api_key_id
+				ELSE business_image_jobs.api_key_id
+			END,
+			api_metadata = CASE
+				WHEN excluded.api_metadata IS NOT NULL AND length(excluded.api_metadata) > 2 THEN excluded.api_metadata
+				ELSE business_image_jobs.api_metadata
+			END,
 			updated_at = excluded.updated_at
 		 WHERE business_image_jobs.user_id = excluded.user_id`),
 		job.ID,
@@ -676,8 +686,17 @@ func (s *Store) execSave(ctx context.Context, exec jobExecer, job Job) error {
 		job.Attempts,
 		job.LastError,
 		job.NextRunAt,
+		job.APIKeyID,
+		apiMetadataOrEmpty(job.APIMetadata),
 	)
 	return err
+}
+
+func apiMetadataOrEmpty(raw []byte) []byte {
+	if len(raw) == 0 {
+		return []byte("{}")
+	}
+	return raw
 }
 
 func (s *Store) Get(ctx context.Context, id string, userID string) (Job, bool, error) {
@@ -1698,6 +1717,8 @@ func scanJob(row rowScanner) (Job, error) {
 		&item.Attempts,
 		&item.LastError,
 		&item.NextRunAt,
+		&item.APIKeyID,
+		&item.APIMetadata,
 	)
 	if err != nil {
 		return item, err
