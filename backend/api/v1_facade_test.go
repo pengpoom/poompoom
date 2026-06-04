@@ -14,6 +14,7 @@ import (
 	"imagestudio/internal/businessapikeys"
 	"imagestudio/internal/businessauth"
 	"imagestudio/internal/businesscredits"
+	"imagestudio/internal/businessimage"
 	"imagestudio/internal/businessproviders"
 	"imagestudio/internal/config"
 	"imagestudio/internal/database"
@@ -360,5 +361,100 @@ func TestV1FacadeSyncGeneration(t *testing.T) {
 	}
 	if resp.Data[0].B64JSON == "" {
 		t.Fatalf("sync default should be b64_json, got %#v", resp.Data[0])
+	}
+}
+
+func TestV1FacadeSkipsConversation(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN")) == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	imageB64 := base64.StdEncoding.EncodeToString([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 5, 6, 7})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 1,
+			"data":    []map[string]any{{"b64_json": imageB64}},
+		})
+	}))
+	defer upstream.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	server, handler, plaintext, userID := provisionFacadeServer(t, ctx, upstream.URL)
+
+	rec := facadeServe(t, handler, http.MethodPost, "/v1/images/generations", plaintext, `{"prompt":"api only"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sync: want 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data []struct {
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode sync resp: %v body=%s", err, rec.Body.String())
+	}
+	if len(resp.Data) == 0 || resp.Data[0].B64JSON == "" {
+		t.Fatalf("expected image b64 in sync resp: %s", rec.Body.String())
+	}
+
+	store, err := server.newBusinessImageStore()
+	if err != nil {
+		t.Fatalf("image store: %v", err)
+	}
+	defer store.Close()
+	convs, err := store.ListConversations(ctx, userID, 50)
+	if err != nil {
+		t.Fatalf("list conversations: %v", err)
+	}
+	if len(convs) != 0 {
+		t.Fatalf("API 生成不应进最近对话，却得到 %d 条会话", len(convs))
+	}
+	_, usageTotal, err := store.UsageRecordsPage(ctx, businessimage.UsageRecordFilter{UserID: userID}, 50, 0)
+	if err != nil {
+		t.Fatalf("usage records: %v", err)
+	}
+	if usageTotal == 0 {
+		t.Fatalf("API 生成应计入使用记录(generations)，却为空")
+	}
+}
+
+func TestCreateQueuedJobWebOriginWritesConversation(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN")) == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 1,
+			"data":    []map[string]any{{"b64_json": "QUJD"}},
+		})
+	}))
+	defer upstream.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	server, _, _, userID := provisionFacadeServer(t, ctx, upstream.URL)
+
+	payload := map[string]any{
+		"prompt":         "web origin",
+		"conversationId": "conv_" + userID,
+		"turnId":         "turn_" + userID,
+	}
+	if _, err := server.createQueuedProviderImageJob(context.Background(), userID, payload, time.Time{}); err != nil {
+		t.Fatalf("submit web job: %v", err)
+	}
+
+	store, err := server.newBusinessImageStore()
+	if err != nil {
+		t.Fatalf("image store: %v", err)
+	}
+	defer store.Close()
+	convs, err := store.ListConversations(ctx, userID, 50)
+	if err != nil {
+		t.Fatalf("list conversations: %v", err)
+	}
+	if len(convs) == 0 {
+		t.Fatalf("web 来源应照常写入会话，却为空")
 	}
 }

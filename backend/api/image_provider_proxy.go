@@ -45,6 +45,7 @@ const imageProviderSourceLegacy = "legacy_provider"
 const imageProviderSourceAPIAccess = "api_access"
 const imageProviderSourceEnv = "environment"
 const defaultGeminiBananaModel = "gemini-2.5-flash-image"
+const originExternalAPI = "external_api"
 
 type imageProviderProxyConfig struct {
 	Provider               string
@@ -79,6 +80,7 @@ type providerImageGenerateMetadata struct {
 	CompareModelIndex int
 	CompareModelCount int
 	DispatchTags      []string
+	External          bool
 }
 
 type providerImageSource struct {
@@ -594,6 +596,10 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 		payload = map[string]any{}
 	}
 	payload = sanitizeClientProviderSelectionPayload(payload)
+	delete(payload, "origin")
+	if _, _, ok := externalAttributionFromContext(ctx); ok {
+		payload["origin"] = originExternalAPI
+	}
 	metadata := s.prepareProviderImageModelPayload(ctx, payload)
 	if startedAt.IsZero() {
 		startedAt = time.Now().UTC()
@@ -1507,13 +1513,15 @@ func (s *Server) recordProviderImageGenerationPlaceholder(ctx context.Context, u
 	if model == "" {
 		model = providerCfg.Model
 	}
-	_, _ = store.UpsertConversation(ctx, businessimage.Conversation{
-		ID:        conversationID,
-		UserID:    userID,
-		Title:     title,
-		CreatedAt: startedAtText,
-		UpdatedAt: nowText,
-	})
+	if !metadata.External {
+		_, _ = store.UpsertConversation(ctx, businessimage.Conversation{
+			ID:        conversationID,
+			UserID:    userID,
+			Title:     title,
+			CreatedAt: startedAtText,
+			UpdatedAt: nowText,
+		})
+	}
 	_, _ = store.SaveGeneration(ctx, businessimage.Generation{
 		ID:             firstNonEmpty(metadata.JobID, turnID),
 		UserID:         userID,
@@ -1586,6 +1594,7 @@ func extractProviderImageGenerateMetadata(payload map[string]any) providerImageG
 		CompareModelIndex: normalizeOptionalNonNegativeInt(payload["compareModelIndex"]),
 		CompareModelCount: normalizeOptionalNonNegativeInt(payload["compareModelCount"]),
 		DispatchTags:      extractProviderDispatchTags(payload),
+		External:          strings.EqualFold(strings.TrimSpace(stringValue(payload["origin"])), originExternalAPI),
 	}
 }
 
@@ -1807,13 +1816,15 @@ func (s *Server) recordProviderImageGeneration(ctx context.Context, userID strin
 	}
 	persistedResponse = injectProviderImageResponsePlatform(persistedResponse, metadata.Platform)
 	persistedResponse = injectProviderImageResponseModelMetadata(persistedResponse, metadata)
-	_, _ = store.UpsertConversation(ctx, businessimage.Conversation{
-		ID:        conversationID,
-		UserID:    userID,
-		Title:     title,
-		CreatedAt: startedAtText,
-		UpdatedAt: finishedAtText,
-	})
+	if !metadata.External {
+		_, _ = store.UpsertConversation(ctx, businessimage.Conversation{
+			ID:        conversationID,
+			UserID:    userID,
+			Title:     title,
+			CreatedAt: startedAtText,
+			UpdatedAt: finishedAtText,
+		})
+	}
 	_, _ = store.SaveGeneration(ctx, businessimage.Generation{
 		ID:             firstNonEmpty(metadata.JobID, turnID),
 		UserID:         userID,
