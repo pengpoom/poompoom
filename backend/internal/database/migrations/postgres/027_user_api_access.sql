@@ -1,0 +1,2 @@
+ALTER TABLE business_users
+	ADD COLUMN IF NOT EXISTS api_access_enabled BOOLEAN NOT NULL DEFAULT FALSE;

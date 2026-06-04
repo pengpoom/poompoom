@@ -4,14 +4,11 @@ import { useState } from "react";
 import { LoaderCircle, PlugZap } from "lucide-react";
 import { toast } from "sonner";
 
-import { Button } from "@/components/ui/button";
 import type { Dispatch, SetStateAction } from "react";
 
-import { Input } from "@/components/ui/input";
 import { testProxy, type ConfigPayload } from "@/lib/api";
 
 import { ConfigSection, Field, ToggleField, TooltipDetails } from "./shared";
-import { settingsActionButtonClass, settingsInputClass } from "./styles";
 
 type ServicePathsSectionProps = {
   config: ConfigPayload;
@@ -72,7 +69,7 @@ export function ServicePathsSection({
           />
         }
       >
-        <Input
+        <input className="app-input"
           value={config.server.staticDir}
           onChange={(event) =>
             setConfig((current) => ({
@@ -80,7 +77,7 @@ export function ServicePathsSection({
               server: { ...current.server, staticDir: event.target.value },
             }))
           }
-          className={settingsInputClass}
+         
         />
       </Field>
 
@@ -102,7 +99,7 @@ export function ServicePathsSection({
           />
         }
       >
-        <Input value={resolvedStaticDir} readOnly className={settingsInputClass} />
+        <input className="app-input" value={resolvedStaticDir} readOnly />
       </Field>
 
       <ToggleField
@@ -162,7 +159,7 @@ export function ServicePathsSection({
         }
       >
         <div className="flex gap-2">
-          <Input
+          <input className="app-input"
             value={config.proxy.url}
             onChange={(event) =>
               setConfig((current) => ({
@@ -170,18 +167,17 @@ export function ServicePathsSection({
                 proxy: { ...current.proxy, url: event.target.value },
               }))
             }
-            className={settingsInputClass}
+           
           />
-          <Button
+          <button
             type="button"
-            variant="outline"
-            className={settingsActionButtonClass}
+            className="app-btn"
             onClick={() => void handleTestProxy()}
             disabled={isTestingProxy}
           >
             {isTestingProxy ? <LoaderCircle className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
             测试
-          </Button>
+          </button>
         </div>
       </Field>
 
@@ -203,7 +199,7 @@ export function ServicePathsSection({
           />
         }
       >
-        <Input
+        <input className="app-input"
           value={config.proxy.mode}
           onChange={(event) =>
             setConfig((current) => ({
@@ -211,7 +207,7 @@ export function ServicePathsSection({
               proxy: { ...current.proxy, mode: event.target.value },
             }))
           }
-          className={settingsInputClass}
+         
         />
       </Field>
 
@@ -272,7 +268,7 @@ export function ServicePathsSection({
         }
         fullWidth
       >
-        <Input
+        <input className="app-input"
           value={config.storage.authDir}
           onChange={(event) =>
             setConfig((current) => ({
@@ -280,7 +276,7 @@ export function ServicePathsSection({
               storage: { ...current.storage, authDir: event.target.value },
             }))
           }
-          className={settingsInputClass}
+         
         />
       </Field>
 
@@ -311,7 +307,7 @@ export function ServicePathsSection({
         }
         fullWidth
       >
-        <Input
+        <input className="app-input"
           value={config.storage.stateFile}
           onChange={(event) =>
             setConfig((current) => ({
@@ -319,7 +315,7 @@ export function ServicePathsSection({
               storage: { ...current.storage, stateFile: event.target.value },
             }))
           }
-          className={settingsInputClass}
+         
         />
       </Field>
 
@@ -350,7 +346,7 @@ export function ServicePathsSection({
         }
         fullWidth
       >
-        <Input
+        <input className="app-input"
           value={config.storage.syncStateDir}
           onChange={(event) =>
             setConfig((current) => ({
@@ -358,7 +354,7 @@ export function ServicePathsSection({
               storage: { ...current.storage, syncStateDir: event.target.value },
             }))
           }
-          className={settingsInputClass}
+         
         />
       </Field>
 
@@ -390,7 +386,7 @@ export function ServicePathsSection({
           }
           fullWidth
         >
-          <Input
+          <input className="app-input"
             value={config.storage.imageDir}
             onChange={(event) =>
               setConfig((current) => ({
@@ -398,7 +394,7 @@ export function ServicePathsSection({
                 storage: { ...current.storage, imageDir: event.target.value },
               }))
             }
-            className={settingsInputClass}
+           
           />
         </Field>
       ) : null}
@@ -422,7 +418,7 @@ export function ServicePathsSection({
         }
         fullWidth
       >
-        <Input value={config.paths.root} readOnly className={settingsInputClass} />
+        <input className="app-input" value={config.paths.root} readOnly />
       </Field>
 
       <Field
@@ -444,7 +440,7 @@ export function ServicePathsSection({
         }
         fullWidth
       >
-        <Input value={config.paths.defaults} readOnly className={settingsInputClass} />
+        <input className="app-input" value={config.paths.defaults} readOnly />
       </Field>
 
       <Field
@@ -466,7 +462,7 @@ export function ServicePathsSection({
         }
         fullWidth
       >
-        <Input value={config.paths.override} readOnly className={settingsInputClass} />
+        <input className="app-input" value={config.paths.override} readOnly />
       </Field>
 
       <Field
@@ -488,7 +484,7 @@ export function ServicePathsSection({
         }
         fullWidth
       >
-        <Input value={startupErrorPath} readOnly className={settingsInputClass} />
+        <input className="app-input" value={startupErrorPath} readOnly />
       </Field>
     </ConfigSection>
   );

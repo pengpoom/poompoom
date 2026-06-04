@@ -2,11 +2,13 @@
 
 Image Studio 是一个图片生成 Web 项目，包含 React 前端和 Go 后端。生产部署使用单个 Docker 镜像：前端会在构建时打包为静态资源，由后端统一托管。
 
-默认服务端口是 `7000`，运行数据保存在部署目录的 `backend/data`。
+默认服务端口是 `7000`。结构化业务数据保存在 Compose 内的 PostgreSQL volume，图片文件和运行配置保存在部署目录的 `backend/data`。Redis 仅用于 job 队列唤醒信号，队列里只保存 `job_id`，最终状态仍以 PostgreSQL 为准。
 
 ## 快速部署
 
 服务器只需要 Docker 和 Docker Compose，不需要在服务器上安装 Node.js 或 Go。
+
+Provider 号池、标签调度、套餐等级和排障说明见 [ProviderPool.md](ProviderPool.md)。
 
 推荐使用部署脚本初始化目录：
 
@@ -27,6 +29,8 @@ curl -fsSL https://raw.githubusercontent.com/pengpoom/poomimage/main/deploy/dock
 
 - `ADMIN_PASSWORD`
 - `TEST_PASSWORD`
+- `POSTGRES_PASSWORD`
+- `JOB_QUEUE_BACKEND`，Compose 模板默认 `redis`；本地不启动 Redis 时可设为 `local`
 - `IMAGE_STUDIO_DEPLOY_DIR`
 - `DOCKER_CONFIG_DIR`
 - `IMAGE_STUDIO_GITHUB_TOKEN`，私有仓库检测 tag / release 时需要
@@ -122,16 +126,17 @@ docker compose logs -f studio
 
 ```text
 backend/data
+postgres-data volume
+redis-data volume
 ```
 
-这里包含运行配置、SQLite 数据库、用户数据、图片历史和生成图片文件。服务器迁移或重装时，优先备份这个目录。
+`backend/data` 包含运行配置、图片文件和临时文件；PostgreSQL volume 包含用户、会话、积分、job、provider、settings、tracker、图片会话和资产元数据。Redis volume 只保存短期队列信号，可通过 PostgreSQL queued job 扫描兜底恢复。服务器迁移或重装时，需要同时备份 `backend/data` 和 PostgreSQL 数据。
 
 注意不要提交这些文件到 GitHub：
 
 ```text
 .env
 backend/data/config.toml
-backend/data/image-studio.db
 backend/data/business-images
 backend/data/tmp/image
 ```
@@ -151,6 +156,12 @@ backups/image-studio-data-YYYYmmdd-HHMMSS.tar.gz
 ```
 
 如果服务器部署目录只有 `docker-compose.yml`，可以把 `scripts/backup-data.sh` 和 `scripts/restore-data.sh` 复制到部署目录使用。
+
+PostgreSQL 需要单独备份。示例：
+
+```bash
+docker compose exec postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > backups/image-studio-postgres-$(date +%Y%m%d-%H%M%S).sql
+```
 
 如果脚本不在仓库根目录，或者数据目录不同，可以显式指定：
 
@@ -188,13 +199,21 @@ docker compose logs -f studio
 后端：
 
 ```bash
+docker compose -p image-studio-postgres -f docker-compose.postgres.yml up -d postgres redis
+
 cd backend
 API_ONLY=true \
 SERVER_HOST=0.0.0.0 \
 SERVER_PORT=7070 \
 CORS_ALLOWED_ORIGINS=http://localhost:5270,http://127.0.0.1:5270 \
+DATABASE_DRIVER=postgres \
+DATABASE_DSN=postgres://image_studio:image_studio@127.0.0.1:5432/image_studio?sslmode=disable \
+JOB_QUEUE_BACKEND=redis \
+REDIS_ADDR=127.0.0.1:6379 \
 go run .
 ```
+
+本地临时不启动 Redis 时，可把 `JOB_QUEUE_BACKEND=redis` 改为 `JOB_QUEUE_BACKEND=local`；PostgreSQL 仍是唯一事实源。
 
 前端：
 
@@ -216,7 +235,13 @@ http://localhost:5270/
 
 ```bash
 cd backend
-go test ./api ./internal/middleware
+go test ./...
+```
+
+PostgreSQL 集成测试需要先启动本地 PostgreSQL，并显式传入测试 DSN：
+
+```bash
+POSTGRES_TEST_DSN=postgres://image_studio:image_studio@127.0.0.1:5432/image_studio?sslmode=disable go test ./internal/database -count=1
 ```
 
 前端测试和构建：

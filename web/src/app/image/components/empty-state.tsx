@@ -1,8 +1,7 @@
 "use client";
 
 import { Sparkles } from "lucide-react";
-
-import { cn } from "@/lib/utils";
+import type { ReactNode } from "react";
 
 type InspirationExample = {
   id: string;
@@ -15,37 +14,116 @@ type InspirationExample = {
 
 type EmptyStateProps = {
   inspirationExamples: InspirationExample[];
+  composer?: ReactNode;
   onApplyPromptExample: (example: InspirationExample) => void;
 };
 
-export function EmptyState({ inspirationExamples, onApplyPromptExample }: EmptyStateProps) {
+export function EmptyState({ inspirationExamples, composer, onApplyPromptExample }: EmptyStateProps) {
   return (
-    <div className="mx-auto flex max-w-[1120px] flex-col gap-8 px-4 pb-40 pt-8 sm:px-6 lg:px-10">
-      <div className="max-w-[760px]">
-        <div className="inline-flex size-14 items-center justify-center rounded-[20px] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)] shadow-sm">
+    <div
+      style={{
+        marginInline: "auto",
+        maxWidth: 1120,
+        minHeight: "min(720px, calc(100vh - 170px))",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        gap: 28,
+        padding: "32px 16px",
+      }}
+    >
+      <div style={{ marginInline: "auto", maxWidth: 760, textAlign: "center" }}>
+        <div
+          style={{
+            marginInline: "auto",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: 56,
+            height: 56,
+            borderRadius: 20,
+            border: "1px solid var(--app-border)",
+            background: "var(--app-bg-surface)",
+            color: "var(--app-text-primary)",
+          }}
+        >
           <Sparkles className="size-5" />
         </div>
-        <h1 className="mt-6 text-3xl font-semibold tracking-tight text-[var(--app-text-primary)] lg:text-5xl">
-          从一个提示词，开始完整的图像工作流。
+        <h1
+          style={{
+            marginTop: 24,
+            fontSize: 36,
+            fontWeight: 600,
+            letterSpacing: -0.5,
+            color: "var(--app-text-primary)",
+          }}
+        >
+          把想法变成画面
         </h1>
       </div>
 
-      <div className="hide-scrollbar flex gap-3 overflow-x-auto pb-1 md:grid md:grid-cols-2 md:overflow-visible xl:grid-cols-4">
+      {composer}
+
+      <div
+        style={{
+          display: "grid",
+          gap: 12,
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+        }}
+      >
         {inspirationExamples.map((example) => (
           <button
             key={example.id}
             type="button"
             onClick={() => onApplyPromptExample(example)}
-            className="w-[220px] shrink-0 overflow-hidden rounded-[18px] border border-[var(--app-border)] bg-[var(--app-bg-elevated)] text-left transition hover:-translate-y-0.5 hover:border-[var(--app-border-strong)] md:w-auto"
+            className="app-panel"
+            style={{
+              padding: 0,
+              overflow: "hidden",
+              textAlign: "left",
+              cursor: "pointer",
+              transition: "transform 0.2s ease, border-color 0.2s ease",
+            }}
           >
-            <div className={cn("h-[4.5rem] bg-gradient-to-br md:h-20", example.tone)} />
-            <div className="space-y-2 px-4 py-3.5">
-              <div className="flex items-center gap-2 text-[11px] text-[var(--app-text-muted)]">
-                <span className="rounded-full bg-[var(--app-bg-surface)] px-2 py-0.5 font-medium">Prompt</span>
+            <div style={{ height: 80, background: example.tone }} />
+            <div style={{ padding: "14px 16px", display: "grid", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "var(--app-text-muted)" }}>
+                <span
+                  style={{
+                    padding: "2px 10px",
+                    borderRadius: 999,
+                    background: "var(--app-bg-surface)",
+                    fontWeight: 500,
+                  }}
+                >
+                  Prompt
+                </span>
               </div>
-              <div className="text-sm font-semibold tracking-tight text-[var(--app-text-primary)]">{example.title}</div>
-              <div className="line-clamp-2 text-sm leading-6 text-[var(--app-text-secondary)]">{example.prompt}</div>
-              <div className="border-t border-[var(--app-border)] pt-2 text-xs leading-5 text-[var(--app-text-muted)]">{example.hint}</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "var(--app-text-primary)" }}>{example.title}</div>
+              <div
+                style={{
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                  color: "var(--app-text-secondary)",
+                  display: "-webkit-box",
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: "vertical",
+                  overflow: "hidden",
+                }}
+              >
+                {example.prompt}
+              </div>
+              <div
+                style={{
+                  borderTop: "1px solid var(--app-border)",
+                  paddingTop: 8,
+                  fontSize: 11.5,
+                  lineHeight: 1.6,
+                  color: "var(--app-text-muted)",
+                }}
+              >
+                {example.hint}
+              </div>
             </div>
           </button>
         ))}

@@ -13,19 +13,12 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import Zoom from "react-medium-image-zoom";
-import { ArrowUp, Brain, Brush, Check, ChevronDown, Cpu, Mic2, SquarePlus, Trash2 } from "lucide-react";
+import { ArrowUp, Brain, Brush, Check, ChevronDown, Columns3, Cpu, Mic2, SquarePlus, Trash2 } from "lucide-react";
 
+import { ChipSelect } from "@/components/chip-select";
 import { HtmlImage as Image } from "@/components/html-image";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
-import type { APIAccessPlatform, ImageQuality } from "@/lib/api";
+import type { BusinessImageModel, ImageQuality } from "@/lib/api";
+import type { ImageModelSelection } from "../hooks/use-image-submit";
 import type { ImageMode, StoredSourceImage } from "@/store/image-conversations";
 import { cn } from "@/lib/utils";
 import { buildSourceImageUrl } from "../view-utils";
@@ -33,30 +26,33 @@ import { buildSourceImageUrl } from "../view-utils";
 type PromptComposerProps = {
   mode: ImageMode;
   modeOptions: Array<{ label: string; value: ImageMode; description: string }>;
-  imageCount: string;
   imageAspectRatio: string;
   imageAspectRatioOptions: Array<{ label: string; value: string }>;
   imageResolutionTier: string;
   imageResolutionTierLabel: string;
   imageResolutionTierOptions: Array<{ label: string; value: string; disabled?: boolean }>;
   imageSizeHint: ReactNode;
-  providerPlatform: APIAccessPlatform;
-  providerPlatformOptions: Array<{ label: string; value: APIAccessPlatform; disabled?: boolean }>;
+  selectedModelId: string;
+  modelOptions: BusinessImageModel[];
   imageQuality: ImageQuality;
   imageQualityOptions: Array<{ label: string; value: ImageQuality; description: string }>;
   imageQualityDisabled: boolean;
   imageQualityDisabledReason: string;
+  compareEnabled: boolean;
+  compareModelOptions: ImageModelSelection[];
+  selectedCompareModelIds: string[];
   sourceImages: StoredSourceImage[];
   imagePrompt: string;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   uploadInputRef: RefObject<HTMLInputElement | null>;
   maskInputRef: RefObject<HTMLInputElement | null>;
   onModeChange: (mode: ImageMode) => void;
-  onImageCountChange: (value: string) => void;
   onImageAspectRatioChange: (value: string) => void;
   onImageResolutionTierChange: (value: string) => void;
-  onProviderPlatformChange: (value: APIAccessPlatform) => void;
+  onModelChange: (value: string) => void;
   onImageQualityChange: (value: string) => void;
+  onCompareEnabledChange: (value: boolean) => void;
+  onCompareModelToggle: (id: string) => void;
   onPromptChange: (value: string) => void;
   onPromptPaste: (event: ReactClipboardEvent<HTMLTextAreaElement>) => void;
   onRemoveSourceImage: (id: string) => void;
@@ -64,6 +60,7 @@ type PromptComposerProps = {
   onAppendFiles: (files: FileList | null, role: "image" | "mask") => Promise<void>;
   onMobileCollapsedChange?: (collapsed: boolean) => void;
   composerResetKey?: number;
+  placement?: "bottom" | "inline";
   onSubmit: () => Promise<void>;
 };
 
@@ -154,8 +151,8 @@ function AspectResolutionPicker({
       const viewportHeight = window.innerHeight;
       const margin = 12;
       const gap = 10;
-      const panelWidth = Math.min(460, viewportWidth - margin * 2);
-      const panelHeight = panelRef.current?.offsetHeight || 330;
+      const panelWidth = Math.min(320, viewportWidth - margin * 2);
+      const panelHeight = panelRef.current?.offsetHeight || 0;
       const left = Math.min(
         Math.max(rect.left, margin),
         Math.max(margin, viewportWidth - panelWidth - margin),
@@ -229,11 +226,11 @@ function AspectResolutionPicker({
         <ChevronDown className={cn("size-4 opacity-65 transition", open && "rotate-180")} />
       </button>
 
-      {open && panelStyle && typeof document !== "undefined" ? createPortal(
+      {open && typeof document !== "undefined" ? createPortal(
         <div
           ref={panelRef}
           data-aspect-resolution-panel
-          style={panelStyle}
+          style={panelStyle ?? { position: "fixed", top: 0, left: 0, visibility: "hidden", zIndex: 80, width: 320 }}
           className="rounded-[20px] border border-[var(--app-border)] bg-[var(--app-bg-elevated)] p-4 text-[var(--app-text-primary)] shadow-[var(--app-shadow-floating)] backdrop-blur-2xl"
         >
           <div className="text-[13px] font-bold text-[var(--app-text-muted)]">比例</div>
@@ -287,30 +284,33 @@ function AspectResolutionPicker({
 export function PromptComposer({
   mode,
   modeOptions,
-  imageCount,
   imageAspectRatio,
   imageAspectRatioOptions,
   imageResolutionTier,
   imageResolutionTierLabel,
   imageResolutionTierOptions,
   imageSizeHint,
-  providerPlatform,
-  providerPlatformOptions,
+  selectedModelId,
+  modelOptions,
   imageQuality,
   imageQualityOptions,
   imageQualityDisabled,
   imageQualityDisabledReason,
+  compareEnabled,
+  compareModelOptions,
+  selectedCompareModelIds,
   sourceImages,
   imagePrompt,
   textareaRef,
   uploadInputRef,
   maskInputRef,
   onModeChange,
-  onImageCountChange,
   onImageAspectRatioChange,
   onImageResolutionTierChange,
-  onProviderPlatformChange,
+  onModelChange,
   onImageQualityChange,
+  onCompareEnabledChange,
+  onCompareModelToggle,
   onPromptChange,
   onPromptPaste,
   onRemoveSourceImage,
@@ -318,18 +318,23 @@ export function PromptComposer({
   onAppendFiles,
   onMobileCollapsedChange,
   composerResetKey,
+  placement = "bottom",
   onSubmit,
 }: PromptComposerProps) {
   const imageQualityLabel = imageQualityOptions.find((item) => item.value === imageQuality)?.label ?? imageQuality;
   const imageQualityPrefix = mode === "edit" ? "输出质量" : "清晰度";
   const modeLabel = modeOptions.find((item) => item.value === mode)?.label ?? "模式";
+  const selectedModel = modelOptions.find((item) => item.id === selectedModelId) ?? modelOptions[0];
+  const modelLabel = selectedModel
+    ? selectedModel.displayName
+    : "选择模型";
   const hasComposerContent = imagePrompt.trim().length > 0 || sourceImages.length > 0;
   const shouldFocusAfterExpandRef = useRef(false);
   const [isDesktopComposer, setIsDesktopComposer] = useState(() => {
     if (typeof window === "undefined") {
       return false;
     }
-    return window.matchMedia("(min-width: 1024px)").matches;
+    return window.matchMedia("(min-width: 768px)").matches;
   });
   const [isMobileComposerExpanded, setIsMobileComposerExpanded] = useState(hasComposerContent);
   const isMobileComposerCollapsed = !isMobileComposerExpanded;
@@ -353,7 +358,7 @@ export function PromptComposer({
   }, [hasComposerContent]);
 
   useEffect(() => {
-    const media = window.matchMedia("(min-width: 1024px)");
+    const media = window.matchMedia("(min-width: 768px)");
     const syncDesktopComposer = () => setIsDesktopComposer(media.matches);
 
     syncDesktopComposer();
@@ -382,26 +387,31 @@ export function PromptComposer({
     onMobileCollapsedChange?.(isMobileComposerCollapsed);
   }, [isMobileComposerCollapsed, onMobileCollapsedChange]);
 
-  const controlButtonClass =
-    "h-9 w-auto shrink-0 gap-1.5 whitespace-nowrap rounded-lg border border-[var(--app-border)] bg-[#1B1C22] px-3 text-[13px] font-semibold text-[var(--app-text-secondary)] shadow-none outline-none backdrop-blur-xl transition hover:bg-[#22242B] hover:text-[var(--app-text-primary)] focus-visible:border-[var(--app-border-strong)] focus-visible:ring-[3px] focus-visible:ring-[rgba(91,214,255,0.18)]";
-  const parsedImageCount = Number.parseInt(imageCount, 10);
-  const normalizedImageCount = Number.isFinite(parsedImageCount)
-    ? Math.min(8, Math.max(1, parsedImageCount))
-    : 1;
-  const setNormalizedImageCount = useCallback((value: number) => {
-    onImageCountChange(String(Math.min(8, Math.max(1, value))));
-  }, [onImageCountChange]);
+  const controlButtonClass = "app-btn";
+
+  const inlinePlacement = placement === "inline";
+  const selectedCompareCount = selectedCompareModelIds.length;
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-30 px-3 pb-4 sm:px-6 lg:absolute lg:inset-x-8 lg:bottom-8 lg:p-0">
+    <div
+      className={cn(
+        inlinePlacement
+          ? "relative z-10 mx-auto w-full max-w-[920px] px-0"
+          : "fixed inset-x-0 bottom-0 z-30 px-3 pb-4 sm:px-6 md:absolute md:inset-x-8 md:bottom-8 md:p-0",
+      )}
+    >
       <div
         data-image-composer="panel"
         className={cn(
           "mx-auto w-full max-w-[920px] rounded-[18px] border border-[var(--app-border)] bg-[var(--app-bg-elevated)] px-3 py-3 shadow-[var(--app-shadow-floating)] backdrop-blur-2xl sm:px-4 sm:py-4",
-          isComposerCollapsed ? "min-h-[86px] lg:min-h-[118px]" : "min-h-[164px] lg:min-h-[118px]",
+          inlinePlacement
+            ? "min-h-[132px]"
+            : isComposerCollapsed
+              ? "min-h-[86px] md:min-h-[118px]"
+              : "min-h-[164px] md:min-h-[118px]",
         )}
         onPointerDown={(event) => {
-          if (!isComposerCollapsed) {
+          if (inlinePlacement || !isComposerCollapsed) {
             return;
           }
           event.preventDefault();
@@ -412,7 +422,7 @@ export function PromptComposer({
           <div
             className={cn(
               "hide-scrollbar mb-3 gap-3 overflow-x-auto border-b border-[var(--app-border)] pb-3",
-              showMobileExpandedSections ? "flex" : "hidden lg:flex",
+              showMobileExpandedSections ? "flex" : "hidden md:flex",
             )}
           >
             {sourceImages.map((item) => (
@@ -466,7 +476,7 @@ export function PromptComposer({
         ) : null}
 
         <div className="relative">
-          {isComposerCollapsed ? (
+          {isComposerCollapsed && !inlinePlacement ? (
             <button
               type="button"
               className="flex min-h-[42px] w-full items-start px-1 text-left text-[14px] font-medium leading-6 text-[var(--app-text-muted)]"
@@ -483,8 +493,9 @@ export function PromptComposer({
               </span>
             </button>
           ) : (
-            <Textarea
+            <textarea
               ref={textareaRef}
+              className="pc-textarea"
               value={imagePrompt}
               onChange={(event) => onPromptChange(event.target.value)}
               placeholder={
@@ -499,54 +510,77 @@ export function PromptComposer({
                   void onSubmit();
                 }
               }}
-              className="min-h-[52px] max-h-[128px] resize-none overflow-y-auto border-0 bg-transparent !px-1 !py-0 pr-12 text-[14px] font-medium leading-6 text-[var(--app-text-primary)] shadow-none placeholder:text-[var(--app-text-muted)] focus-visible:ring-0"
               onFocus={() => setIsMobileComposerExpanded(true)}
             />
           )}
         </div>
 
-        <div className={cn("mt-3", showMobileExpandedSections ? "block" : "hidden lg:block")}>
+        <div className={cn("mt-3", inlinePlacement || showMobileExpandedSections ? "block" : "hidden md:block")}>
           <div className="flex items-end justify-between gap-3">
-            <div className="hide-scrollbar flex min-w-0 flex-1 items-center gap-2 overflow-x-auto pb-0.5">
+            <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden pb-0.5">
               <button
                 type="button"
-                className="grid size-9 shrink-0 place-items-center rounded-lg border border-[var(--app-border)] bg-[var(--app-bg-surface)] text-[var(--app-text-primary)] transition hover:bg-[var(--app-bg-surface-hover)]"
+                className="app-btn"
+                style={{ width: 36, padding: 0, justifyContent: "center", flexShrink: 0 }}
                 onClick={(event) => {
                   event.stopPropagation();
                   uploadInputRef.current?.click();
                 }}
                 aria-label={mode === "generate" ? "上传参考图" : "上传源图"}
               >
-                <SquarePlus className="size-5" />
+                <SquarePlus />
               </button>
 
-              <Select value={mode} onValueChange={(value) => onModeChange(value as ImageMode)}>
-                <SelectTrigger className={cn(controlButtonClass, "min-w-[92px] justify-center focus:ring-0")}>
-                  <SparkModeIcon mode={mode} />
-                  <SelectValue>{modeLabel}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {modeOptions.map((item) => (
-                    <SelectItem key={item.value} value={item.value}>
-                      {item.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <ChipSelect<ImageMode>
+                value={mode}
+                options={modeOptions.map((item) => ({ value: item.value, label: item.label, description: item.description }))}
+                onChange={(value) => onModeChange(value)}
+                triggerClassName={cn(controlButtonClass, "w-[96px] shrink-0 justify-center px-2")}
+                triggerIcon={<SparkModeIcon mode={mode} />}
+                triggerLabel={modeLabel}
+              />
 
-              <Select value={providerPlatform} onValueChange={(value) => onProviderPlatformChange(value as APIAccessPlatform)}>
-                <SelectTrigger className={cn(controlButtonClass, "min-w-[156px] focus:ring-0")}>
-                  <Cpu className="size-4" />
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {providerPlatformOptions.map((item) => (
-                    <SelectItem key={item.value} value={item.value} disabled={item.disabled}>
-                      {item.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <ChipSelect<string>
+                value={selectedModelId}
+                options={modelOptions.map((item) => ({
+                  value: item.id,
+                  label: `${item.displayName}${item.preview ? " · Preview" : ""}`,
+                  disabled: !item.enabled,
+                }))}
+                onChange={(value) => onModelChange(value)}
+                triggerClassName={cn(
+                  controlButtonClass,
+                  "w-[clamp(160px,20vw,260px)] shrink",
+                  compareEnabled && mode === "generate" && "is-disabled",
+                )}
+                triggerIcon={<Cpu className="size-4" />}
+                triggerLabel={modelLabel}
+                disabled={compareEnabled && mode === "generate"}
+                title={compareEnabled && mode === "generate" ? "多模型对比将使用下方选中的模型" : undefined}
+              />
+
+              {mode === "generate" ? (
+                <button
+                  type="button"
+                  className={cn(
+                    controlButtonClass,
+                    "w-[132px] shrink-0 justify-center px-2",
+                    compareEnabled &&
+                      "border-[var(--app-accent-cyan)] bg-[rgba(91,214,255,0.18)] text-[var(--app-text-primary)] shadow-[0_0_0_1px_rgba(91,214,255,0.34),inset_0_1px_0_rgba(255,255,255,0.08)]",
+                  )}
+                  onClick={() => onCompareEnabledChange(!compareEnabled)}
+                  aria-pressed={compareEnabled}
+                  title="使用同一提示词同时生成多个模型结果"
+                >
+                  <Columns3 className="size-4" />
+                  <span>模型对比</span>
+                  {compareEnabled ? (
+                    <span className="rounded-full bg-[var(--app-accent-cyan)] px-1.5 text-[11px] font-bold text-black">
+                      {selectedCompareCount}
+                    </span>
+                  ) : null}
+                </button>
+              ) : null}
 
               <AspectResolutionPicker
                 aspectRatio={imageAspectRatio}
@@ -554,92 +588,77 @@ export function PromptComposer({
                 resolutionTier={imageResolutionTier}
                 resolutionTierLabel={imageResolutionTierLabel}
                 resolutionTierOptions={imageResolutionTierOptions}
-                triggerClassName={controlButtonClass}
+                triggerClassName={cn(controlButtonClass, "w-[136px] shrink-0 px-2")}
                 onAspectRatioChange={onImageAspectRatioChange}
                 onResolutionTierChange={onImageResolutionTierChange}
               />
 
-              <Select value={imageQuality} onValueChange={onImageQualityChange} disabled={imageQualityDisabled}>
-                <SelectTrigger
-                  className={cn(
-                    controlButtonClass,
-                    "min-w-[150px] focus:ring-0",
-                    imageQualityDisabled && "cursor-not-allowed opacity-55",
-                  )}
-                  title={
-                    imageQualityDisabled
-                      ? imageQualityDisabledReason
-                      : imageQualityOptions.find((item) => item.value === imageQuality)?.description
-                  }
-                >
-                  <Mic2 className="size-4" />
-                  <SelectValue>{`${imageQualityPrefix} ${imageQualityLabel}`}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {imageQualityOptions.map((item) => (
-                    <SelectItem key={item.value} value={item.value}>
-                      <span title={item.description}>
-                        {imageQualityPrefix} {item.label}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              {mode === "generate" ? (
-                <div className={cn(controlButtonClass, "inline-flex min-w-[132px] items-center justify-center gap-2")}>
-                  <span>数量</span>
-                  <div className="inline-flex items-center gap-1.5">
-                    <Input
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      value={imageCount}
-                      onChange={(event) => {
-                        const nextValue = event.target.value.replace(/\D/g, "").slice(0, 1);
-                        onImageCountChange(nextValue);
-                      }}
-                      onBlur={() => setNormalizedImageCount(normalizedImageCount)}
-                      className="h-7 w-9 rounded-full border-0 bg-[var(--app-bg-surface-hover)] px-2 text-center text-[13px] font-bold text-[var(--app-text-primary)] shadow-none focus-visible:ring-0"
-                    />
-                    <div className="inline-flex flex-col items-center justify-center gap-0.5">
-                      <button
-                        type="button"
-                        className="grid h-3.5 w-5 place-items-center rounded-[3px] text-[var(--app-text-muted)] transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
-                        onClick={() => setNormalizedImageCount(normalizedImageCount + 1)}
-                        disabled={normalizedImageCount >= 8}
-                        aria-label="增加数量"
-                      >
-                        <span className="block size-0 border-x-[4px] border-b-[5px] border-x-transparent border-b-current" aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        className="grid h-3.5 w-5 place-items-center rounded-[3px] text-[var(--app-text-muted)] transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
-                        onClick={() => setNormalizedImageCount(normalizedImageCount - 1)}
-                        disabled={normalizedImageCount <= 1}
-                        aria-label="减少数量"
-                      >
-                        <span className="block size-0 border-x-[4px] border-t-[5px] border-x-transparent border-t-current" aria-hidden="true" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
+              <ChipSelect<string>
+                value={imageQuality}
+                options={imageQualityOptions.map((item) => ({
+                  value: item.value,
+                  label: `${imageQualityPrefix} ${item.label}`,
+                  description: item.description,
+                }))}
+                onChange={onImageQualityChange}
+                triggerClassName={cn(controlButtonClass, "w-[152px] shrink-0 px-2", imageQualityDisabled && "is-disabled")}
+                triggerIcon={<Mic2 className="size-4" />}
+                triggerLabel={`${imageQualityPrefix} ${imageQualityLabel}`}
+                disabled={imageQualityDisabled}
+                title={
+                  imageQualityDisabled
+                    ? imageQualityDisabledReason
+                    : imageQualityOptions.find((item) => item.value === imageQuality)?.description
+                }
+              />
 
             </div>
 
             <button
               type="button"
               onClick={() => void onSubmit()}
-              className="relative grid size-11 shrink-0 place-items-center rounded-full bg-[var(--app-text-primary)] text-[var(--app-bg-root)] transition hover:opacity-90"
+              className="pc-submit"
               aria-label="提交图片任务"
             >
               <ArrowUp className="size-6" />
             </button>
           </div>
+
+          {mode === "generate" && compareEnabled ? (
+            <div className="mt-3 flex flex-wrap gap-2 border-t border-[var(--app-border)] pt-3">
+              {compareModelOptions.map((item) => {
+                const active = selectedCompareModelIds.includes(item.id);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={cn(
+                      "inline-flex h-9 items-center gap-2 rounded-lg border border-[var(--app-border)] bg-[var(--app-bg-surface)] px-3 text-[12px] font-bold text-[var(--app-text-secondary)] transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)]",
+                      active &&
+                        "border-[var(--app-accent-cyan)] bg-[rgba(91,214,255,0.12)] text-[var(--app-text-primary)] shadow-[0_0_0_1px_rgba(91,214,255,0.22)]",
+                    )}
+                    onClick={() => onCompareModelToggle(item.id)}
+                    aria-pressed={active}
+                    title={`${item.vendorLabel} · ${item.model}`}
+                  >
+                    <span
+                      className={cn(
+                        "grid size-4 place-items-center rounded border border-[var(--app-border-strong)]",
+                        active && "border-[var(--app-accent-cyan)] bg-[var(--app-accent-cyan)] text-black",
+                      )}
+                      aria-hidden="true"
+                    >
+                      {active ? <Check className="size-3" /> : null}
+                    </span>
+                    <span className="max-w-[220px] truncate">{item.vendorLabel} · {item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
         </div>
 
-        {isMobileComposerExpanded ? (
+        {isMobileComposerExpanded && !inlinePlacement ? (
           <button
             type="button"
             className="absolute right-3 top-3 grid size-8 place-items-center rounded-full text-[var(--app-text-muted)] transition hover:bg-[var(--app-bg-surface-hover)] hover:text-[var(--app-text-primary)] sm:hidden"

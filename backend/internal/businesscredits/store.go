@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"imagestudio/internal/config"
-	"imagestudio/internal/sqlitedb"
+	"imagestudio/internal/database"
 )
 
 const (
@@ -20,6 +20,15 @@ const (
 	ReasonAdminRefund            = "admin_refund"
 	ReasonImageGenerationReserve = "image_generation_reserve"
 	ReasonImageGenerationRefund  = "image_generation_refund"
+	ReasonRedeemCode             = "redeem_code"
+	ReasonRegistrationPromo      = "registration_promo"
+	ReasonAffiliateRegistration  = "affiliate_registration"
+	ReasonPaymentRecharge        = "payment_recharge"
+	ReasonPaymentRefund          = "payment_refund"
+	ReasonSubscriptionReserve    = "subscription_credit_reserve"
+	ReasonSubscriptionRefund     = "subscription_credit_refund"
+	ReasonAffiliateOrderReward   = "affiliate_order_commission"
+	ReasonAffiliateOrderReversal = "affiliate_order_commission_reversal"
 )
 
 var ErrInsufficientBalance = errors.New("insufficient credits")
@@ -38,6 +47,8 @@ type LedgerEntry struct {
 	BalanceAfter int64  `json:"balance_after"`
 	Reason       string `json:"reason"`
 	GenerationID string `json:"generation_id,omitempty"`
+	SourceType   string `json:"source_type,omitempty"`
+	SourceID     string `json:"source_id,omitempty"`
 	CreatedAt    string `json:"created_at"`
 }
 
@@ -47,35 +58,52 @@ type GenerationTotals struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	driver string
+	ownDB  bool
 }
 
 func NewStore(cfg *config.Config) (*Store, error) {
-	rawPath := strings.TrimSpace(cfg.Storage.SQLitePath)
-	if rawPath == "" {
-		return nil, fmt.Errorf("sqlite path is required")
+	if !database.IsPostgres(cfg.Database.Driver) {
+		return nil, fmt.Errorf("unsupported database driver %q", strings.TrimSpace(cfg.Database.Driver))
 	}
-	path := cfg.ResolvePath(rawPath)
-	db, err := sqlitedb.Open(path)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db}
-	if err := store.init(); err != nil {
-		_ = store.Close()
+	if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
+	store := NewStoreWithDB(db, cfg.Database.Driver)
+	store.ownDB = true
 	return store, nil
+}
+
+func NewStoreWithDB(db *sql.DB, driver string) *Store {
+	driver = strings.ToLower(strings.TrimSpace(driver))
+	if driver == "" {
+		driver = "postgres"
+	}
+	return &Store{db: db, driver: driver}
 }
 
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
+	if !s.ownDB {
+		return nil
+	}
 	return s.db.Close()
 }
 
 func (s *Store) init() error {
+	if s.isPostgres() {
+		return nil
+	}
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS business_user_credits (
 			user_id TEXT PRIMARY KEY,
@@ -133,8 +161,8 @@ func (s *Store) Summaries(ctx context.Context, userIDs []string) (map[string]Sum
 
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT user_id, balance, updated_at
-		 FROM business_user_credits`,
+		s.rebind(`SELECT user_id, balance, updated_at
+		 FROM business_user_credits`),
 	)
 	if err != nil {
 		return nil, err
@@ -157,13 +185,13 @@ func (s *Store) Summaries(ctx context.Context, userIDs []string) (map[string]Sum
 
 	spentRows, err := s.db.QueryContext(
 		ctx,
-		`SELECT user_id,
+		s.rebind(`SELECT user_id,
 		        COALESCE(SUM(CASE
 		          WHEN reason IN (?, ?) THEN -delta
 		          ELSE 0
 		        END), 0) AS spent
 		 FROM business_credit_ledger
-		 GROUP BY user_id`,
+		 GROUP BY user_id`),
 		ReasonImageGenerationReserve,
 		ReasonImageGenerationRefund,
 	)
@@ -211,12 +239,12 @@ func (s *Store) SetBalance(ctx context.Context, userID string, balance int64, re
 	}
 	defer tx.Rollback()
 
-	current, err := balanceForUpdate(ctx, tx, userID)
+	current, err := s.balanceForUpdate(ctx, tx, userID)
 	if err != nil {
 		return Summary{}, LedgerEntry{}, err
 	}
 	delta := balance - current
-	entry, err := writeBalanceDelta(ctx, tx, userID, delta, reason, "", balance)
+	entry, err := s.writeBalanceDelta(ctx, tx, userID, delta, reason, "", balance)
 	if err != nil {
 		return Summary{}, LedgerEntry{}, err
 	}
@@ -235,7 +263,55 @@ func (s *Store) Reserve(ctx context.Context, userID string, amount int64, genera
 }
 
 func (s *Store) Refund(ctx context.Context, userID string, amount int64, generationID string) (Summary, LedgerEntry, error) {
-	return s.Add(ctx, userID, amount, ReasonImageGenerationRefund, generationID, false)
+	userID = cleanUserID(userID)
+	generationID = strings.TrimSpace(generationID)
+	if userID == "" {
+		return Summary{}, LedgerEntry{}, fmt.Errorf("user id is required")
+	}
+	if amount <= 0 {
+		summary, err := s.Summary(ctx, userID)
+		return summary, LedgerEntry{}, err
+	}
+	if generationID == "" {
+		return s.Add(ctx, userID, amount, ReasonImageGenerationRefund, generationID, false)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Summary{}, LedgerEntry{}, err
+	}
+	defer tx.Rollback()
+	current, err := s.balanceForUpdate(ctx, tx, userID)
+	if err != nil {
+		return Summary{}, LedgerEntry{}, err
+	}
+	totals, err := s.generationTotalsWithTx(ctx, tx, userID, generationID)
+	if err != nil {
+		return Summary{}, LedgerEntry{}, err
+	}
+	refundable := totals.Reserved - totals.Refunded
+	if refundable <= 0 {
+		if err := tx.Commit(); err != nil {
+			return Summary{}, LedgerEntry{}, err
+		}
+		summary, err := s.Summary(ctx, userID)
+		return summary, LedgerEntry{}, err
+	}
+	if amount > refundable {
+		amount = refundable
+	}
+	next := current + amount
+	entry, err := s.writeBalanceDelta(ctx, tx, userID, amount, ReasonImageGenerationRefund, generationID, next)
+	if err != nil {
+		return Summary{}, LedgerEntry{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Summary{}, LedgerEntry{}, err
+	}
+	summary, err := s.Summary(ctx, userID)
+	if err != nil {
+		return Summary{}, LedgerEntry{}, err
+	}
+	return summary, entry, nil
 }
 
 func (s *Store) GenerationTotals(ctx context.Context, userID string, generationID string) (GenerationTotals, error) {
@@ -244,14 +320,34 @@ func (s *Store) GenerationTotals(ctx context.Context, userID string, generationI
 	if userID == "" || generationID == "" {
 		return GenerationTotals{}, nil
 	}
+	return s.generationTotalsQuery(ctx, s.db, userID, generationID)
+}
+
+func (s *Store) generationTotalsWithTx(ctx context.Context, tx *sql.Tx, userID string, generationID string) (GenerationTotals, error) {
+	if tx == nil {
+		return GenerationTotals{}, fmt.Errorf("transaction is required")
+	}
+	userID = cleanUserID(userID)
+	generationID = strings.TrimSpace(generationID)
+	if userID == "" || generationID == "" {
+		return GenerationTotals{}, nil
+	}
+	return s.generationTotalsQuery(ctx, tx, userID, generationID)
+}
+
+type creditQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (s *Store) generationTotalsQuery(ctx context.Context, queryer creditQueryer, userID string, generationID string) (GenerationTotals, error) {
 	var totals GenerationTotals
-	err := s.db.QueryRowContext(
+	err := queryer.QueryRowContext(
 		ctx,
-		`SELECT
+		s.rebind(`SELECT
 		    COALESCE(SUM(CASE WHEN reason = ? THEN -delta ELSE 0 END), 0),
 		    COALESCE(SUM(CASE WHEN reason = ? THEN delta ELSE 0 END), 0)
 		   FROM business_credit_ledger
-		  WHERE user_id = ? AND generation_id = ?`,
+		  WHERE user_id = ? AND generation_id = ?`),
 		ReasonImageGenerationReserve,
 		ReasonImageGenerationRefund,
 		userID,
@@ -287,7 +383,7 @@ func (s *Store) Add(ctx context.Context, userID string, delta int64, reason stri
 	}
 	defer tx.Rollback()
 
-	current, err := balanceForUpdate(ctx, tx, userID)
+	current, err := s.balanceForUpdate(ctx, tx, userID)
 	if err != nil {
 		return Summary{}, LedgerEntry{}, err
 	}
@@ -299,7 +395,7 @@ func (s *Store) Add(ctx context.Context, userID string, delta int64, reason stri
 		return Summary{}, LedgerEntry{}, fmt.Errorf("balance cannot be negative")
 	}
 
-	entry, err := writeBalanceDelta(ctx, tx, userID, delta, reason, generationID, next)
+	entry, err := s.writeBalanceDelta(ctx, tx, userID, delta, reason, generationID, next)
 	if err != nil {
 		return Summary{}, LedgerEntry{}, err
 	}
@@ -311,6 +407,43 @@ func (s *Store) Add(ctx context.Context, userID string, delta int64, reason stri
 		return Summary{}, LedgerEntry{}, err
 	}
 	return summary, entry, nil
+}
+
+func (s *Store) AddWithTx(ctx context.Context, tx *sql.Tx, userID string, delta int64, reason string, requireSufficient bool) (LedgerEntry, error) {
+	return s.addWithTx(ctx, tx, userID, delta, reason, "", "", "", requireSufficient)
+}
+
+func (s *Store) AddWithTxSource(ctx context.Context, tx *sql.Tx, userID string, delta int64, reason string, sourceType string, sourceID string, requireSufficient bool) (LedgerEntry, error) {
+	return s.addWithTx(ctx, tx, userID, delta, reason, "", sourceType, sourceID, requireSufficient)
+}
+
+func (s *Store) addWithTx(ctx context.Context, tx *sql.Tx, userID string, delta int64, reason string, generationID string, sourceType string, sourceID string, requireSufficient bool) (LedgerEntry, error) {
+	userID = cleanUserID(userID)
+	reason = normalizeReason(reason, ReasonAdminAdjustment)
+	generationID = strings.TrimSpace(generationID)
+	sourceType = normalizeReason(sourceType, "")
+	sourceID = strings.TrimSpace(sourceID)
+	if userID == "" {
+		return LedgerEntry{}, fmt.Errorf("user id is required")
+	}
+	if tx == nil {
+		return LedgerEntry{}, fmt.Errorf("transaction is required")
+	}
+	if delta == 0 {
+		return LedgerEntry{}, nil
+	}
+	current, err := s.balanceForUpdate(ctx, tx, userID)
+	if err != nil {
+		return LedgerEntry{}, err
+	}
+	next := current + delta
+	if next < 0 && requireSufficient {
+		return LedgerEntry{}, ErrInsufficientBalance
+	}
+	if next < 0 {
+		return LedgerEntry{}, fmt.Errorf("balance cannot be negative")
+	}
+	return s.writeBalanceDeltaWithSource(ctx, tx, userID, delta, reason, generationID, sourceType, sourceID, next)
 }
 
 func (s *Store) LedgerEntries(ctx context.Context, userID string, limit int) ([]LedgerEntry, error) {
@@ -328,16 +461,36 @@ func (s *Store) DeleteUserCreditData(ctx context.Context, userID string) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM business_user_credits WHERE user_id = ?`, userID); err != nil {
+	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM business_user_credits WHERE user_id = ?`), userID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM business_credit_ledger WHERE user_id = ?`, userID); err != nil {
+	if _, err := tx.ExecContext(ctx, s.rebind(`DELETE FROM business_credit_ledger WHERE user_id = ?`), userID); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s *Store) LedgerEntriesPage(ctx context.Context, userID string, limit int, offset int) ([]LedgerEntry, int64, error) {
+	return s.ledgerEntriesPage(ctx, userID, limit, offset, nil)
+}
+
+func (s *Store) BalanceLedgerEntriesPage(ctx context.Context, userID string, limit int, offset int) ([]LedgerEntry, int64, error) {
+	return s.ledgerEntriesPage(ctx, userID, limit, offset, []string{
+		ReasonImageGenerationReserve,
+		ReasonImageGenerationRefund,
+		ReasonSubscriptionReserve,
+		ReasonSubscriptionRefund,
+	})
+}
+
+func (s *Store) UserFacingLedgerEntriesPage(ctx context.Context, userID string, limit int, offset int) ([]LedgerEntry, int64, error) {
+	return s.ledgerEntriesPage(ctx, userID, limit, offset, []string{
+		ReasonImageGenerationReserve,
+		ReasonImageGenerationRefund,
+	})
+}
+
+func (s *Store) ledgerEntriesPage(ctx context.Context, userID string, limit int, offset int, excludedReasons []string) ([]LedgerEntry, int64, error) {
 	userID = cleanUserID(userID)
 	if userID == "" {
 		return nil, 0, fmt.Errorf("user id is required")
@@ -348,26 +501,42 @@ func (s *Store) LedgerEntriesPage(ctx context.Context, userID string, limit int,
 	if offset < 0 {
 		offset = 0
 	}
+
+	where := `WHERE user_id = ?`
+	args := []any{userID}
+	placeholders := make([]string, 0, len(excludedReasons))
+	for _, reason := range excludedReasons {
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			continue
+		}
+		placeholders = append(placeholders, "?")
+		args = append(args, reason)
+	}
+	if len(placeholders) > 0 {
+		where += ` AND reason NOT IN (` + strings.Join(placeholders, ", ") + `)`
+	}
+
 	var total int64
 	if err := s.db.QueryRowContext(
 		ctx,
-		`SELECT COUNT(*)
+		s.rebind(`SELECT COUNT(*)
 		 FROM business_credit_ledger
-		 WHERE user_id = ?`,
-		userID,
+		 `+where),
+		args...,
 	).Scan(&total); err != nil {
 		return nil, 0, err
 	}
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, limit, offset)
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, user_id, delta, balance_after, reason, generation_id, created_at
+		s.rebind(`SELECT id, user_id, delta, balance_after, reason, generation_id, source_type, source_id, created_at
 		 FROM business_credit_ledger
-		 WHERE user_id = ?
+		 `+where+`
 		 ORDER BY created_at DESC, id DESC
-		 LIMIT ? OFFSET ?`,
-		userID,
-		limit,
-		offset,
+		 LIMIT ? OFFSET ?`),
+		queryArgs...,
 	)
 	if err != nil {
 		return nil, 0, err
@@ -384,6 +553,8 @@ func (s *Store) LedgerEntriesPage(ctx context.Context, userID string, limit int,
 			&item.BalanceAfter,
 			&item.Reason,
 			&item.GenerationID,
+			&item.SourceType,
+			&item.SourceID,
 			&item.CreatedAt,
 		); err != nil {
 			return nil, 0, err
@@ -396,21 +567,46 @@ func (s *Store) LedgerEntriesPage(ctx context.Context, userID string, limit int,
 	return items, total, nil
 }
 
-func balanceForUpdate(ctx context.Context, tx *sql.Tx, userID string) (int64, error) {
+func (s *Store) balanceForUpdate(ctx context.Context, tx *sql.Tx, userID string) (int64, error) {
+	if s.isPostgres() {
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO business_user_credits(user_id, balance, updated_at)
+			 VALUES($1, $2, $3)
+			 ON CONFLICT(user_id) DO NOTHING`,
+			userID,
+			0,
+			time.Now().UTC().Format(time.RFC3339Nano),
+		); err != nil {
+			return 0, err
+		}
+		var balance int64
+		if err := tx.QueryRowContext(
+			ctx,
+			`SELECT balance
+			 FROM business_user_credits
+			 WHERE user_id = $1
+			 FOR UPDATE`,
+			userID,
+		).Scan(&balance); err != nil {
+			return 0, err
+		}
+		return balance, nil
+	}
 	var balance int64
 	err := tx.QueryRowContext(
 		ctx,
-		`SELECT balance
+		s.rebind(`SELECT balance
 		 FROM business_user_credits
-		 WHERE user_id = ?`,
+		 WHERE user_id = ?`),
 		userID,
 	).Scan(&balance)
 	if err == sql.ErrNoRows {
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		if _, err := tx.ExecContext(
 			ctx,
-			`INSERT INTO business_user_credits(user_id, balance, updated_at)
-			 VALUES(?, ?, ?)`,
+			s.rebind(`INSERT INTO business_user_credits(user_id, balance, updated_at)
+			 VALUES(?, ?, ?)`),
 			userID,
 			0,
 			now,
@@ -425,7 +621,11 @@ func balanceForUpdate(ctx context.Context, tx *sql.Tx, userID string) (int64, er
 	return balance, nil
 }
 
-func writeBalanceDelta(ctx context.Context, tx *sql.Tx, userID string, delta int64, reason string, generationID string, balanceAfter int64) (LedgerEntry, error) {
+func (s *Store) writeBalanceDelta(ctx context.Context, tx *sql.Tx, userID string, delta int64, reason string, generationID string, balanceAfter int64) (LedgerEntry, error) {
+	return s.writeBalanceDeltaWithSource(ctx, tx, userID, delta, reason, generationID, "", "", balanceAfter)
+}
+
+func (s *Store) writeBalanceDeltaWithSource(ctx context.Context, tx *sql.Tx, userID string, delta int64, reason string, generationID string, sourceType string, sourceID string, balanceAfter int64) (LedgerEntry, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	entry := LedgerEntry{
 		ID:           newLedgerID(),
@@ -434,13 +634,15 @@ func writeBalanceDelta(ctx context.Context, tx *sql.Tx, userID string, delta int
 		BalanceAfter: balanceAfter,
 		Reason:       reason,
 		GenerationID: generationID,
+		SourceType:   sourceType,
+		SourceID:     sourceID,
 		CreatedAt:    now,
 	}
 	_, err := tx.ExecContext(
 		ctx,
-		`UPDATE business_user_credits
+		s.rebind(`UPDATE business_user_credits
 		 SET balance = ?, updated_at = ?
-		 WHERE user_id = ?`,
+		 WHERE user_id = ?`),
 		balanceAfter,
 		now,
 		userID,
@@ -450,21 +652,31 @@ func writeBalanceDelta(ctx context.Context, tx *sql.Tx, userID string, delta int
 	}
 	_, err = tx.ExecContext(
 		ctx,
-		`INSERT INTO business_credit_ledger(
-			id, user_id, delta, balance_after, reason, generation_id, created_at
-		) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		s.rebind(`INSERT INTO business_credit_ledger(
+			id, user_id, delta, balance_after, reason, generation_id, source_type, source_id, created_at
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		entry.ID,
 		entry.UserID,
 		entry.Delta,
 		entry.BalanceAfter,
 		entry.Reason,
 		entry.GenerationID,
+		entry.SourceType,
+		entry.SourceID,
 		entry.CreatedAt,
 	)
 	if err != nil {
 		return LedgerEntry{}, err
 	}
 	return entry, nil
+}
+
+func (s *Store) isPostgres() bool {
+	return database.IsPostgres(s.driver)
+}
+
+func (s *Store) rebind(query string) string {
+	return database.Rebind(s.driver, query)
 }
 
 func normalizeReason(value string, fallback string) string {

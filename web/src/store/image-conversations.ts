@@ -14,6 +14,7 @@ import {
   type InpaintSourceReference,
 } from "@/lib/api";
 import webConfig from "@/constants/common-env";
+import { normalizeAPIAccessPlatform as normalizeProviderPlatform } from "@/lib/provider-platforms";
 import { httpRequest } from "@/lib/request";
 
 export type ImageMode = "generate" | "edit";
@@ -29,6 +30,7 @@ export type StoredSourceImage = {
 
 export type StoredImage = {
   id: string;
+  jobId?: string;
   status?: "loading" | "success" | "error";
   b64_json?: string;
   url?: string;
@@ -60,8 +62,19 @@ export type ImageConversationTurn = {
   resolutionAccess?: ImageResolutionAccess;
   quality?: ImageQuality;
   providerPlatform?: APIAccessPlatform;
+  modelId?: string;
+  modelLabel?: string;
+  vendor?: string;
+  vendorLabel?: string;
+  adapter?: string;
   scale?: string;
+  compareBatchId?: string;
+  compareGroupId?: string;
+  compareModelLabel?: string;
+  compareModelIndex?: number;
+  compareModelCount?: number;
   sourceImages?: StoredSourceImage[];
+  hasAttachment?: boolean;
   sourceReference?: InpaintSourceReference;
   images: StoredImage[];
   createdAt: string;
@@ -88,6 +101,11 @@ export type ImageConversation = {
   resolutionAccess?: ImageResolutionAccess;
   quality?: ImageQuality;
   providerPlatform?: APIAccessPlatform;
+  modelId?: string;
+  modelLabel?: string;
+  vendor?: string;
+  vendorLabel?: string;
+  adapter?: string;
   scale?: string;
   sourceImages?: StoredSourceImage[];
   images: StoredImage[];
@@ -358,7 +376,7 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
 }
 
 function normalizeImageQuality(
-  value: ImageConversationTurn["quality"],
+  value: string | undefined,
 ): ImageQuality | undefined {
   return value === "low" || value === "medium" || value === "high"
     ? value
@@ -382,9 +400,7 @@ function normalizeImageModel(value: unknown): ImageModel {
 }
 
 function normalizeAPIAccessPlatform(value: unknown): APIAccessPlatform | undefined {
-  return value === "gpt-image" || value === "gemini-banana"
-    ? value
-    : undefined;
+  return normalizeProviderPlatform(value);
 }
 
 function buildBusinessImageTitle(prompt: string) {
@@ -531,7 +547,18 @@ function businessJobPayload(job?: BusinessImageJob): Record<string, unknown> {
 function businessTurnModeFromJob(job?: BusinessImageJob): ImageMode {
   const payload = businessJobPayload(job);
   const mode = String(payload.mode || "").trim();
-  return mode === "edit" || Array.isArray(payload.sourceImages) ? "edit" : "generate";
+  return mode === "edit" ? "edit" : "generate";
+}
+
+function businessHasAttachmentFromJob(job?: BusinessImageJob) {
+  if (job?.hasAttachment) {
+    return true;
+  }
+  const payload = businessJobPayload(job);
+  if (payload.hasAttachment === true) {
+    return true;
+  }
+  return Array.isArray(payload.sourceImages) && payload.sourceImages.length > 0;
 }
 
 function businessSourceImagesFromJob(job?: BusinessImageJob): StoredSourceImage[] {
@@ -571,17 +598,66 @@ function businessSourceReferenceFromJob(
   return normalizeSourceReference(sourceReference as ImageConversationTurn["sourceReference"]);
 }
 
+function businessCompareMetadataFromJob(job?: BusinessImageJob) {
+  const payload = businessJobPayload(job);
+  const compareBatchId = String(job?.compareBatchId || payload.compareBatchId || payload.compareGroupId || "").trim();
+  const compareGroupId = String(payload.compareGroupId || compareBatchId || "").trim();
+  const compareModelLabel = String(payload.compareModelLabel || "").trim();
+  const compareModelIndex = Number(job?.compareModelIndex ?? payload.compareModelIndex);
+  const compareModelCount = Number(job?.compareModelCount ?? payload.compareModelCount);
+  return {
+    compareBatchId: compareBatchId || undefined,
+    compareGroupId: compareGroupId || undefined,
+    compareModelLabel: compareModelLabel || undefined,
+    compareModelIndex: Number.isFinite(compareModelIndex)
+      ? compareModelIndex
+      : undefined,
+    compareModelCount: Number.isFinite(compareModelCount)
+      ? compareModelCount
+      : undefined,
+  };
+}
+
+function businessModelMetadataFromJob(
+  job?: BusinessImageJob,
+  generation?: BusinessImageGeneration,
+) {
+  const payload = businessJobPayload(job);
+  const response = generation?.response as
+    | {
+        modelId?: unknown;
+        modelLabel?: unknown;
+        vendor?: unknown;
+        vendorLabel?: unknown;
+      }
+    | undefined;
+  return {
+    modelId:
+      String(payload.modelId || response?.modelId || "").trim() || undefined,
+    modelLabel:
+      String(payload.modelLabel || response?.modelLabel || "").trim() ||
+      undefined,
+    vendor: String(payload.vendor || response?.vendor || "").trim() || undefined,
+    vendorLabel:
+      String(payload.vendorLabel || response?.vendorLabel || "").trim() ||
+      undefined,
+    adapter: String(payload.adapter || "").trim() || undefined,
+  };
+}
+
 function businessGenerationImages(
   generation: BusinessImageGeneration,
   turnID: string,
   statusOverride?: ImageConversationStatus,
   errorOverride?: string,
+  jobId?: string,
 ): StoredImage[] {
   const items = businessGenerationResponseItems(generation);
   const images = items.map((item, index): StoredImage => {
     if (item.b64_json || item.url) {
       return {
         id: `${turnID}-${index}`,
+        jobId,
         status: "success",
         b64_json: item.b64_json,
         url: item.url,
@@ -595,6 +671,7 @@ function businessGenerationImages(
     }
     return {
       id: `${turnID}-${index}`,
+      jobId,
       status: "error",
       error: item.error || errorOverride || generation.error || "接口没有返回图片数据",
     };
@@ -604,7 +681,13 @@ function businessGenerationImages(
   while (images.length < expected) {
     images.push({
       id: `${turnID}-${images.length}`,
-      status: statusOverride === "error" ? "error" : "loading",
+      jobId,
+      status:
+        statusOverride === "queued" ||
+        statusOverride === "running" ||
+        statusOverride === "generating"
+          ? "loading"
+          : "error",
       error: errorOverride || generation.error || "接口返回的图片数量不足",
     });
   }
@@ -622,14 +705,19 @@ export function businessImageConversationDetailToConversation(
       const turnID = businessGenerationTurnID(generation);
       const job = jobsByGenerationID.get(String(generation.id || "").trim());
       const status = mergeBusinessGenerationStatus(generation, job);
-      const error = job?.errorMessage || generation.error || undefined;
+      const error = job?.userErrorMessage || job?.errorMessage || generation.error || undefined;
       const mode = businessTurnModeFromJob(job);
       const sourceImages = businessSourceImagesFromJob(job);
+      const hasAttachment = businessHasAttachmentFromJob(job);
+      const compareMetadata = businessCompareMetadataFromJob(job);
+      const modelMetadata = businessModelMetadataFromJob(job, generation);
+      const jobId = job?.id || String(generation.id || "").trim() || undefined;
+      const prompt = generation.prompt || job?.prompt || "";
       return {
         id: turnID,
-        title: buildBusinessImageTitle(generation.prompt),
+        title: buildBusinessImageTitle(prompt),
         mode,
-        prompt: generation.prompt || "",
+        prompt,
         model: normalizeImageModel(generation.model),
         count: Math.max(1, generation.count || 1),
         size: generation.size?.trim() || undefined,
@@ -637,13 +725,16 @@ export function businessImageConversationDetailToConversation(
         providerPlatform: normalizeAPIAccessPlatform(
           (generation.response as { platform?: unknown } | undefined)?.platform,
         ),
+        ...modelMetadata,
+        ...compareMetadata,
         sourceImages,
+        hasAttachment,
         sourceReference: businessSourceReferenceFromJob(job),
-        images: businessGenerationImages(generation, turnID, status, error),
+        images: businessGenerationImages(generation, turnID, status, error, jobId),
         createdAt: generation.created_at || conversation.updated_at || conversation.created_at,
         status,
         error,
-        jobId: generation.id || undefined,
+        jobId,
         waitingDetail: job?.stage,
         waitingSince: job?.queuedAt,
         startedAt: job?.startedAt,
@@ -654,7 +745,7 @@ export function businessImageConversationDetailToConversation(
 
   return normalizeConversation({
     id: conversation.id,
-    title: conversation.title || "新建生图会话",
+    title: conversation.title || turns[turns.length - 1]?.title || "新建生图会话",
     mode: "generate",
     prompt: turns[turns.length - 1]?.prompt || "",
     model: turns[turns.length - 1]?.model || "gpt-image-2",
@@ -673,7 +764,26 @@ function normalizeTurn(turn: ImageConversationTurn): ImageConversationTurn {
     resolutionAccess: normalizeResolutionAccess(turn.resolutionAccess),
     quality: normalizeImageQuality(turn.quality),
     providerPlatform: normalizeAPIAccessPlatform(turn.providerPlatform),
+    modelId: String(turn.modelId || "").trim() || undefined,
+    modelLabel: String(turn.modelLabel || "").trim() || undefined,
+    vendor: String(turn.vendor || "").trim() || undefined,
+    vendorLabel: String(turn.vendorLabel || "").trim() || undefined,
+    adapter: String(turn.adapter || "").trim() || undefined,
+    compareBatchId: String(turn.compareBatchId || turn.compareGroupId || "").trim() || undefined,
+    compareGroupId: String(turn.compareGroupId || turn.compareBatchId || "").trim() || undefined,
+    compareModelLabel: String(turn.compareModelLabel || "").trim() || undefined,
+    compareModelIndex:
+      typeof turn.compareModelIndex === "number" &&
+      Number.isFinite(turn.compareModelIndex)
+        ? turn.compareModelIndex
+        : undefined,
+    compareModelCount:
+      typeof turn.compareModelCount === "number" &&
+      Number.isFinite(turn.compareModelCount)
+        ? turn.compareModelCount
+        : undefined,
     sourceImages: Array.isArray(turn.sourceImages) ? turn.sourceImages : [],
+    hasAttachment: Boolean(turn.hasAttachment || turn.sourceImages?.length),
     sourceReference: normalizeSourceReference(turn.sourceReference),
     images: (turn.images || []).map(normalizeStoredImage),
     status:
@@ -729,8 +839,19 @@ export function normalizeConversation(
             resolutionAccess: conversation.resolutionAccess,
             quality: conversation.quality,
             providerPlatform: conversation.providerPlatform,
+            modelId: conversation.turns?.[0]?.modelId,
+            modelLabel: conversation.turns?.[0]?.modelLabel,
+            vendor: conversation.turns?.[0]?.vendor,
+            vendorLabel: conversation.turns?.[0]?.vendorLabel,
+            adapter: conversation.turns?.[0]?.adapter,
             scale: conversation.scale,
+            compareBatchId: conversation.turns?.[0]?.compareBatchId || conversation.turns?.[0]?.compareGroupId,
+            compareGroupId: conversation.turns?.[0]?.compareGroupId,
+            compareModelLabel: conversation.turns?.[0]?.compareModelLabel,
+            compareModelIndex: conversation.turns?.[0]?.compareModelIndex,
+            compareModelCount: conversation.turns?.[0]?.compareModelCount,
             sourceImages: conversation.sourceImages,
+            hasAttachment: Boolean(conversation.sourceImages?.length),
             images: conversation.images || [],
             createdAt: conversation.createdAt,
             status: conversation.status,
@@ -739,9 +860,10 @@ export function normalizeConversation(
         ];
 
   const latestTurn = turns[turns.length - 1];
+  const title = String(conversation.title || "").trim() || latestTurn.title;
   return {
     ...conversation,
-    title: latestTurn.title,
+    title,
     mode: latestTurn.mode,
     prompt: latestTurn.prompt,
     model: latestTurn.model,
@@ -750,6 +872,11 @@ export function normalizeConversation(
     resolutionAccess: latestTurn.resolutionAccess,
     quality: latestTurn.quality,
     providerPlatform: latestTurn.providerPlatform,
+    modelId: latestTurn.modelId,
+    modelLabel: latestTurn.modelLabel,
+    vendor: latestTurn.vendor,
+    vendorLabel: latestTurn.vendorLabel,
+    adapter: latestTurn.adapter,
     scale: latestTurn.scale,
     sourceImages: latestTurn.sourceImages,
     images: latestTurn.images,
@@ -935,7 +1062,6 @@ export async function importImageConversationsToServerTarget(
   storage: {
     backend: string;
     imageDir: string;
-    sqlitePath: string;
     redisAddr: string;
     redisPassword: string;
     redisDb: number;
@@ -1077,6 +1203,55 @@ export async function updateImageConversation(
   ]);
   await persistConversationCache();
   return nextConversation;
+}
+
+export async function renameImageConversation(
+  id: string,
+  title: string,
+): Promise<ImageConversation> {
+  const trimmedTitle = title.trim();
+  if (!trimmedTitle) {
+    throw new Error("请输入对话名");
+  }
+
+  if (isBusinessProxyMode()) {
+    const data = await httpRequest<{ item: BusinessImageConversation }>(
+      `/api/business/image/conversations/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        body: { title: trimmedTitle },
+      },
+    );
+    const current =
+      cachedConversations?.find((item) => item.id === id) ??
+      (await getBusinessImageConversation(id));
+    if (!current) {
+      throw new Error("会话不存在");
+    }
+    const renamedConversation = normalizeConversation({
+      ...current,
+      title: data.item?.title || trimmedTitle,
+      createdAt: data.item?.updated_at || current.createdAt,
+    });
+    setCachedConversationsSnapshot(
+      [
+        renamedConversation,
+        ...(cachedConversations || []).filter((item) => item.id !== id),
+      ],
+      "server",
+    );
+    return renamedConversation;
+  }
+
+  return updateImageConversation(id, (current) => {
+    if (!current) {
+      throw new Error("会话不存在");
+    }
+    return {
+      ...current,
+      title: trimmedTitle,
+    };
+  });
 }
 
 export async function deleteImageConversation(id: string): Promise<void> {

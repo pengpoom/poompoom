@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"math"
 	"net/http"
@@ -17,9 +16,9 @@ import (
 
 	"imagestudio/internal/buildinfo"
 	"imagestudio/internal/businessproviders"
+	"imagestudio/internal/database"
 
 	"github.com/redis/go-redis/v9"
-	_ "modernc.org/sqlite"
 )
 
 const (
@@ -64,11 +63,20 @@ type runtimeMemoryStatus struct {
 }
 
 type runtimeDatabaseStatus struct {
-	OK        bool   `json:"ok"`
-	Status    string `json:"status"`
-	Path      string `json:"path"`
-	SizeBytes int64  `json:"sizeBytes,omitempty"`
-	Error     string `json:"error,omitempty"`
+	OK            bool   `json:"ok"`
+	Status        string `json:"status"`
+	Driver        string `json:"driver"`
+	Name          string `json:"name,omitempty"`
+	DSN           string `json:"dsn,omitempty"`
+	Path          string `json:"path,omitempty"`
+	SizeBytes     int64  `json:"sizeBytes,omitempty"`
+	OpenConns     int    `json:"openConns,omitempty"`
+	InUseConns    int    `json:"inUseConns,omitempty"`
+	IdleConns     int    `json:"idleConns,omitempty"`
+	MaxOpenConns  int    `json:"maxOpenConns,omitempty"`
+	MaxIdleConns  int    `json:"maxIdleConns,omitempty"`
+	ConnLifetimeS int    `json:"connLifetimeSeconds,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 type runtimeRedisStatus struct {
@@ -94,6 +102,40 @@ type runtimeGoStatus struct {
 	Queued     int `json:"queued"`
 }
 
+type runtimeCapacityStatus struct {
+	MaxUserActiveJobs      int    `json:"maxUserActiveJobs"`
+	MaxProviderRunningJobs int    `json:"maxProviderRunningJobs"`
+	MaxQueuedJobs          int    `json:"maxQueuedJobs"`
+	QueuedJobs             int64  `json:"queuedJobs"`
+	Error                  string `json:"error,omitempty"`
+}
+
+type runtimeProviderPoolStatus struct {
+	Groups                    int                        `json:"groups"`
+	Members                   int                        `json:"members"`
+	AvailableMembers          int                        `json:"availableMembers"`
+	CoolingMembers            int                        `json:"coolingMembers"`
+	UnavailableMembers        int                        `json:"unavailableMembers"`
+	LimitedMembers            int                        `json:"limitedMembers"`
+	ConcurrencyLimitedMembers int                        `json:"concurrencyLimitedMembers"`
+	DisabledGroups            int                        `json:"disabledGroups"`
+	DisabledMembers           int                        `json:"disabledMembers"`
+	NoFallbackConfigured      bool                       `json:"noFallbackConfigured"`
+	FallbackMissingPlatforms  []string                   `json:"fallbackMissingPlatforms,omitempty"`
+	DispatchIssues            []runtimeProviderPoolIssue `json:"dispatchIssues,omitempty"`
+	LastError                 string                     `json:"lastError,omitempty"`
+	LastErrorAt               string                     `json:"lastErrorAt,omitempty"`
+	LastErrorMember           string                     `json:"lastErrorMember,omitempty"`
+	Error                     string                     `json:"error,omitempty"`
+}
+
+type runtimeProviderPoolIssue struct {
+	Code   string `json:"code"`
+	Label  string `json:"label"`
+	Count  int    `json:"count"`
+	Detail string `json:"detail,omitempty"`
+}
+
 type runtimeSystemStatus struct {
 	CPU      runtimeCPUStatus      `json:"cpu"`
 	Memory   runtimeMemoryStatus   `json:"memory"`
@@ -112,7 +154,9 @@ type runtimeStatusResponse struct {
 		Inflight       int   `json:"inflight"`
 		Queued         int   `json:"queued"`
 	} `json:"admission"`
-	Recent struct {
+	Capacity     runtimeCapacityStatus     `json:"capacity"`
+	ProviderPool runtimeProviderPoolStatus `json:"providerPool"`
+	Recent       struct {
 		WindowSeconds    int    `json:"windowSeconds"`
 		FailureCount     int    `json:"failureCount"`
 		LastError        string `json:"lastError,omitempty"`
@@ -174,6 +218,8 @@ func (s *Server) collectRuntimeStatus(ctx context.Context) runtimeStatusResponse
 		out.Admission.Inflight = snapshot.Inflight
 		out.Admission.Queued = snapshot.Queued
 	}
+	out.Capacity = s.collectRuntimeCapacityStatus(ctx)
+	out.ProviderPool = s.collectRuntimeProviderPoolStatus(ctx, now)
 	out.Recent.WindowSeconds = 600
 	windowStart := now.Add(-10 * time.Minute)
 	for _, item := range s.reqLogs.list(200) {
@@ -194,6 +240,227 @@ func (s *Server) collectRuntimeStatus(ctx context.Context) runtimeStatusResponse
 
 	out.System = s.collectRuntimeSystemStatus(ctx, out.Admission.Inflight, out.Admission.Queued)
 	return out
+}
+
+func (s *Server) collectRuntimeProviderPoolStatus(ctx context.Context, now time.Time) runtimeProviderPoolStatus {
+	status := runtimeProviderPoolStatus{}
+	store, err := s.newBusinessProviderStore()
+	if err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	defer store.Close()
+	pools, err := store.ListPools(ctx)
+	if err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	jobStore, err := s.newBusinessJobStore()
+	if err != nil {
+		status.Error = err.Error()
+	} else {
+		defer jobStore.Close()
+	}
+	platformMembers := make(map[string]int)
+	platformAvailableMembers := make(map[string]int)
+	configuredPlatforms := make([]string, 0)
+	status.Groups = len(pools)
+	for _, pool := range pools {
+		platform := businessproviders.NormalizePlatform(pool.Platform)
+		if platform == "" {
+			platform = strings.TrimSpace(pool.Platform)
+		}
+		if !pool.Enabled {
+			status.DisabledGroups++
+		}
+		if pool.Enabled && platform != "" {
+			configuredPlatforms = appendUniqueString(configuredPlatforms, platform)
+		}
+		for _, member := range pool.Members {
+			status.Members++
+			if pool.Enabled && platform != "" {
+				platformMembers[platform]++
+			}
+			if !member.Enabled {
+				status.DisabledMembers++
+			}
+			if member.Status == businessproviders.MemberStatusUnavailable {
+				status.UnavailableMembers++
+			}
+			if member.Status == businessproviders.MemberStatusLimited {
+				status.LimitedMembers++
+			}
+			cooling := providerMemberCooling(member.CooldownUntil, now)
+			if cooling {
+				status.CoolingMembers++
+			}
+			runningCount := int64(0)
+			if jobStore != nil && member.MaxConcurrent > 0 {
+				count, countErr := jobStore.CountProviderRunning(ctx, member.ID, platform)
+				if countErr != nil {
+					if status.Error == "" {
+						status.Error = countErr.Error()
+					}
+				} else {
+					runningCount = count
+				}
+			}
+			concurrencyLimited := member.MaxConcurrent > 0 && runningCount >= int64(member.MaxConcurrent)
+			if concurrencyLimited {
+				status.ConcurrencyLimitedMembers++
+			}
+			if pool.Enabled && member.Enabled &&
+				businessproviders.NormalizePlatform(member.Platform) == platform &&
+				member.Status != businessproviders.MemberStatusUnavailable &&
+				!cooling && !concurrencyLimited {
+				status.AvailableMembers++
+				platformAvailableMembers[platform]++
+			}
+			if member.LastError != "" && newerRFC3339(member.LastErrorAt, status.LastErrorAt) {
+				status.LastError = member.LastError
+				status.LastErrorAt = member.LastErrorAt
+				status.LastErrorMember = firstNonEmpty(member.Name, member.ID)
+			}
+		}
+	}
+	blockedPlatforms := make([]string, 0)
+	for _, platform := range configuredPlatforms {
+		if platformAvailableMembers[platform] == 0 {
+			blockedPlatforms = append(blockedPlatforms, platform)
+			fallbackConfigured, fallbackErr := s.providerPoolFallbackConfigured(ctx, store, platform)
+			if fallbackErr != nil {
+				if status.Error == "" {
+					status.Error = fallbackErr.Error()
+				}
+				continue
+			}
+			if !fallbackConfigured {
+				status.FallbackMissingPlatforms = append(status.FallbackMissingPlatforms, platform)
+			}
+		}
+	}
+	status.NoFallbackConfigured = len(status.FallbackMissingPlatforms) > 0
+	status.DispatchIssues = runtimeProviderPoolDispatchIssues(status, blockedPlatforms)
+	return status
+}
+
+func (s *Server) providerPoolFallbackConfigured(ctx context.Context, store *businessproviders.Store, platform string) (bool, error) {
+	platform = businessproviders.NormalizePlatform(platform)
+	if platform == "" {
+		return false, nil
+	}
+	if provider, ok, err := store.DefaultForPlatform(ctx, platform); err != nil {
+		return false, err
+	} else if ok {
+		return normalizeProviderBaseURL(platform, provider.BaseURL) != "" && strings.TrimSpace(provider.APIKey) != "", nil
+	}
+
+	apiAccessPlatform := businessproviders.NormalizePlatform(s.cfg.APIAccess.Platform)
+	if apiAccessPlatform == "" || apiAccessPlatform == platform {
+		apiAccessBaseURL := normalizeProviderBaseURL(platform, s.cfg.APIAccess.BaseURL)
+		apiAccessAPIKey := strings.TrimSpace(s.cfg.APIAccess.APIKey)
+		if apiAccessBaseURL != "" || apiAccessAPIKey != "" {
+			return apiAccessBaseURL != "" && apiAccessAPIKey != "", nil
+		}
+	}
+	return normalizeProviderBaseURL(platform, os.Getenv("IMAGE_BASE_URL")) != "" &&
+		strings.TrimSpace(os.Getenv("IMAGE_API_KEY")) != "", nil
+}
+
+func runtimeProviderPoolDispatchIssues(status runtimeProviderPoolStatus, blockedPlatforms []string) []runtimeProviderPoolIssue {
+	issues := make([]runtimeProviderPoolIssue, 0, 7)
+	if len(blockedPlatforms) > 0 {
+		issues = append(issues, runtimeProviderPoolIssue{
+			Code:   "no_available_member",
+			Label:  "无可用 member",
+			Count:  len(blockedPlatforms),
+			Detail: "平台：" + strings.Join(blockedPlatforms, " / "),
+		})
+	}
+	if status.CoolingMembers > 0 {
+		issues = append(issues, runtimeProviderPoolIssue{
+			Code:   "member_cooling",
+			Label:  "member 冷却中",
+			Count:  status.CoolingMembers,
+			Detail: "冷却未结束的成员不会进入本次调度。",
+		})
+	}
+	if status.UnavailableMembers > 0 {
+		issues = append(issues, runtimeProviderPoolIssue{
+			Code:   "member_unavailable",
+			Label:  "member unavailable",
+			Count:  status.UnavailableMembers,
+			Detail: "需手动恢复或等后续策略重新启用。",
+		})
+	}
+	if status.ConcurrencyLimitedMembers > 0 {
+		issues = append(issues, runtimeProviderPoolIssue{
+			Code:   "member_concurrency_full",
+			Label:  "member 并发已满",
+			Count:  status.ConcurrencyLimitedMembers,
+			Detail: "当前 running 数达到该 member 的并发上限。",
+		})
+	}
+	if status.DisabledGroups > 0 {
+		issues = append(issues, runtimeProviderPoolIssue{
+			Code:   "group_disabled",
+			Label:  "池已禁用",
+			Count:  status.DisabledGroups,
+			Detail: "禁用的池不会参与调度。",
+		})
+	}
+	if status.DisabledMembers > 0 {
+		issues = append(issues, runtimeProviderPoolIssue{
+			Code:   "member_disabled",
+			Label:  "member 已禁用",
+			Count:  status.DisabledMembers,
+			Detail: "禁用的成员不会参与调度。",
+		})
+	}
+	if len(status.FallbackMissingPlatforms) > 0 {
+		issues = append(issues, runtimeProviderPoolIssue{
+			Code:   "no_api_fallback",
+			Label:  "无 API 兜底配置",
+			Count:  len(status.FallbackMissingPlatforms),
+			Detail: "缺少兜底平台：" + strings.Join(status.FallbackMissingPlatforms, " / "),
+		})
+	}
+	return issues
+}
+
+func appendUniqueString(items []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return items
+	}
+	for _, item := range items {
+		if item == value {
+			return items
+		}
+	}
+	return append(items, value)
+}
+
+func (s *Server) collectRuntimeCapacityStatus(ctx context.Context) runtimeCapacityStatus {
+	limits := businessJobCapacityLimits(s.businessSystemSettingsForContext(ctx))
+	status := runtimeCapacityStatus{
+		MaxUserActiveJobs:      limits.MaxUserActiveJobs,
+		MaxProviderRunningJobs: limits.MaxProviderRunningJobs,
+		MaxQueuedJobs:          limits.MaxQueuedJobs,
+	}
+	store, err := s.newBusinessJobStore()
+	if err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	defer store.Close()
+	queued, err := store.CountQueued(ctx)
+	if err != nil {
+		status.Error = err.Error()
+		return status
+	}
+	status.QueuedJobs = queued
+	return status
 }
 
 func (s *Server) collectRuntimeSystemStatus(ctx context.Context, inflight int, queued int) runtimeSystemStatus {
@@ -360,36 +627,48 @@ func validMemoryLimit(value uint64) bool {
 }
 
 func (s *Server) collectRuntimeDatabaseStatus(ctx context.Context) runtimeDatabaseStatus {
-	path := filepath.Clean(s.cfg.ResolvePath(s.cfg.Storage.SQLitePath))
+	driver := strings.ToLower(strings.TrimSpace(s.cfg.Database.Driver))
+	if driver == "" {
+		driver = "postgres"
+	}
+	if database.IsPostgres(driver) {
+		return s.collectRuntimePostgresStatus(ctx)
+	}
+	return runtimeDatabaseStatus{
+		OK:     true,
+		Status: "configured",
+		Driver: driver,
+		Name:   strings.TrimSpace(driver),
+	}
+}
+
+func (s *Server) collectRuntimePostgresStatus(ctx context.Context) runtimeDatabaseStatus {
 	status := runtimeDatabaseStatus{
-		Status: "checking",
-		Path:   path,
+		Status:        "checking",
+		Driver:        "postgres",
+		Name:          "PostgreSQL",
+		DSN:           maskDatabaseDSN(s.cfg.Database.DSN),
+		MaxOpenConns:  s.cfg.Database.MaxOpenConns,
+		MaxIdleConns:  s.cfg.Database.MaxIdleConns,
+		ConnLifetimeS: s.cfg.Database.ConnMaxLifetimeSeconds,
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		status.Status = "error"
-		status.Error = err.Error()
-		return status
+	db := s.db
+	var closeDB func()
+	if db == nil {
+		openCtx, cancel := context.WithTimeout(ctx, 900*time.Millisecond)
+		opened, err := database.Open(openCtx, s.cfg)
+		cancel()
+		if err != nil {
+			status.Status = "error"
+			status.Error = err.Error()
+			return status
+		}
+		db = opened
+		closeDB = func() { _ = opened.Close() }
 	}
-	if info.IsDir() {
-		status.Status = "error"
-		status.Error = "sqlite path is a directory"
-		return status
+	if closeDB != nil {
+		defer closeDB()
 	}
-	status.SizeBytes = info.Size()
-
-	sqliteURL := url.URL{Scheme: "file", Path: path}
-	values := sqliteURL.Query()
-	values.Set("mode", "ro")
-	sqliteURL.RawQuery = values.Encode()
-	db, err := sql.Open("sqlite", sqliteURL.String())
-	if err != nil {
-		status.Status = "error"
-		status.Error = err.Error()
-		return status
-	}
-	defer db.Close()
-
 	pingCtx, cancel := context.WithTimeout(ctx, 900*time.Millisecond)
 	defer cancel()
 	if err := db.PingContext(pingCtx); err != nil {
@@ -397,14 +676,32 @@ func (s *Server) collectRuntimeDatabaseStatus(ctx context.Context) runtimeDataba
 		status.Error = err.Error()
 		return status
 	}
+	stats := db.Stats()
+	status.OpenConns = stats.OpenConnections
+	status.InUseConns = stats.InUse
+	status.IdleConns = stats.Idle
 	status.OK = true
 	status.Status = "ok"
 	return status
 }
 
+func maskDatabaseDSN(dsn string) string {
+	dsn = strings.TrimSpace(dsn)
+	if dsn == "" {
+		return ""
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil || parsed.User == nil {
+		return dsn
+	}
+	if _, ok := parsed.User.Password(); ok {
+		parsed.User = url.UserPassword(parsed.User.Username(), "******")
+	}
+	return parsed.String()
+}
+
 func (s *Server) collectRuntimeDiskStatus() runtimeDiskStatus {
-	path := filepath.Dir(filepath.Clean(s.cfg.ResolvePath(s.cfg.Storage.SQLitePath)))
-	probePath := nearestExistingPath(path)
+	probePath := nearestExistingPath(s.cfg.ResolvePath(s.cfg.Storage.ImageDir))
 	status := runtimeDiskStatus{
 		Path: probePath,
 	}
@@ -487,7 +784,39 @@ func runtimeRedisEnabled(s *Server) bool {
 		strings.EqualFold(strings.TrimSpace(s.cfg.Storage.ConfigBackend), "redis") ||
 		strings.EqualFold(strings.TrimSpace(s.cfg.Storage.ImageStorage), "redis") ||
 		strings.EqualFold(strings.TrimSpace(s.cfg.Storage.ImageConversationStorage), "redis") ||
-		strings.EqualFold(strings.TrimSpace(s.cfg.Storage.ImageDataStorage), "redis")
+		strings.EqualFold(strings.TrimSpace(s.cfg.Storage.ImageDataStorage), "redis") ||
+		strings.EqualFold(strings.TrimSpace(s.cfg.JobQueue.Backend), "redis")
+}
+
+func providerMemberCooling(value string, now time.Time) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, trimmed)
+	if err != nil {
+		return false
+	}
+	return parsed.After(now)
+}
+
+func newerRFC3339(candidate string, current string) bool {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return false
+	}
+	if strings.TrimSpace(current) == "" {
+		return true
+	}
+	candidateTime, candidateErr := time.Parse(time.RFC3339Nano, candidate)
+	currentTime, currentErr := time.Parse(time.RFC3339Nano, current)
+	if candidateErr != nil {
+		return false
+	}
+	if currentErr != nil {
+		return true
+	}
+	return candidateTime.After(currentTime)
 }
 
 func roundPercent(value float64) float64 {
@@ -519,7 +848,7 @@ func (s *Server) runStartupCheck(ctx context.Context) startupCheckResponse {
 	})
 
 	addCheck("api_providers", "API 接入", func() (string, string, string) {
-		store, err := businessproviders.NewStore(s.cfg)
+		store, err := s.newBusinessProviderStore()
 		if err != nil {
 			return checkStatusFail, fmt.Sprintf("读取 API 接入失败：%v", err), ""
 		}

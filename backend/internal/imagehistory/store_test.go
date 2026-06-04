@@ -20,7 +20,6 @@ func newHistoryTestConfig(t *testing.T, backend string) *config.Config {
 	}
 	cfg.Storage.Backend = backend
 	cfg.Storage.ImageDir = "data/images"
-	cfg.Storage.SQLitePath = "data/history.sqlite"
 	cfg.Storage.RedisAddr = "127.0.0.1:6379"
 	cfg.Storage.RedisPassword = "123456"
 	cfg.Storage.RedisDB = 0
@@ -252,10 +251,6 @@ func TestDeleteOnlyRemovesUnreferencedImageFiles(t *testing.T) {
 	if _, err := os.Stat(sharedPath); !os.IsNotExist(err) {
 		t.Fatalf("shared image should be removed after deleting last reference, err=%v", err)
 	}
-}
-
-func TestSQLiteStorePersistsImageHistoryAcrossReload(t *testing.T) {
-	testStorePersistenceAcrossReload(t, "sqlite")
 }
 
 func TestRedisStorePersistsImageHistoryAcrossReload(t *testing.T) {

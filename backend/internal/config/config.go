@@ -70,6 +70,18 @@ type AccountsConfig struct {
 	ImageQuotaRefreshTTLSeconds int  `toml:"image_quota_refresh_ttl_seconds"`
 }
 
+type DatabaseConfig struct {
+	Driver                 string `toml:"driver"`
+	DSN                    string `toml:"dsn"`
+	MaxOpenConns           int    `toml:"max_open_conns"`
+	MaxIdleConns           int    `toml:"max_idle_conns"`
+	ConnMaxLifetimeSeconds int    `toml:"conn_max_lifetime_seconds"`
+}
+
+type JobQueueConfig struct {
+	Backend string `toml:"backend"`
+}
+
 type StorageConfig struct {
 	Backend                  string `toml:"backend"`
 	ConfigBackend            string `toml:"config_backend"`
@@ -80,7 +92,6 @@ type StorageConfig struct {
 	ImageStorage             string `toml:"image_storage"`
 	ImageConversationStorage string `toml:"image_conversation_storage"`
 	ImageDataStorage         string `toml:"image_data_storage"`
-	SQLitePath               string `toml:"sqlite_path"`
 	RedisAddr                string `toml:"redis_addr"`
 	RedisPassword            string `toml:"redis_password"`
 	RedisDB                  int    `toml:"redis_db"`
@@ -145,18 +156,33 @@ type Config struct {
 	loaded bool         `toml:"-"`
 	paths  Paths        `toml:"-"`
 
-	App       AppConfig       `toml:"app"`
-	Server    ServerConfig    `toml:"server"`
-	ChatGPT   ChatGPTConfig   `toml:"chatgpt"`
-	Accounts  AccountsConfig  `toml:"accounts"`
-	Storage   StorageConfig   `toml:"storage"`
-	Sync      SyncConfig      `toml:"sync"`
-	Log       LogConfig       `toml:"log"`
-	Proxy     ProxyConfig     `toml:"proxy"`
-	APIAccess APIAccessConfig `toml:"api_access"`
-	CPA       CPAConfig       `toml:"cpa"`
-	NewAPI    NewAPIConfig    `toml:"newapi"`
-	Sub2API   Sub2APIConfig   `toml:"sub2api"`
+	App         AppConfig         `toml:"app"`
+	Server      ServerConfig      `toml:"server"`
+	ChatGPT     ChatGPTConfig     `toml:"chatgpt"`
+	Accounts    AccountsConfig    `toml:"accounts"`
+	Database    DatabaseConfig    `toml:"database"`
+	JobQueue    JobQueueConfig    `toml:"job_queue"`
+	Storage     StorageConfig     `toml:"storage"`
+	Sync        SyncConfig        `toml:"sync"`
+	Log         LogConfig         `toml:"log"`
+	Proxy       ProxyConfig       `toml:"proxy"`
+	APIAccess   APIAccessConfig   `toml:"api_access"`
+	CPA         CPAConfig         `toml:"cpa"`
+	NewAPI      NewAPIConfig      `toml:"newapi"`
+	Sub2API     Sub2APIConfig     `toml:"sub2api"`
+	ExternalAPI ExternalAPIConfig `toml:"external_api"`
+}
+
+type ExternalAPIConfig struct {
+	Enabled                    bool   `toml:"enabled"`
+	BaseURL                    string `toml:"base_url"`
+	DefaultRateLimitPerMinute  int    `toml:"default_rate_limit_per_minute"`
+	DefaultConcurrencyLimit    int    `toml:"default_concurrency_limit"`
+	DefaultIdempotencyTTLHours int    `toml:"default_idempotency_ttl_hours"`
+	MaxPromptBytes             int    `toml:"max_prompt_bytes"`
+	MaxMetadataBytes           int    `toml:"max_metadata_bytes"`
+	SigningSecret              string `toml:"signing_secret"`
+	SignedURLTTLSeconds        int    `toml:"signed_url_ttl_seconds"`
 }
 
 func New(rootDir string) *Config {
@@ -440,6 +466,8 @@ func (c *Config) copyFrom(other *Config) {
 	c.Server = other.Server
 	c.ChatGPT = other.ChatGPT
 	c.Accounts = other.Accounts
+	c.Database = other.Database
+	c.JobQueue = other.JobQueue
 	c.Storage = other.Storage
 	c.Sync = other.Sync
 	c.Log = other.Log
@@ -448,6 +476,7 @@ func (c *Config) copyFrom(other *Config) {
 	c.CPA = other.CPA
 	c.NewAPI = other.NewAPI
 	c.Sub2API = other.Sub2API
+	c.ExternalAPI = other.ExternalAPI
 	c.paths = other.paths
 }
 
@@ -553,6 +582,31 @@ func (c *Config) validate() error {
 	if c.Accounts.ImageQuotaRefreshTTLSeconds <= 0 {
 		c.Accounts.ImageQuotaRefreshTTLSeconds = 120
 	}
+	c.Database.Driver = normalizeDatabaseDriver(c.Database.Driver)
+	if strings.TrimSpace(c.Database.DSN) == "" {
+		if c.Database.Driver == "postgres" {
+			c.Database.DSN = "postgres://image_studio:image_studio@127.0.0.1:5432/image_studio?sslmode=disable"
+		} else {
+			c.Database.DSN = "data/image-studio.db"
+		}
+	}
+	if c.Database.MaxOpenConns <= 0 {
+		if c.Database.Driver == "postgres" {
+			c.Database.MaxOpenConns = 20
+		} else {
+			c.Database.MaxOpenConns = 1
+		}
+	}
+	if c.Database.MaxIdleConns <= 0 {
+		if c.Database.Driver == "postgres" {
+			c.Database.MaxIdleConns = 10
+		} else {
+			c.Database.MaxIdleConns = 1
+		}
+	}
+	if c.Database.ConnMaxLifetimeSeconds <= 0 {
+		c.Database.ConnMaxLifetimeSeconds = 300
+	}
 	if strings.TrimSpace(c.Storage.AuthDir) == "" {
 		c.Storage.AuthDir = "data/auths"
 	}
@@ -564,9 +618,6 @@ func (c *Config) validate() error {
 	}
 	if strings.TrimSpace(c.Storage.ImageDir) == "" {
 		c.Storage.ImageDir = "data/business-images"
-	}
-	if strings.TrimSpace(c.Storage.SQLitePath) == "" {
-		c.Storage.SQLitePath = "data/image-studio.db"
 	}
 	if strings.TrimSpace(c.Storage.RedisAddr) == "" {
 		c.Storage.RedisAddr = "127.0.0.1:6379"
@@ -600,6 +651,7 @@ func (c *Config) validate() error {
 
 	c.APIAccess.Platform = normalizeAPIAccessPlatform(c.APIAccess.Platform)
 	c.CPA.RouteStrategy = normalizeCPAImageRouteStrategy(c.CPA.RouteStrategy)
+	c.JobQueue.Backend = normalizeJobQueueBackend(c.JobQueue.Backend)
 	c.Storage.Backend = normalizeStorageBackend(c.Storage.Backend)
 	c.Storage.ConfigBackend = normalizeConfigBackend(c.Storage.ConfigBackend)
 	legacyImageStorage := strings.ToLower(strings.TrimSpace(c.Storage.ImageStorage))
@@ -690,12 +742,30 @@ func normalizeStorageBackend(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "current", "local":
 		return "current"
-	case "sqlite":
-		return "sqlite"
 	case "redis":
 		return "redis"
 	default:
 		return "current"
+	}
+}
+
+func normalizeJobQueueBackend(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "local":
+		return "local"
+	case "redis":
+		return "redis"
+	default:
+		return "local"
+	}
+}
+
+func normalizeDatabaseDriver(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "postgres", "postgresql", "pg":
+		return "postgres"
+	default:
+		return "postgres"
 	}
 }
 
@@ -738,6 +808,20 @@ func normalizeAPIAccessPlatform(value string) string {
 		return "gpt-image"
 	case "gemini-banana":
 		return "gemini-banana"
+	case "doubao":
+		return "doubao"
+	case "qwen":
+		return "qwen"
+	case "baidu":
+		return "baidu"
+	case "z-ai", "zai", "z.ai":
+		return "z-ai"
+	case "tencent":
+		return "tencent"
+	case "kling":
+		return "kling"
+	case "grok":
+		return "grok"
 	default:
 		return "gpt-image"
 	}

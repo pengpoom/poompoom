@@ -10,51 +10,44 @@ import (
 	"imagestudio/internal/config"
 )
 
-func TestNewStoreWithSQLiteBackendPersistsAccounts(t *testing.T) {
+func TestNewStoreWithCurrentBackendPersistsAccounts(t *testing.T) {
 	rootDir := t.TempDir()
 	cfg := config.New(rootDir)
-	cfg.Storage.Backend = "sqlite"
+	cfg.Storage.Backend = "current"
 	cfg.Storage.AuthDir = "data/auths"
 	cfg.Storage.StateFile = "data/accounts_state.json"
 	cfg.Storage.SyncStateDir = "data/sync_state"
-	cfg.Storage.SQLitePath = "data/accounts.sqlite"
 	cfg.Accounts.DefaultQuota = 5
 	cfg.Accounts.RefreshWorkers = 1
 	cfg.Sync.ProviderType = "codex"
 
 	store, err := NewStore(cfg)
 	if err != nil {
-		t.Fatalf("NewStore(sqlite) returned error: %v", err)
-	}
-	if backend, ok := store.storage().(*sqliteAccountStorage); ok {
-		t.Cleanup(func() { _ = backend.db.Close() })
+		t.Fatalf("NewStore(current) returned error: %v", err)
 	}
 
-	added, skipped, err := store.AddAccounts([]string{"sqlite-token-1"})
+	added, skipped, err := store.AddAccounts([]string{"current-token-1"})
 	if err != nil {
-		t.Fatalf("AddAccounts(sqlite) returned error: %v", err)
+		t.Fatalf("AddAccounts(current) returned error: %v", err)
 	}
 	if added != 1 || skipped != 0 {
-		t.Fatalf("AddAccounts(sqlite) = added %d skipped %d", added, skipped)
+		t.Fatalf("AddAccounts(current) = added %d skipped %d", added, skipped)
 	}
 
 	reloaded, err := NewStore(cfg)
 	if err != nil {
-		t.Fatalf("NewStore(sqlite reload) returned error: %v", err)
-	}
-	if backend, ok := reloaded.storage().(*sqliteAccountStorage); ok {
-		t.Cleanup(func() { _ = backend.db.Close() })
+		t.Fatalf("NewStore(current reload) returned error: %v", err)
 	}
 
 	items, err := reloaded.ListAccounts()
 	if err != nil {
-		t.Fatalf("ListAccounts(sqlite) returned error: %v", err)
+		t.Fatalf("ListAccounts(current) returned error: %v", err)
 	}
 	if len(items) != 1 {
-		t.Fatalf("ListAccounts(sqlite) count = %d, want 1", len(items))
+		t.Fatalf("ListAccounts(current) count = %d, want 1", len(items))
 	}
-	if got := strings.TrimSpace(items[0].AccessToken); got != "sqlite-token-1" {
-		t.Fatalf("sqlite persisted token = %q, want %q", got, "sqlite-token-1")
+	if got := strings.TrimSpace(items[0].AccessToken); got != "current-token-1" {
+		t.Fatalf("current persisted token = %q, want %q", got, "current-token-1")
 	}
 }
 
@@ -113,60 +106,53 @@ func TestNewStoreWithRedisBackendPersistsAccounts(t *testing.T) {
 	}
 }
 
-func TestUpdateAccountUsesSQLiteBackend(t *testing.T) {
+func TestUpdateAccountUsesCurrentBackend(t *testing.T) {
 	rootDir := t.TempDir()
 	cfg := config.New(rootDir)
-	cfg.Storage.Backend = "sqlite"
+	cfg.Storage.Backend = "current"
 	cfg.Storage.AuthDir = "data/auths"
 	cfg.Storage.StateFile = "data/accounts_state.json"
 	cfg.Storage.SyncStateDir = "data/sync_state"
-	cfg.Storage.SQLitePath = "data/accounts.sqlite"
 	cfg.Accounts.DefaultQuota = 5
 	cfg.Accounts.RefreshWorkers = 1
 	cfg.Sync.ProviderType = "codex"
 
 	store, err := NewStore(cfg)
 	if err != nil {
-		t.Fatalf("NewStore(sqlite) returned error: %v", err)
-	}
-	if backend, ok := store.storage().(*sqliteAccountStorage); ok {
-		t.Cleanup(func() { _ = backend.db.Close() })
+		t.Fatalf("NewStore(current) returned error: %v", err)
 	}
 
-	if _, _, err := store.AddAccounts([]string{"sqlite-update-token"}); err != nil {
-		t.Fatalf("AddAccounts(sqlite) returned error: %v", err)
+	if _, _, err := store.AddAccounts([]string{"current-update-token"}); err != nil {
+		t.Fatalf("AddAccounts(current) returned error: %v", err)
 	}
 
 	note := "updated-note"
 	status := "禁用"
-	if _, err := store.UpdateAccount("sqlite-update-token", AccountUpdate{Note: &note, Status: &status}); err != nil {
-		t.Fatalf("UpdateAccount(sqlite) returned error: %v", err)
+	if _, err := store.UpdateAccount("current-update-token", AccountUpdate{Note: &note, Status: &status}); err != nil {
+		t.Fatalf("UpdateAccount(current) returned error: %v", err)
 	}
 
 	reloaded, err := NewStore(cfg)
 	if err != nil {
-		t.Fatalf("NewStore(sqlite reload) returned error: %v", err)
-	}
-	if backend, ok := reloaded.storage().(*sqliteAccountStorage); ok {
-		t.Cleanup(func() { _ = backend.db.Close() })
+		t.Fatalf("NewStore(current reload) returned error: %v", err)
 	}
 
 	items, err := reloaded.ListAccounts()
 	if err != nil {
-		t.Fatalf("ListAccounts(sqlite) returned error: %v", err)
+		t.Fatalf("ListAccounts(current) returned error: %v", err)
 	}
 	if len(items) != 1 {
-		t.Fatalf("ListAccounts(sqlite) count = %d, want 1", len(items))
+		t.Fatalf("ListAccounts(current) count = %d, want 1", len(items))
 	}
 	if items[0].Note != note {
-		t.Fatalf("sqlite updated note = %q, want %q", items[0].Note, note)
+		t.Fatalf("current updated note = %q, want %q", items[0].Note, note)
 	}
 	if !items[0].Disabled {
-		t.Fatal("sqlite updated disabled flag was not persisted")
+		t.Fatal("current updated disabled flag was not persisted")
 	}
 }
 
-func TestNewStoreMigratesCurrentFilesIntoSQLiteBackend(t *testing.T) {
+func TestNewStoreLoadsCurrentFiles(t *testing.T) {
 	rootDir := t.TempDir()
 	authDir := filepath.Join(rootDir, "data", "auths")
 	syncDir := filepath.Join(rootDir, "data", "sync_state")
@@ -198,29 +184,25 @@ func TestNewStoreMigratesCurrentFilesIntoSQLiteBackend(t *testing.T) {
 	}
 
 	cfg := config.New(rootDir)
-	cfg.Storage.Backend = "sqlite"
+	cfg.Storage.Backend = "current"
 	cfg.Storage.AuthDir = "data/auths"
 	cfg.Storage.StateFile = "data/accounts_state.json"
 	cfg.Storage.SyncStateDir = "data/sync_state"
-	cfg.Storage.SQLitePath = "data/accounts.sqlite"
 	cfg.Accounts.DefaultQuota = 5
 	cfg.Accounts.RefreshWorkers = 1
 	cfg.Sync.ProviderType = "codex"
 
 	store, err := NewStore(cfg)
 	if err != nil {
-		t.Fatalf("NewStore(sqlite migrate) returned error: %v", err)
-	}
-	if backend, ok := store.storage().(*sqliteAccountStorage); ok {
-		t.Cleanup(func() { _ = backend.db.Close() })
+		t.Fatalf("NewStore(current) returned error: %v", err)
 	}
 
 	items, err := store.ListAccounts()
 	if err != nil {
-		t.Fatalf("ListAccounts(sqlite migrate) returned error: %v", err)
+		t.Fatalf("ListAccounts(current) returned error: %v", err)
 	}
 	if len(items) != 1 {
-		t.Fatalf("ListAccounts(sqlite migrate) count = %d, want 1", len(items))
+		t.Fatalf("ListAccounts(current) count = %d, want 1", len(items))
 	}
 	if got := strings.TrimSpace(items[0].AccessToken); got != "legacy-token" {
 		t.Fatalf("migrated access token = %q, want %q", got, "legacy-token")
@@ -230,68 +212,60 @@ func TestNewStoreMigratesCurrentFilesIntoSQLiteBackend(t *testing.T) {
 	}
 }
 
-func TestReplaceAllDataOverwritesExistingSQLiteSnapshot(t *testing.T) {
+func TestReplaceAllDataOverwritesExistingCurrentSnapshot(t *testing.T) {
 	rootDir := t.TempDir()
 
 	sourceCfg := config.New(filepath.Join(rootDir, "source"))
-	sourceCfg.Storage.Backend = "sqlite"
+	sourceCfg.Storage.Backend = "current"
 	sourceCfg.Storage.AuthDir = "data/auths"
 	sourceCfg.Storage.StateFile = "data/accounts_state.json"
 	sourceCfg.Storage.SyncStateDir = "data/sync_state"
-	sourceCfg.Storage.SQLitePath = "data/accounts.sqlite"
 	sourceCfg.Accounts.DefaultQuota = 5
 	sourceCfg.Accounts.RefreshWorkers = 1
 	sourceCfg.Sync.ProviderType = "codex"
 
 	targetCfg := config.New(filepath.Join(rootDir, "target"))
-	targetCfg.Storage.Backend = "sqlite"
+	targetCfg.Storage.Backend = "current"
 	targetCfg.Storage.AuthDir = "data/auths"
 	targetCfg.Storage.StateFile = "data/accounts_state.json"
 	targetCfg.Storage.SyncStateDir = "data/sync_state"
-	targetCfg.Storage.SQLitePath = "data/accounts.sqlite"
 	targetCfg.Accounts.DefaultQuota = 5
 	targetCfg.Accounts.RefreshWorkers = 1
 	targetCfg.Sync.ProviderType = "codex"
 
 	sourceStore, err := NewStore(sourceCfg)
 	if err != nil {
-		t.Fatalf("NewStore(source sqlite) returned error: %v", err)
-	}
-	if backend, ok := sourceStore.storage().(*sqliteAccountStorage); ok {
-		t.Cleanup(func() { _ = backend.db.Close() })
+		t.Fatalf("NewStore(source current) returned error: %v", err)
 	}
 	if _, _, err := sourceStore.AddAccounts([]string{"source-token"}); err != nil {
-		t.Fatalf("AddAccounts(source sqlite) returned error: %v", err)
+		t.Fatalf("AddAccounts(source current) returned error: %v", err)
 	}
 
 	targetStore, err := NewStore(targetCfg)
 	if err != nil {
-		t.Fatalf("NewStore(target sqlite) returned error: %v", err)
-	}
-	if backend, ok := targetStore.storage().(*sqliteAccountStorage); ok {
-		t.Cleanup(func() { _ = backend.db.Close() })
+		t.Fatalf("NewStore(target current) returned error: %v", err)
 	}
 	if _, _, err := targetStore.AddAccounts([]string{"stale-target-token"}); err != nil {
-		t.Fatalf("AddAccounts(target sqlite) returned error: %v", err)
+		t.Fatalf("AddAccounts(target current) returned error: %v", err)
 	}
 
 	snapshot, err := sourceStore.Snapshot()
 	if err != nil {
-		t.Fatalf("Snapshot(source sqlite) returned error: %v", err)
+		t.Fatalf("Snapshot(source current) returned error: %v", err)
 	}
 	if err := targetStore.ReplaceAllData(snapshot); err != nil {
-		t.Fatalf("ReplaceAllData(target sqlite) returned error: %v", err)
+		t.Fatalf("ReplaceAllData(target current) returned error: %v", err)
 	}
 
 	items, err := targetStore.ListAccounts()
 	if err != nil {
-		t.Fatalf("ListAccounts(target sqlite) returned error: %v", err)
+		t.Fatalf("ListAccounts(target current) returned error: %v", err)
 	}
 	if len(items) != 1 {
-		t.Fatalf("ListAccounts(target sqlite) count = %d, want 1", len(items))
+		t.Fatalf("ListAccounts(target current) count = %d, want 1", len(items))
 	}
 	if got := strings.TrimSpace(items[0].AccessToken); got != "source-token" {
-		t.Fatalf("replaced sqlite token = %q, want %q", got, "source-token")
+		t.Fatalf("replaced current token = %q, want %q", got, "source-token")
 	}
 }
 
@@ -336,57 +310,6 @@ func TestImageRoutingPolicyPersistsInCurrentBackend(t *testing.T) {
 	}
 	if len(got.EnabledGroupIndexes) != 2 || got.EnabledGroupIndexes[0] != 1 || got.EnabledGroupIndexes[1] != 3 {
 		t.Fatalf("current persisted group indexes = %#v", got.EnabledGroupIndexes)
-	}
-}
-
-func TestImageRoutingPolicyPersistsInSQLiteBackend(t *testing.T) {
-	rootDir := t.TempDir()
-	cfg := config.New(rootDir)
-	cfg.Storage.Backend = "sqlite"
-	cfg.Storage.AuthDir = "data/auths"
-	cfg.Storage.StateFile = "data/accounts_state.json"
-	cfg.Storage.SyncStateDir = "data/sync_state"
-	cfg.Storage.SQLitePath = "data/accounts.sqlite"
-	cfg.Accounts.DefaultQuota = 5
-	cfg.Accounts.RefreshWorkers = 1
-	cfg.Sync.ProviderType = "codex"
-
-	store, err := NewStore(cfg)
-	if err != nil {
-		t.Fatalf("NewStore(sqlite) returned error: %v", err)
-	}
-	if backend, ok := store.storage().(*sqliteAccountStorage); ok {
-		t.Cleanup(func() { _ = backend.db.Close() })
-	}
-
-	policy := ImageAccountRoutingPolicy{
-		Enabled:             true,
-		SortMode:            "name",
-		GroupSize:           6,
-		EnabledGroupIndexes: []int{0, 2},
-		ReserveMode:         "daily_first_seen_percent",
-		ReservePercent:      15,
-	}
-	if err := store.SaveImageRoutingPolicy(policy); err != nil {
-		t.Fatalf("SaveImageRoutingPolicy(sqlite) returned error: %v", err)
-	}
-
-	reloaded, err := NewStore(cfg)
-	if err != nil {
-		t.Fatalf("NewStore(sqlite reload) returned error: %v", err)
-	}
-	if backend, ok := reloaded.storage().(*sqliteAccountStorage); ok {
-		t.Cleanup(func() { _ = backend.db.Close() })
-	}
-	got, err := reloaded.GetImageRoutingPolicy()
-	if err != nil {
-		t.Fatalf("GetImageRoutingPolicy(sqlite) returned error: %v", err)
-	}
-	if !got.Enabled || got.SortMode != "name" || got.GroupSize != 6 || got.ReservePercent != 15 {
-		t.Fatalf("sqlite persisted policy = %#v", got)
-	}
-	if len(got.EnabledGroupIndexes) != 2 || got.EnabledGroupIndexes[0] != 0 || got.EnabledGroupIndexes[1] != 2 {
-		t.Fatalf("sqlite persisted group indexes = %#v", got.EnabledGroupIndexes)
 	}
 }
 

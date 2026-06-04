@@ -68,7 +68,7 @@ func shouldPreserveCurrentBusinessImageJob(current, next businessjobs.Job) bool 
 }
 
 func (s *Server) businessImageJobByID(jobID string, userID string) (businessjobs.Job, bool) {
-	store, err := businessjobs.NewStore(s.cfg)
+	store, err := s.newBusinessJobStore()
 	if err != nil {
 		return businessjobs.Job{}, false
 	}

@@ -31,6 +31,44 @@ func TestValidateGenerateSize(t *testing.T) {
 	}
 }
 
+func TestNormalizeGenerateSize(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "empty size uses default upstream behavior",
+			input: "",
+			want:  "",
+		},
+		{
+			name:  "supported landscape size passes through",
+			input: "1536x1024",
+			want:  "1536x1024",
+		},
+		{
+			name:  "uppercase separator is normalized",
+			input: "1024X1536",
+			want:  "1024x1536",
+		},
+		{
+			name:  "unsupported large size passes through normalized",
+			input: "8192x8192",
+			want:  "8192x8192",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NormalizeGenerateSize(tt.input)
+			if got != tt.want {
+				t.Fatalf("NormalizeGenerateSize() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRequiresPaidGenerateAccount(t *testing.T) {
 	tests := []struct {
 		name string

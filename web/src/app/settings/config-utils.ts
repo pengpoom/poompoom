@@ -1,4 +1,5 @@
 import type { ConfigPayload } from "@/lib/api";
+import { normalizeAPIAccessPlatform as normalizeProviderPlatform } from "@/lib/provider-platforms";
 
 export function joinDisplayPath(root: string, relativePath: string) {
   const normalizedRoot = String(root || "")
@@ -58,7 +59,6 @@ export function defaultConfigPayload(): ConfigPayload {
       imageStorage: "browser",
       imageConversationStorage: "browser",
       imageDataStorage: "browser",
-      sqlitePath: "",
       redisAddr: "127.0.0.1:6379",
       redisPassword: "",
       redisDb: 0,
@@ -128,12 +128,7 @@ export function normalizeConfigPayload(
     ...defaults.apiAccess,
     ...next.apiAccess,
   };
-  if (
-    apiAccess.platform !== "gpt-image" &&
-    apiAccess.platform !== "gemini-banana"
-  ) {
-    apiAccess.platform = "gpt-image";
-  }
+  apiAccess.platform = normalizeProviderPlatform(apiAccess.platform) ?? "gpt-image";
   const legacyImageStorage =
     storage.imageStorage === "server" ? "server" : "browser";
   storage.imageConversationStorage =

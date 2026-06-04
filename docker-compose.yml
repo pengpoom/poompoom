@@ -1,13 +1,59 @@
 name: ${COMPOSE_PROJECT_NAME:-image-studio}
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-image_studio}
+      POSTGRES_USER: ${POSTGRES_USER:-image_studio}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   studio:
     image: ghcr.io/pengpoom/poomimage:${IMAGE_TAG:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "7000:7000"
     environment:
       SERVER_HOST: 0.0.0.0
       SERVER_PORT: 7000
+      DATABASE_DRIVER: postgres
+      DATABASE_DSN: postgres://${POSTGRES_USER:-image_studio}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-image_studio}?sslmode=disable
+      DATABASE_MAX_OPEN_CONNS: ${DATABASE_MAX_OPEN_CONNS:-20}
+      DATABASE_MAX_IDLE_CONNS: ${DATABASE_MAX_IDLE_CONNS:-10}
+      DATABASE_CONN_MAX_LIFETIME_SECONDS: ${DATABASE_CONN_MAX_LIFETIME_SECONDS:-300}
+      JOB_QUEUE_BACKEND: ${JOB_QUEUE_BACKEND:-redis}
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      REDIS_PREFIX: ${REDIS_PREFIX:-imagestudio:studio}
       APP_SESSION_TTL_HOURS: ${APP_SESSION_TTL_HOURS:-24}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
@@ -56,3 +102,7 @@ services:
       - ${DOCKER_CONFIG_DIR:-/root/.docker}:/root/.docker:ro
       - ${IMAGE_STUDIO_DEPLOY_DIR:-./}:${IMAGE_STUDIO_DEPLOY_DIR:-/deploy}
     restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:

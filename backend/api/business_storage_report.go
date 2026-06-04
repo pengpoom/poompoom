@@ -70,7 +70,7 @@ type businessStorageBackfillResponse struct {
 }
 
 func (s *Server) handleBusinessStorageReport(w http.ResponseWriter, r *http.Request) {
-	store, err := businessimage.NewStore(s.cfg)
+	store, err := s.newBusinessImageStore()
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "business_storage_report_failed", err.Error())
 		return
@@ -103,7 +103,7 @@ func (s *Server) handleBackfillBusinessStorageAssets(w http.ResponseWriter, r *h
 		writeAPIError(w, http.StatusInternalServerError, "business_storage_backfill_failed", err.Error())
 		return
 	}
-	store, err := businessimage.NewStore(s.cfg)
+	store, err := s.newBusinessImageStore()
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "business_storage_backfill_failed", err.Error())
 		return

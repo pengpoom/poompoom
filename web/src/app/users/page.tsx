@@ -1,60 +1,43 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Coins, Eye, KeyRound, LoaderCircle, Plus, RefreshCw, RotateCcw, Search, Trash2, UserRound } from "lucide-react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { CheckCircle2, Coins, KeyRound, LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, UserRound } from "lucide-react";
+import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import {
   AdminHeader,
   AdminPage,
   AdminPanel,
-  AdminToolbar,
   AdminStatCard,
 } from "@/components/admin-layout";
-import {
-  adminInputPillClass,
-  adminTableBodyClass,
-  adminTableClass,
-  adminTableHeadClass,
-  adminTableRowClass,
-} from "@/components/admin-styles";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { AppModal, AppSelect } from "@/components/app-controls";
+import { AppDrawer } from "@/components/app-drawer";
+import { UserDetailDrawerContent, UserDetailDrawerTitle } from "@/app/users/detail/page";
 import {
   adjustBusinessUserCredit,
   clearBusinessUserData,
   createBusinessUser,
   deleteBusinessUser,
+  fetchAdminUsersAPIAccess,
+  fetchBusinessSystemSettings,
   fetchBusinessUsers,
   purgeBusinessUser,
   restoreBusinessUser,
   updateBusinessUser,
+  updateBusinessUserAPIAccess,
+  updateBusinessUserBillingLevels,
   updateBusinessUserStatus,
+  type BusinessBillingLevel,
   type BusinessUser,
+  type BusinessUserDetail,
   type BusinessUserRole,
   type BusinessUserStatus,
 } from "@/lib/api";
-import { cn } from "@/lib/utils";
 
 const roleLabel: Record<BusinessUserRole, string> = {
   admin: "管理员",
-  user: "测试用户",
+  user: "用户",
 };
 
 const statusLabel: Record<BusinessUserStatus, string> = {
@@ -103,6 +86,22 @@ function usageNumber(value: number | undefined) {
   return Number(value || 0).toLocaleString();
 }
 
+function billingLevelName(level: { name?: string } | undefined, fallback: string) {
+  const name = String(level?.name || "").trim();
+  return name || fallback;
+}
+
+function subscriptionSummary(user: BusinessUser) {
+  const subscription = user.billing?.subscription;
+  if (subscription?.active && subscription.packageName) {
+    return subscription.packageName;
+  }
+  if (subscription?.active) {
+    return "订阅中";
+  }
+  return "无订阅";
+}
+
 function userStatusVariant(status: BusinessUserStatus) {
   if (status === "active") {
     return "success";
@@ -118,11 +117,31 @@ function userRoleVariant(role: BusinessUserRole) {
 }
 
 export default function UsersPage() {
+  const navigate = useNavigate();
+  const params = useParams<{ id?: string }>();
+  const detailUserID = (params.id || "").trim();
+  const [drawerDetail, setDrawerDetail] = useState<BusinessUserDetail | null>(null);
+  const [drawerLoading, setDrawerLoading] = useState(false);
+  const [drawerReload, setDrawerReload] = useState<(() => void) | null>(null);
+  const handleDrawerLoaded = useCallback((d: BusinessUserDetail | null, l: boolean) => {
+    setDrawerDetail(d);
+    setDrawerLoading(l);
+  }, []);
+  const handleDrawerReady = useCallback((api: { reload: () => void }) => {
+    setDrawerReload(() => api.reload);
+  }, []);
+  const closeDrawer = useCallback(() => {
+    navigate("/users");
+    setDrawerDetail(null);
+    setDrawerReload(null);
+  }, [navigate]);
   const [users, setUsers] = useState<BusinessUser[]>([]);
+  const [apiAccessIds, setApiAccessIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<BusinessUser | null>(null);
+  const [billingTarget, setBillingTarget] = useState<BusinessUser | null>(null);
   const [creditTarget, setCreditTarget] = useState<BusinessUser | null>(null);
   const [clearDataTarget, setClearDataTarget] = useState<BusinessUser | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<BusinessUser | null>(null);
@@ -136,6 +155,9 @@ export default function UsersPage() {
     balance: "",
   });
   const [editUser, setEditUser] = useState({ username: "", password: "" });
+  const [billingDraft, setBillingDraft] = useState({ subscriptionLevelTag: "", walletLevelTag: "" });
+  const [subscriptionLevels, setSubscriptionLevels] = useState<BusinessBillingLevel[]>([]);
+  const [walletLevels, setWalletLevels] = useState<BusinessBillingLevel[]>([]);
   const [creditOperation, setCreditOperation] = useState<"recharge" | "refund">("recharge");
   const [creditAmount, setCreditAmount] = useState("");
   const includeDeleted = statusFilter === "all" || statusFilter === "deleted";
@@ -175,11 +197,40 @@ export default function UsersPage() {
     );
   }, [filteredUsers]);
 
+  const subscriptionLevelOptions = useMemo(
+    () => [
+      { value: "", label: "自动（按订阅套餐）" },
+      ...subscriptionLevels.map((level) => ({
+        value: level.tag,
+        label: `${level.name || level.tag} · ${level.tag}`,
+      })),
+    ],
+    [subscriptionLevels],
+  );
+
+  const walletLevelOptions = useMemo(
+    () => [
+      { value: "", label: "自动（按充值记录）" },
+      ...walletLevels.map((level) => ({
+        value: level.tag,
+        label: `${level.name || level.tag} · ${level.tag}`,
+      })),
+    ],
+    [walletLevels],
+  );
+
   const loadUsers = async () => {
     setLoading(true);
     try {
-      const payload = await fetchBusinessUsers({ includeDeleted });
+      const [payload, settingsPayload, apiAccessPayload] = await Promise.all([
+        fetchBusinessUsers({ includeDeleted }),
+        fetchBusinessSystemSettings(),
+        fetchAdminUsersAPIAccess(),
+      ]);
       setUsers(payload.items);
+      setApiAccessIds(new Set(apiAccessPayload.enabledUserIds || []));
+      setSubscriptionLevels((settingsPayload.settings.billing.subscriptionLevels || []).filter((level) => level.enabled));
+      setWalletLevels((settingsPayload.settings.billing.walletLevels || []).filter((level) => level.enabled));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "读取用户失败");
     } finally {
@@ -233,6 +284,28 @@ export default function UsersPage() {
       toast.success(nextStatus === "active" ? "用户已启用" : "用户已禁用");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "更新用户状态失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleToggleApiAccess = async (user: BusinessUser) => {
+    const enabled = !apiAccessIds.has(user.id);
+    setSubmitting(true);
+    try {
+      await updateBusinessUserAPIAccess(user.id, enabled);
+      setApiAccessIds((current) => {
+        const next = new Set(current);
+        if (enabled) {
+          next.add(user.id);
+        } else {
+          next.delete(user.id);
+        }
+        return next;
+      });
+      toast.success(enabled ? "已开通 API 接入" : "已关闭 API 接入");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "更新 API 接入失败");
     } finally {
       setSubmitting(false);
     }
@@ -324,6 +397,14 @@ export default function UsersPage() {
     setEditUser({ username: user.username, password: "" });
   };
 
+  const openBillingDialog = (user: BusinessUser) => {
+    setBillingTarget(user);
+    setBillingDraft({
+      subscriptionLevelTag: user.subscriptionLevelTag || "",
+      walletLevelTag: user.walletLevelTag || "",
+    });
+  };
+
   const handleUpdateUser = async () => {
     if (!editTarget) {
       return;
@@ -346,6 +427,31 @@ export default function UsersPage() {
       toast.success("用户已更新");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "更新用户失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleUpdateBillingLevels = async () => {
+    if (!billingTarget) {
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const payload = await updateBusinessUserBillingLevels(billingTarget.id, {
+        subscriptionLevelTag: billingDraft.subscriptionLevelTag,
+        walletLevelTag: billingDraft.walletLevelTag,
+      });
+      setUsers((current) => current.map((item) => (
+        item.id === billingTarget.id
+          ? { ...item, ...payload.item, usage: item.usage, credit: item.credit }
+          : item
+      )));
+      setBillingTarget(null);
+      setBillingDraft({ subscriptionLevelTag: "", walletLevelTag: "" });
+      toast.success("等级已更新");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "更新等级失败");
     } finally {
       setSubmitting(false);
     }
@@ -385,163 +491,138 @@ export default function UsersPage() {
         <AdminHeader
           title="用户管理"
           description="管理业务用户、账户状态、余额和生成数据。"
+          icon={UserRound}
           actions={
             <>
-            <Button type="button" variant="outline" onClick={() => void loadUsers()} disabled={loading || submitting}>
-              {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-              刷新
-            </Button>
-            <Button type="button" onClick={() => setCreateOpen(true)}>
-              <Plus className="size-4" />
-              创建用户
-            </Button>
+              <button className="app-btn" type="button" onClick={() => void loadUsers()} disabled={loading || submitting}>
+                {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+                刷新
+              </button>
+              <button className="app-btn-primary" type="button" onClick={() => setCreateOpen(true)}>
+                <Plus className="size-4" />
+                创建用户
+              </button>
             </>
           }
         />
 
-        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {[
-            { label: "用户总数", value: stats.total, icon: UserRound, color: "text-[var(--app-text-primary)]" },
-            { label: "启用", value: stats.active, icon: CheckCircle2, color: "text-emerald-300" },
-            { label: "余额", value: usageNumber(stats.balance), icon: Coins, color: "text-violet-300" },
-            { label: "已消耗", value: usageNumber(stats.spent), icon: Coins, color: "text-[var(--app-text-muted)]" },
-          ].map((item) => {
-            return <AdminStatCard key={item.label} {...item} />;
-          })}
-        </section>
+        <div className="app-stats">
+          <AdminStatCard label="用户总数" value={stats.total} icon={UserRound} color="text-[var(--app-text-primary)]" />
+          <AdminStatCard label="启用" value={stats.active} icon={CheckCircle2} color="text-emerald-300" />
+          <AdminStatCard label="余额" value={usageNumber(stats.balance)} icon={Coins} color="text-violet-300" />
+          <AdminStatCard label="已消耗" value={usageNumber(stats.spent)} icon={Coins} color="text-[var(--app-text-muted)]" />
+        </div>
 
-        <AdminToolbar className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]">
-          <label className="grid gap-1.5 text-xs text-[var(--app-text-muted)]">
-            搜索
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[var(--app-text-muted)]" />
-              <Input
-                value={searchText}
-                onChange={(event) => setSearchText(event.target.value)}
-                className={`${adminInputPillClass} pl-9`}
-                placeholder="按 UID / 邮箱 / 用户名搜索"
-              />
-            </div>
-          </label>
-          <label className="grid gap-1.5 text-xs text-[var(--app-text-muted)]">
-            状态
-            <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as UserStatusFilter)}>
-              <SelectTrigger className={`${adminInputPillClass} w-full`}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(["all", "active", "disabled", "deleted"] as UserStatusFilter[]).map((value) => (
-                  <SelectItem key={value} value={value}>{statusFilterLabel[value]}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </label>
-        </AdminToolbar>
+        <div className="app-toolbar">
+          <input className="app-input" type="search" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="搜索 UID / 邮箱 / 用户名…" />
+          <AppSelect
+            value={statusFilter}
+            onChange={(value) => setStatusFilter(value as UserStatusFilter)}
+            options={[
+              { value: "all", label: "全部状态" },
+              { value: "active", label: "启用" },
+              { value: "disabled", label: "禁用" },
+              { value: "deleted", label: "已删除" },
+            ]}
+          />
+          <span className="spacer" />
+          <button className="app-btn" type="button" onClick={() => void loadUsers()} disabled={loading || submitting}>
+            {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+            刷新
+          </button>
+        </div>
 
-        <AdminPanel>
-          <div className="overflow-x-auto">
-            <table className={adminTableClass}>
-              <thead className={adminTableHeadClass}>
+        <div className="app-panel">
+          <div className="app-table-wrap">
+            <table className="app-table">
+              <thead>
                 <tr>
-                  <th className="px-4 py-3">用户</th>
-                  <th className="px-4 py-3">角色</th>
-                  <th className="px-4 py-3">状态</th>
-                  <th className="px-4 py-3">点数</th>
-                  <th className="px-4 py-3">生成</th>
-                  <th className="px-4 py-3">图片</th>
-                  <th className="px-4 py-3">存储</th>
-                  <th className="px-4 py-3">最近生成</th>
-                  <th className="px-4 py-3 text-right">操作</th>
+                  <th>用户</th>
+                  <th>角色</th>
+                  <th>状态</th>
+                  <th>等级 / 订阅</th>
+                  <th>点数</th>
+                  <th>生成</th>
+                  <th>图片</th>
+                  <th>存储</th>
+                  <th>最近生成</th>
+                  <th>API 接入</th>
+                  <th style={{ textAlign: "right" }}>操作</th>
                 </tr>
               </thead>
-              <tbody className={adminTableBodyClass}>
+              <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-12 text-center text-[var(--app-text-muted)]">
-                      <LoaderCircle className="mx-auto mb-2 size-5 animate-spin" />
-                      读取中
+                    <td colSpan={11} style={{ padding: "48px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
+                      <LoaderCircle className="mx-auto mb-2 size-5 animate-spin" /> 读取中
                     </td>
                   </tr>
                 ) : filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-12 text-center text-[var(--app-text-muted)]">
+                    <td colSpan={11} style={{ padding: "48px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
                       暂无匹配用户
                     </td>
                   </tr>
                 ) : (
                   filteredUsers.map((user) => (
-                    <tr key={user.id} className={adminTableRowClass}>
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-[var(--app-text-primary)]">{user.username}</div>
-                        <div className="mt-0.5 font-mono text-xs text-[var(--app-text-muted)]">UID {user.uid || "-"}</div>
-                        <div className="mt-0.5 max-w-[240px] truncate text-xs text-[var(--app-text-muted)]">{user.email || "-"}</div>
+                    <tr key={user.id}>
+                      <td>
+                        <div className="app-user">
+                          <div className="app-user-meta">
+                            <b>{user.username}</b>
+                            <small>UID {user.uid || "-"} · {user.email || "-"}</small>
+                          </div>
+                        </div>
                         {user.status === "deleted" ? (
-                          <div className="mt-0.5 text-xs text-rose-600 dark:text-rose-300">删除时间 {formatDateTime(user.deleted_at || "")}</div>
+                          <div style={{ marginTop: 4, fontSize: 11, color: "#fca5a5" }}>删除 {formatDateTime(user.deleted_at || "")}</div>
                         ) : null}
                       </td>
-                      <td className="px-4 py-3">
-                        <Badge variant={userRoleVariant(user.role)}>{roleLabel[user.role]}</Badge>
-                      </td>
-                      <td className="px-4 py-3">
-                        <Badge variant={userStatusVariant(user.status)}>{statusLabel[user.status]}</Badge>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-[var(--app-text-primary)]">{usageNumber(user.credit?.balance)}</div>
-                        <div className="mt-0.5 whitespace-nowrap text-xs text-[var(--app-text-muted)]">
-                          已消耗 {usageNumber(user.credit?.spent)}
+                      <td><span className={`app-badge ${user.role === "admin" ? "role-admin" : "role-user"}`}>{roleLabel[user.role]}</span></td>
+                      <td><span className={user.status === "active" ? "app-badge ok" : user.status === "deleted" ? "app-badge fail" : "app-badge warn"}>{statusLabel[user.status]}</span></td>
+                      <td>
+                        <div className="strong" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          <span>{billingLevelName(user.billing?.subscriptionLevel, "Free")}</span>
+                          {user.billing?.subscriptionLevelOverride ? <span className="app-badge warn">手动</span> : null}
                         </div>
+                        <small style={{ color: "var(--app-text-muted)", fontSize: 11 }}>
+                          {subscriptionSummary(user)} · 充值 {billingLevelName(user.billing?.walletLevel, "None")}
+                          {user.billing?.walletLevelOverride ? " · 手动" : ""}
+                        </small>
                       </td>
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-[var(--app-text-primary)]">{usageNumber(user.usage?.generation_count)}</div>
-                        <div className="mt-0.5 whitespace-nowrap text-xs text-[var(--app-text-muted)]">
-                          成功 {usageNumber(user.usage?.success_count)} / 失败 {usageNumber(user.usage?.failed_count)}
-                        </div>
+                      <td className="strong">{usageNumber(user.credit?.balance)}<br /><small style={{ color: "var(--app-text-muted)", fontSize: 11 }}>消耗 {usageNumber(user.credit?.spent)}</small></td>
+                      <td className="strong">{usageNumber(user.usage?.generation_count)}<br /><small style={{ color: "var(--app-text-muted)", fontSize: 11 }}>成功 {usageNumber(user.usage?.success_count)}</small></td>
+                      <td>{usageNumber(user.usage?.image_count)}</td>
+                      <td>{formatBytes(user.usage?.storage_bytes)}</td>
+                      <td>{formatDateTime(user.usage?.last_generated_at || "")}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className={`app-switch ${apiAccessIds.has(user.id) ? "on" : "off"}`}
+                          onClick={() => void handleToggleApiAccess(user)}
+                          disabled={submitting || user.status === "deleted"}
+                          aria-label={apiAccessIds.has(user.id) ? "关闭 API 接入" : "开通 API 接入"}
+                          title={apiAccessIds.has(user.id) ? "关闭 API 接入" : "开通 API 接入"}
+                        />
                       </td>
-                      <td className="px-4 py-3 text-[var(--app-text-secondary)]">{usageNumber(user.usage?.image_count)}</td>
-                      <td className="px-4 py-3 whitespace-nowrap text-[var(--app-text-secondary)]">{formatBytes(user.usage?.storage_bytes)}</td>
-                      <td className="px-4 py-3 whitespace-nowrap text-[var(--app-text-secondary)]">{formatDateTime(user.usage?.last_generated_at || "")}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex justify-end gap-2">
-                          <Button type="button" size="sm" variant="outline" asChild>
-                            <Link to={`/users/${encodeURIComponent(user.id)}`}>
-                              <Eye className="size-4" />
-                              详情
-                            </Link>
-                          </Button>
-                          {user.status === "deleted" ? (
-                            <>
-                              <Button type="button" size="sm" variant="outline" onClick={() => void handleRestoreUser(user)} disabled={submitting}>
-                                <RotateCcw className="size-4" />
-                                恢复
-                              </Button>
-                              <Button type="button" size="sm" variant="destructive" onClick={() => setPurgeTarget(user)} disabled={submitting}>
-                                <Trash2 className="size-4" />
-                                删除
-                              </Button>
-                            </>
-                          ) : (
-                            <>
-                              <Button type="button" size="sm" variant="outline" onClick={() => openEditDialog(user)} disabled={submitting}>
-                                <KeyRound className="size-4" />
-                                编辑
-                              </Button>
-                              <Button type="button" size="sm" variant="outline" onClick={() => openCreditDialog(user)} disabled={submitting}>
-                                <Coins className="size-4" />
-                                调整余额
-                              </Button>
-                              <Button type="button" size="sm" variant="outline" onClick={() => setClearDataTarget(user)} disabled={submitting}>
-                                <Trash2 className="size-4" />
-                                清空数据
-                              </Button>
-                              <Button type="button" size="sm" variant={user.status === "active" ? "secondary" : "outline"} onClick={() => void handleToggleStatus(user)} disabled={submitting}>
-                                {user.status === "active" ? "禁用" : "启用"}
-                              </Button>
-                              <Button type="button" size="sm" variant="destructive" onClick={() => setDeleteTarget(user)} disabled={submitting}>
-                                <Trash2 className="size-4" />
-                                删除
-                              </Button>
-                            </>
-                          )}
+                      <td>
+                        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                          <div className="app-act">
+                            <button type="button" onClick={() => navigate(`/users/${encodeURIComponent(user.id)}`)}>详情</button>
+                            {user.status === "deleted" ? (
+                              <>
+                                <button type="button" onClick={() => void handleRestoreUser(user)} disabled={submitting}>恢复</button>
+                                <button type="button" className="danger" onClick={() => setPurgeTarget(user)} disabled={submitting}>删除</button>
+                              </>
+                            ) : (
+                              <>
+                                <button type="button" onClick={() => openEditDialog(user)} disabled={submitting}>编辑</button>
+                                <button type="button" onClick={() => openCreditDialog(user)} disabled={submitting}>余额</button>
+                                <button type="button" onClick={() => openBillingDialog(user)} disabled={submitting}>等级</button>
+                                <button type="button" className={user.status === "active" ? "warn" : ""} onClick={() => void handleToggleStatus(user)} disabled={submitting}>{user.status === "active" ? "禁用" : "启用"}</button>
+                                <button type="button" className="danger" onClick={() => setDeleteTarget(user)} disabled={submitting}>删除</button>
+                              </>
+                            )}
+                          </div>
                         </div>
                       </td>
                     </tr>
@@ -550,184 +631,255 @@ export default function UsersPage() {
               </tbody>
             </table>
           </div>
-        </AdminPanel>
+        </div>
 
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>创建用户</DialogTitle>
-          </DialogHeader>
-          <div className="grid gap-4">
-            <label className="grid gap-2 text-sm font-medium">
-              邮箱
-              <Input id="create-email" name="email" type="email" autoComplete="email" value={newUser.email} onChange={(event) => setNewUser((current) => ({ ...current, email: event.target.value }))} placeholder="user@example.com" />
-            </label>
-            <label className="grid gap-2 text-sm font-medium">
-              用户名
-              <Input id="create-username" name="username" autoComplete="username" value={newUser.username} onChange={(event) => setNewUser((current) => ({ ...current, username: event.target.value }))} placeholder="请输入用户名(选填)" />
-            </label>
-            <label className="grid gap-2 text-sm font-medium">
-              密码
-              <Input id="create-password" name="password" type="password" autoComplete="new-password" value={newUser.password} onChange={(event) => setNewUser((current) => ({ ...current, password: event.target.value }))} placeholder="至少输入一个临时密码" />
-            </label>
-            <label className="grid gap-2 text-sm font-medium">
-              初始余额
-              <Input id="create-balance" name="balance" type="number" min="0" step="1" value={newUser.balance} onChange={(event) => setNewUser((current) => ({ ...current, balance: event.target.value }))} placeholder="留空使用默认余额" />
-            </label>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setCreateOpen(false)} disabled={submitting}>取消</Button>
-            <Button type="button" onClick={() => void handleCreateUser()} disabled={submitting}>
+      <AppModal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        title="创建用户"
+        footer={
+          <>
+            <button className="app-btn" type="button" onClick={() => setCreateOpen(false)} disabled={submitting}>取消</button>
+            <button className="app-btn-primary" type="button" onClick={() => void handleCreateUser()} disabled={submitting}>
               {submitting ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}
               创建
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            </button>
+          </>
+        }
+      >
+        <div className="app-form-grid" style={{ padding: 0 }}>
+          <label className="app-fld full">
+            <span className="fl">邮箱</span>
+            <input className="app-input" id="create-email" name="email" type="email" autoComplete="email" value={newUser.email} onChange={(event) => setNewUser((current) => ({ ...current, email: event.target.value }))} placeholder="user@example.com" />
+          </label>
+          <label className="app-fld full">
+            <span className="fl">用户名</span>
+            <input className="app-input" id="create-username" name="username" autoComplete="username" value={newUser.username} onChange={(event) => setNewUser((current) => ({ ...current, username: event.target.value }))} placeholder="请输入用户名(选填)" />
+          </label>
+          <label className="app-fld full">
+            <span className="fl">密码</span>
+            <input className="app-input" id="create-password" name="password" type="password" autoComplete="new-password" value={newUser.password} onChange={(event) => setNewUser((current) => ({ ...current, password: event.target.value }))} placeholder="至少输入一个临时密码" />
+          </label>
+          <label className="app-fld full">
+            <span className="fl">初始余额</span>
+            <input className="app-input" id="create-balance" name="balance" type="number" min="0" step="1" value={newUser.balance} onChange={(event) => setNewUser((current) => ({ ...current, balance: event.target.value }))} placeholder="留空使用默认余额" />
+          </label>
+        </div>
+      </AppModal>
 
-      <Dialog open={Boolean(editTarget)} onOpenChange={(open) => {
-        if (!open) {
+      <AppModal
+        open={Boolean(editTarget)}
+        onClose={() => {
           setEditTarget(null);
           setEditUser({ username: "", password: "" });
-        }
-      }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>编辑用户</DialogTitle>
-          </DialogHeader>
-          <div className="grid gap-4">
-            <div className="text-sm text-[var(--app-text-muted)]">{editTarget?.email || "-"}</div>
-            <label className="grid gap-2 text-sm font-medium">
-              用户名
-              <Input id="edit-username" name="username" value={editUser.username} onChange={(event) => setEditUser((current) => ({ ...current, username: event.target.value }))} placeholder="显示用户名" />
-            </label>
-            <label className="grid gap-2 text-sm font-medium">
-              新密码
-              <Input id="edit-password" name="password" type="password" autoComplete="new-password" value={editUser.password} onChange={(event) => setEditUser((current) => ({ ...current, password: event.target.value }))} placeholder="留空则不修改密码" />
-            </label>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setEditTarget(null)} disabled={submitting}>取消</Button>
-            <Button type="button" onClick={() => void handleUpdateUser()} disabled={submitting}>
+        }}
+        title="编辑用户"
+        footer={
+          <>
+            <button className="app-btn" type="button" onClick={() => setEditTarget(null)} disabled={submitting}>取消</button>
+            <button className="app-btn-primary" type="button" onClick={() => void handleUpdateUser()} disabled={submitting}>
               {submitting ? <LoaderCircle className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
               保存
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            </button>
+          </>
+        }
+      >
+        <div className="app-form-grid" style={{ padding: 0 }}>
+          <div className="full" style={{ gridColumn: "1 / -1", fontSize: 13, color: "var(--app-text-muted)" }}>{editTarget?.email || "-"}</div>
+          <label className="app-fld full">
+            <span className="fl">用户名</span>
+            <input className="app-input" id="edit-username" name="username" value={editUser.username} onChange={(event) => setEditUser((current) => ({ ...current, username: event.target.value }))} placeholder="显示用户名" />
+          </label>
+          <label className="app-fld full">
+            <span className="fl">新密码</span>
+            <input className="app-input" id="edit-password" name="password" type="password" autoComplete="new-password" value={editUser.password} onChange={(event) => setEditUser((current) => ({ ...current, password: event.target.value }))} placeholder="留空则不修改密码" />
+          </label>
+        </div>
+      </AppModal>
 
-      <Dialog open={Boolean(creditTarget)} onOpenChange={(open) => {
-        if (!open) {
+      <AppModal
+        open={Boolean(billingTarget)}
+        onClose={() => {
+          setBillingTarget(null);
+          setBillingDraft({ subscriptionLevelTag: "", walletLevelTag: "" });
+        }}
+        title="编辑等级"
+        footer={
+          <>
+            <button
+              className="app-btn"
+              type="button"
+              onClick={() => {
+                setBillingTarget(null);
+                setBillingDraft({ subscriptionLevelTag: "", walletLevelTag: "" });
+              }}
+              disabled={submitting}
+            >
+              取消
+            </button>
+            <button className="app-btn-primary" type="button" onClick={() => void handleUpdateBillingLevels()} disabled={submitting}>
+              {submitting ? <LoaderCircle className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
+              保存
+            </button>
+          </>
+        }
+      >
+        <div className="app-form-grid" style={{ padding: 0 }}>
+          <div className="full" style={{ gridColumn: "1 / -1", fontSize: 13, color: "var(--app-text-muted)" }}>
+            {billingTarget?.username ?? "-"} · {billingTarget?.email || "-"}
+          </div>
+          <label className="app-fld full">
+            <span className="fl">订阅等级</span>
+            <AppSelect
+              value={billingDraft.subscriptionLevelTag}
+              onChange={(value) => setBillingDraft((current) => ({ ...current, subscriptionLevelTag: value }))}
+              options={subscriptionLevelOptions}
+            />
+          </label>
+          <label className="app-fld full">
+            <span className="fl">充值等级</span>
+            <AppSelect
+              value={billingDraft.walletLevelTag}
+              onChange={(value) => setBillingDraft((current) => ({ ...current, walletLevelTag: value }))}
+              options={walletLevelOptions}
+            />
+          </label>
+          <div className="full" style={{ gridColumn: "1 / -1", fontSize: 12, lineHeight: 1.6, color: "var(--app-text-muted)" }}>
+            选择“自动”会恢复为按真实订阅和充值记录计算；手动等级只影响展示和号池调度标签。
+          </div>
+        </div>
+      </AppModal>
+
+      <AppModal
+        open={Boolean(creditTarget)}
+        onClose={() => {
           setCreditTarget(null);
           setCreditAmount("");
-        }
-      }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>充值 / 退款</DialogTitle>
-          </DialogHeader>
-          <div className="grid gap-4">
-            <div className="text-sm text-[var(--app-text-muted)]">
-              {creditTarget?.username ?? "-"} 当前余额 {usageNumber(creditTarget?.credit?.balance)}
-            </div>
-            <label className="grid gap-2 text-sm font-medium">
-              类型
-              <Select value={creditOperation} onValueChange={(value) => setCreditOperation(value as "recharge" | "refund")}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="recharge">充值</SelectItem>
-                  <SelectItem value="refund">退款</SelectItem>
-                </SelectContent>
-              </Select>
-            </label>
-            <label className="grid gap-2 text-sm font-medium">
-              点数
-              <Input id="credit-amount" name="amount" type="number" min="1" step="1" value={creditAmount} onChange={(event) => setCreditAmount(event.target.value)} placeholder="输入点数" />
-            </label>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => {
-              setCreditTarget(null);
-              setCreditAmount("");
-            }} disabled={submitting}>取消</Button>
-            <Button type="button" onClick={() => void handleAdjustCredit()} disabled={submitting}>
+        }}
+        title="充值 / 退款"
+        footer={
+          <>
+            <button
+              className="app-btn"
+              type="button"
+              onClick={() => {
+                setCreditTarget(null);
+                setCreditAmount("");
+              }}
+              disabled={submitting}
+            >
+              取消
+            </button>
+            <button className="app-btn-primary" type="button" onClick={() => void handleAdjustCredit()} disabled={submitting}>
               {submitting ? <LoaderCircle className="size-4 animate-spin" /> : <Coins className="size-4" />}
               保存
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={Boolean(deleteTarget)} onOpenChange={(open) => {
-        if (!open) {
-          setDeleteTarget(null);
+            </button>
+          </>
         }
-      }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>删除用户</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-2 text-sm text-[var(--app-text-secondary)]">
-            <p>确认删除用户 {deleteTarget?.username ?? "-"}？</p>
-            <p className="text-[var(--app-text-muted)]">这会立即禁止登录并保留账号数据 7 天；7 天内可恢复，之后会自动永久清理。</p>
+      >
+        <div className="app-form-grid" style={{ padding: 0 }}>
+          <div className="full" style={{ gridColumn: "1 / -1", fontSize: 13, color: "var(--app-text-muted)" }}>
+            {creditTarget?.username ?? "-"} 当前余额 {usageNumber(creditTarget?.credit?.balance)}
           </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setDeleteTarget(null)} disabled={submitting}>取消</Button>
-            <Button type="button" variant="destructive" onClick={() => void handleDeleteUser()} disabled={submitting}>
+          <label className="app-fld full">
+            <span className="fl">类型</span>
+            <AppSelect
+              value={creditOperation}
+              onChange={(value) => setCreditOperation(value as "recharge" | "refund")}
+              options={[
+                { value: "recharge", label: "充值" },
+                { value: "refund", label: "退款" },
+              ]}
+            />
+          </label>
+          <label className="app-fld full">
+            <span className="fl">点数</span>
+            <input className="app-input" id="credit-amount" name="amount" type="number" min="1" step="1" value={creditAmount} onChange={(event) => setCreditAmount(event.target.value)} placeholder="输入点数" />
+          </label>
+        </div>
+      </AppModal>
+
+      <AppModal
+        open={Boolean(deleteTarget)}
+        onClose={() => setDeleteTarget(null)}
+        title="删除用户"
+        footer={
+          <>
+            <button className="app-btn" type="button" onClick={() => setDeleteTarget(null)} disabled={submitting}>取消</button>
+            <button className="app-btn-primary" type="button" onClick={() => void handleDeleteUser()} disabled={submitting} style={{ background: "linear-gradient(135deg, rgba(252, 165, 165, 0.95), rgba(244, 63, 94, 0.85))", borderColor: "rgba(252, 165, 165, 0.5)" }}>
               {submitting ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
               删除
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={Boolean(clearDataTarget)} onOpenChange={(open) => {
-        if (!open) {
-          setClearDataTarget(null);
+            </button>
+          </>
         }
-      }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>清空用户数据</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-2 text-sm text-[var(--app-text-secondary)]">
-            <p>确认清空用户 {clearDataTarget?.username ?? "-"} 的业务数据？</p>
-            <p className="text-[var(--app-text-muted)]">账号、邮箱、用户名、密码和登录状态会保留；图片历史、图片资产、使用记录、余额和账本会被删除，操作后无法恢复。</p>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setClearDataTarget(null)} disabled={submitting}>取消</Button>
-            <Button type="button" variant="destructive" onClick={() => void handleClearUserData()} disabled={submitting}>
+      >
+        <p style={{ fontSize: 14, color: "var(--app-text-primary)", lineHeight: 1.6 }}>确认删除用户 <b>{deleteTarget?.username ?? "-"}</b>？</p>
+        <p style={{ marginTop: 8, fontSize: 13, color: "var(--app-text-muted)", lineHeight: 1.6 }}>这会立即禁止登录并保留账号数据 7 天；7 天内可恢复，之后会自动永久清理。</p>
+      </AppModal>
+
+      <AppModal
+        open={Boolean(clearDataTarget)}
+        onClose={() => setClearDataTarget(null)}
+        title="清空用户数据"
+        footer={
+          <>
+            <button className="app-btn" type="button" onClick={() => setClearDataTarget(null)} disabled={submitting}>取消</button>
+            <button
+              className="app-btn-primary"
+              type="button"
+              onClick={() => void handleClearUserData()}
+              disabled={submitting}
+              style={{ background: "linear-gradient(135deg, rgba(252, 165, 165, 0.95), rgba(244, 63, 94, 0.85))", borderColor: "rgba(252, 165, 165, 0.5)" }}
+            >
               {submitting ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
               清空数据
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={Boolean(purgeTarget)} onOpenChange={(open) => {
-        if (!open) {
-          setPurgeTarget(null);
+            </button>
+          </>
         }
-      }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>永久删除用户</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-2 text-sm text-[var(--app-text-secondary)]">
-            <p>确认永久删除用户 {purgeTarget?.username ?? "-"}？</p>
-            <p className="text-[var(--app-text-muted)]">这会立即删除该用户账号、余额账本、使用记录和图片资产，删除后无法恢复。</p>
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setPurgeTarget(null)} disabled={submitting}>取消</Button>
-            <Button type="button" variant="destructive" onClick={() => void handlePurgeUser()} disabled={submitting}>
+      >
+        <p style={{ fontSize: 14, color: "var(--app-text-primary)", lineHeight: 1.6 }}>确认清空用户 <b>{clearDataTarget?.username ?? "-"}</b> 的业务数据？</p>
+        <p style={{ marginTop: 8, fontSize: 13, color: "var(--app-text-muted)", lineHeight: 1.6 }}>账号、邮箱、用户名、密码和登录状态会保留；图片历史、图片资产、使用记录、余额和账本会被删除，操作后无法恢复。</p>
+      </AppModal>
+
+      <AppModal
+        open={Boolean(purgeTarget)}
+        onClose={() => setPurgeTarget(null)}
+        title="永久删除用户"
+        footer={
+          <>
+            <button className="app-btn" type="button" onClick={() => setPurgeTarget(null)} disabled={submitting}>取消</button>
+            <button className="app-btn-primary" type="button" onClick={() => void handlePurgeUser()} disabled={submitting} style={{ background: "linear-gradient(135deg, rgba(252, 165, 165, 0.95), rgba(244, 63, 94, 0.85))", borderColor: "rgba(252, 165, 165, 0.5)" }}>
               {submitting ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
-              确认删除
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+              确认永久删除
+            </button>
+          </>
+        }
+      >
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: 12, marginBottom: 12, borderRadius: 10, border: "1px solid rgba(252, 165, 165, 0.3)", background: "rgba(252, 165, 165, 0.08)", color: "#fca5a5", fontSize: 13, lineHeight: 1.5 }}>
+          <Trash2 className="size-4" style={{ marginTop: 1, flexShrink: 0 }} />
+          <span>此操作不可恢复，请仔细确认。</span>
+        </div>
+        <p style={{ fontSize: 14, color: "var(--app-text-primary)", lineHeight: 1.6 }}>确认永久删除用户 <b>{purgeTarget?.username ?? "-"}</b>？</p>
+        <p style={{ marginTop: 8, fontSize: 13, color: "var(--app-text-muted)", lineHeight: 1.6 }}>这会立即清除该用户账号、余额账本、使用记录和图片资产，删除后无法恢复。</p>
+      </AppModal>
+
+      <AppDrawer
+        open={Boolean(detailUserID)}
+        onClose={closeDrawer}
+        title={detailUserID ? (
+          <UserDetailDrawerTitle userID={detailUserID} detail={drawerDetail} loading={drawerLoading} />
+        ) : null}
+        actions={detailUserID ? (
+          <button className="app-btn" type="button" onClick={() => drawerReload?.()} disabled={drawerLoading || !drawerReload}>
+            {drawerLoading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+            刷新
+          </button>
+        ) : null}
+      >
+        {detailUserID ? (
+          <UserDetailDrawerContent userID={detailUserID} onLoaded={handleDrawerLoaded} onReady={handleDrawerReady} />
+        ) : null}
+      </AppDrawer>
     </AdminPage>
   );
 }

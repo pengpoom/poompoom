@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"imagestudio/internal/businesscredits"
-	"imagestudio/internal/businessimage"
 	"imagestudio/internal/businessjobs"
 )
 
@@ -24,7 +22,7 @@ func (s *Server) reconcileStaleBusinessImageJobs(ctx context.Context) businessjo
 
 	options := s.staleBusinessImageJobReconcileOptions()
 	result := businessjobs.ReconcileResult{}
-	store, err := businessjobs.NewStore(s.cfg)
+	store, err := s.newBusinessJobStore()
 	if err != nil {
 		return result
 	}
@@ -86,14 +84,18 @@ func (s *Server) reconcileStaleBusinessImageGenerations(ctx context.Context, job
 	if len(jobs) == 0 {
 		return
 	}
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		return
 	}
 	defer imageStore.Close()
-	creditStore, _ := businesscredits.NewStore(s.cfg)
+	creditStore, _ := s.newBusinessCreditStore()
 	if creditStore != nil {
 		defer creditStore.Close()
+	}
+	paymentStore, _ := s.newBusinessPaymentStore()
+	if paymentStore != nil {
+		defer paymentStore.Close()
 	}
 
 	for _, job := range jobs {
@@ -105,6 +107,12 @@ func (s *Server) reconcileStaleBusinessImageGenerations(ctx context.Context, job
 			totals, err := creditStore.GenerationTotals(ctx, job.UserID, job.GenerationID)
 			if err == nil && totals.Reserved > totals.Refunded {
 				_, _, _ = creditStore.Refund(ctx, job.UserID, totals.Reserved-totals.Refunded, job.GenerationID)
+			}
+		}
+		if paymentStore != nil && shouldRefundStaleBusinessImageJob(job) {
+			totals, err := paymentStore.SubscriptionGenerationTotals(ctx, job.UserID, job.GenerationID)
+			if err == nil && totals.Reserved > totals.Refunded {
+				_, _ = paymentStore.RefundSubscriptionCredits(ctx, job.UserID, totals.Reserved-totals.Refunded, job.GenerationID)
 			}
 		}
 		_, _ = imageStore.MarkGenerationFinished(ctx, job.UserID, job.GenerationID, status, message)

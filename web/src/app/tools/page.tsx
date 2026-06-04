@@ -3,7 +3,6 @@
 import { FileText, Hammer, Presentation, Sparkles } from "lucide-react";
 
 import { AdminHeader, AdminPage } from "@/components/admin-layout";
-import { Button } from "@/components/ui/button";
 
 const tools = [
   { title: "Skills 工具箱", desc: "后续可接入提示词增强、批量改写、风格拆解等技能。", icon: Sparkles },
@@ -17,12 +16,8 @@ export default function ToolsPage() {
         <AdminHeader
           title="工具"
           description="先放一个工具入口框架，后续可以加入 Skills、PPT 制作、批量资产处理等能力。"
-        >
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-[var(--app-bg-surface)] px-3 py-1.5 text-xs font-semibold text-[var(--app-text-secondary)]">
-            <Hammer className="size-4 text-[var(--app-accent-cyan)]" />
-            Tools workspace
-          </div>
-        </AdminHeader>
+          icon={Hammer}
+        />
 
         <section className="grid gap-4 md:grid-cols-3">
           {tools.map((tool) => {
@@ -34,9 +29,9 @@ export default function ToolsPage() {
                 </div>
                 <h2 className="mt-5 text-lg font-semibold text-[var(--app-text-primary)]">{tool.title}</h2>
                 <p className="mt-2 text-sm leading-6 text-[var(--app-text-secondary)]">{tool.desc}</p>
-                <Button type="button" variant="outline" className="mt-5 h-10 px-4">
+                <button type="button" className="app-btn" style={{ marginTop: 20 }} disabled>
                   即将开放
-                </Button>
+                </button>
               </article>
             );
           })}

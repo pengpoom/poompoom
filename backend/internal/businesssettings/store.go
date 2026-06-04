@@ -10,7 +10,7 @@ import (
 
 	"imagestudio/internal/businessproviders"
 	"imagestudio/internal/config"
-	"imagestudio/internal/sqlitedb"
+	"imagestudio/internal/database"
 )
 
 const settingsKey = "system"
@@ -23,6 +23,7 @@ type Settings struct {
 	Billing    BillingSettings    `json:"billing"`
 	Runtime    RuntimeSettings    `json:"runtime"`
 	Security   SecuritySettings   `json:"security"`
+	Affiliate  AffiliateSettings  `json:"affiliate"`
 }
 
 type SiteSettings struct {
@@ -33,9 +34,17 @@ type SiteSettings struct {
 }
 
 type UserSettings struct {
-	DefaultRole    string `json:"defaultRole"`
-	DefaultCredits int64  `json:"defaultCredits"`
-	Registration   bool   `json:"registration"`
+	DefaultRole              string `json:"defaultRole"`
+	DefaultCredits           int64  `json:"defaultCredits"`
+	Registration             bool   `json:"registration"`
+	RegistrationCodeRequired bool   `json:"registrationCodeRequired"`
+	TurnstileEnabled         bool   `json:"turnstileEnabled"`
+	TurnstileSiteKey         string `json:"turnstileSiteKey"`
+	TurnstileSecretKey       string `json:"turnstileSecretKey"`
+	TurnstileLogin           bool   `json:"turnstileLogin"`
+	TurnstileRegisterCode    bool   `json:"turnstileRegisterCode"`
+	TurnstileRegisterSubmit  bool   `json:"turnstileRegisterSubmit"`
+	TurnstilePasswordReset   bool   `json:"turnstilePasswordReset"`
 }
 
 type EmailSettings struct {
@@ -56,24 +65,43 @@ type GenerationSettings struct {
 }
 
 type BillingSettings struct {
-	GPTImageCost       int64 `json:"gptImageCost"`
-	GeminiBananaCost   int64 `json:"geminiBananaCost"`
-	RefundOnFailure    bool  `json:"refundOnFailure"`
-	RefundPartialCount bool  `json:"refundPartialCount"`
+	GPTImageCost       int64                  `json:"gptImageCost"`
+	GeminiBananaCost   int64                  `json:"geminiBananaCost"`
+	RefundOnFailure    bool                   `json:"refundOnFailure"`
+	RefundPartialCount bool                   `json:"refundPartialCount"`
+	SubscriptionLevels []BillingLevelSettings `json:"subscriptionLevels"`
+	WalletLevels       []BillingLevelSettings `json:"walletLevels"`
+}
+
+type BillingLevelSettings struct {
+	Name        string `json:"name"`
+	Tag         string `json:"tag"`
+	Description string `json:"description"`
+	Enabled     bool   `json:"enabled"`
+	SortOrder   int    `json:"sortOrder"`
 }
 
 type RuntimeSettings struct {
 	MaxImageConcurrency      int `json:"maxImageConcurrency"`
 	ImageQueueLimit          int `json:"imageQueueLimit"`
 	ImageQueueTimeoutSeconds int `json:"imageQueueTimeoutSeconds"`
+	MaxUserActiveJobs        int `json:"maxUserActiveJobs"`
+	MaxProviderRunningJobs   int `json:"maxProviderRunningJobs"`
+	MaxQueuedJobs            int `json:"maxQueuedJobs"`
 }
 
 type SecuritySettings struct {
 	ImageFileAuthRequired bool `json:"imageFileAuthRequired"`
 }
 
+type AffiliateSettings struct {
+	Enabled                   bool  `json:"enabled"`
+	RegistrationRewardEnabled bool  `json:"registrationRewardEnabled"`
+	RegistrationRewardCredits int64 `json:"registrationRewardCredits"`
+}
+
 type RuntimeInfo struct {
-	SQLitePath                string `json:"sqlitePath"`
+	DatabaseDriver            string `json:"databaseDriver"`
 	ImageDir                  string `json:"imageDir"`
 	ImageFileAuthRequired     bool   `json:"imageFileAuthRequired"`
 	LegacyConfigWritable      bool   `json:"legacyConfigWritable"`
@@ -86,28 +114,43 @@ type Response struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	driver string
+	ownDB  bool
 }
 
 func NewStore(cfg *config.Config) (*Store, error) {
-	rawPath := strings.TrimSpace(cfg.Storage.SQLitePath)
-	if rawPath == "" {
-		return nil, fmt.Errorf("sqlite path is required")
+	if !database.IsPostgres(cfg.Database.Driver) {
+		return nil, fmt.Errorf("unsupported database driver %q", strings.TrimSpace(cfg.Database.Driver))
 	}
-	db, err := sqlitedb.Open(cfg.ResolvePath(rawPath))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db}
-	if err := store.init(); err != nil {
-		_ = store.Close()
+	if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+		_ = db.Close()
 		return nil, err
 	}
+	store := NewStoreWithDB(db, cfg.Database.Driver)
+	store.ownDB = true
 	return store, nil
+}
+
+func NewStoreWithDB(db *sql.DB, driver string) *Store {
+	driver = strings.ToLower(strings.TrimSpace(driver))
+	if driver == "" {
+		driver = "postgres"
+	}
+	return &Store{db: db, driver: driver}
 }
 
 func (s *Store) Close() error {
 	if s == nil || s.db == nil {
+		return nil
+	}
+	if !s.ownDB {
 		return nil
 	}
 	return s.db.Close()
@@ -123,7 +166,7 @@ func (s *Store) GetWithFound(ctx context.Context) (Settings, bool, error) {
 	var raw []byte
 	err := s.db.QueryRowContext(
 		ctx,
-		`SELECT value_json FROM business_system_settings WHERE key = ?`,
+		s.rebind(`SELECT value_json FROM business_system_settings WHERE key = ?`),
 		settingsKey,
 	).Scan(&raw)
 	if err == sql.ErrNoRows {
@@ -150,11 +193,11 @@ func (s *Store) Save(ctx context.Context, settings Settings) (Settings, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = s.db.ExecContext(
 		ctx,
-		`INSERT INTO business_system_settings(key, value_json, created_at, updated_at)
+		s.rebind(`INSERT INTO business_system_settings(key, value_json, created_at, updated_at)
 		 VALUES(?, ?, ?, ?)
 		 ON CONFLICT(key) DO UPDATE SET
 		   value_json = excluded.value_json,
-		   updated_at = excluded.updated_at`,
+		   updated_at = excluded.updated_at`),
 		settingsKey,
 		raw,
 		now,
@@ -175,9 +218,17 @@ func Defaults() Settings {
 			ContactInfo: "",
 		},
 		User: UserSettings{
-			DefaultRole:    "user",
-			DefaultCredits: 20,
-			Registration:   false,
+			DefaultRole:              "user",
+			DefaultCredits:           20,
+			Registration:             false,
+			RegistrationCodeRequired: false,
+			TurnstileEnabled:         false,
+			TurnstileSiteKey:         "",
+			TurnstileSecretKey:       "",
+			TurnstileLogin:           false,
+			TurnstileRegisterCode:    true,
+			TurnstileRegisterSubmit:  false,
+			TurnstilePasswordReset:   true,
 		},
 		Email: EmailSettings{
 			SMTPHost: "",
@@ -199,14 +250,37 @@ func Defaults() Settings {
 			GeminiBananaCost:   1,
 			RefundOnFailure:    true,
 			RefundPartialCount: true,
+			SubscriptionLevels: []BillingLevelSettings{
+				{Name: "Free", Tag: "tier:free", Description: "免费体验", Enabled: true, SortOrder: 0},
+				{Name: "Lumen", Tag: "tier:lumen", Description: "入门创作订阅", Enabled: true, SortOrder: 10},
+				{Name: "Prism", Tag: "tier:prism", Description: "标准创作订阅", Enabled: true, SortOrder: 20},
+				{Name: "Atelier", Tag: "tier:atelier", Description: "专业创作订阅", Enabled: true, SortOrder: 30},
+				{Name: "Meridian", Tag: "tier:meridian", Description: "旗舰创作订阅", Enabled: true, SortOrder: 40},
+			},
+			WalletLevels: []BillingLevelSettings{
+				{Name: "None", Tag: "wallet:none", Description: "未充值", Enabled: true, SortOrder: 0},
+				{Name: "Ember", Tag: "wallet:ember", Description: "小额充值", Enabled: true, SortOrder: 10},
+				{Name: "Glow", Tag: "wallet:glow", Description: "中等充值", Enabled: true, SortOrder: 20},
+				{Name: "Flare", Tag: "wallet:flare", Description: "高价值充值", Enabled: true, SortOrder: 30},
+				{Name: "Radiant", Tag: "wallet:radiant", Description: "重度充值", Enabled: true, SortOrder: 40},
+				{Name: "Zenith", Tag: "wallet:zenith", Description: "顶级充值用户", Enabled: true, SortOrder: 50},
+			},
 		},
 		Runtime: RuntimeSettings{
 			MaxImageConcurrency:      8,
 			ImageQueueLimit:          32,
 			ImageQueueTimeoutSeconds: 20,
+			MaxUserActiveJobs:        8,
+			MaxProviderRunningJobs:   4,
+			MaxQueuedJobs:            1000,
 		},
 		Security: SecuritySettings{
 			ImageFileAuthRequired: true,
+		},
+		Affiliate: AffiliateSettings{
+			Enabled:                   false,
+			RegistrationRewardEnabled: false,
+			RegistrationRewardCredits: 0,
 		},
 	}
 }
@@ -227,6 +301,20 @@ func Normalize(settings Settings) Settings {
 	settings.User.DefaultRole = normalizeRole(settings.User.DefaultRole)
 	if settings.User.DefaultCredits < 0 {
 		settings.User.DefaultCredits = 0
+	}
+	if !settings.User.Registration {
+		settings.User.RegistrationCodeRequired = false
+	}
+	settings.User.TurnstileSiteKey = strings.TrimSpace(settings.User.TurnstileSiteKey)
+	settings.User.TurnstileSecretKey = strings.TrimSpace(settings.User.TurnstileSecretKey)
+	if settings.User.TurnstileSiteKey == "" || settings.User.TurnstileSecretKey == "" {
+		settings.User.TurnstileEnabled = false
+	}
+	if !settings.User.TurnstileEnabled {
+		settings.User.TurnstileLogin = false
+		settings.User.TurnstileRegisterCode = false
+		settings.User.TurnstileRegisterSubmit = false
+		settings.User.TurnstilePasswordReset = false
 	}
 	settings.Email.SMTPHost = strings.TrimSpace(settings.Email.SMTPHost)
 	if settings.Email.SMTPPort <= 0 {
@@ -268,6 +356,8 @@ func Normalize(settings Settings) Settings {
 	if settings.Billing.GeminiBananaCost < 0 {
 		settings.Billing.GeminiBananaCost = 0
 	}
+	settings.Billing.SubscriptionLevels = normalizeBillingLevels(settings.Billing.SubscriptionLevels, defaults.Billing.SubscriptionLevels)
+	settings.Billing.WalletLevels = normalizeBillingLevels(settings.Billing.WalletLevels, defaults.Billing.WalletLevels)
 	if settings.Runtime.MaxImageConcurrency < 1 {
 		settings.Runtime.MaxImageConcurrency = defaults.Runtime.MaxImageConcurrency
 	}
@@ -286,12 +376,36 @@ func Normalize(settings Settings) Settings {
 	if settings.Runtime.ImageQueueTimeoutSeconds > 3600 {
 		settings.Runtime.ImageQueueTimeoutSeconds = 3600
 	}
+	if settings.Runtime.MaxUserActiveJobs < 0 {
+		settings.Runtime.MaxUserActiveJobs = defaults.Runtime.MaxUserActiveJobs
+	}
+	if settings.Runtime.MaxUserActiveJobs > 10000 {
+		settings.Runtime.MaxUserActiveJobs = 10000
+	}
+	if settings.Runtime.MaxProviderRunningJobs < 0 {
+		settings.Runtime.MaxProviderRunningJobs = defaults.Runtime.MaxProviderRunningJobs
+	}
+	if settings.Runtime.MaxProviderRunningJobs > 10000 {
+		settings.Runtime.MaxProviderRunningJobs = 10000
+	}
+	if settings.Runtime.MaxQueuedJobs < 0 {
+		settings.Runtime.MaxQueuedJobs = defaults.Runtime.MaxQueuedJobs
+	}
+	if settings.Runtime.MaxQueuedJobs > 1000000 {
+		settings.Runtime.MaxQueuedJobs = 1000000
+	}
+	if settings.Affiliate.RegistrationRewardCredits < 0 {
+		settings.Affiliate.RegistrationRewardCredits = 0
+	}
+	if settings.Affiliate.RegistrationRewardCredits > 1000000000 {
+		settings.Affiliate.RegistrationRewardCredits = 1000000000
+	}
 	return settings
 }
 
 func Runtime(cfg *config.Config) RuntimeInfo {
 	return RuntimeInfo{
-		SQLitePath:                cfg.ResolvePath(cfg.Storage.SQLitePath),
+		DatabaseDriver:            cfg.Database.Driver,
 		ImageDir:                  cfg.ResolvePath(cfg.Storage.ImageDir),
 		ImageFileAuthRequired:     true,
 		LegacyConfigWritable:      false,
@@ -309,6 +423,9 @@ func WithConfigRuntime(settings Settings, cfg *config.Config) Settings {
 		MaxImageConcurrency:      maxConcurrency,
 		ImageQueueLimit:          queueLimit,
 		ImageQueueTimeoutSeconds: int(queueTimeout / time.Second),
+		MaxUserActiveJobs:        settings.Runtime.MaxUserActiveJobs,
+		MaxProviderRunningJobs:   settings.Runtime.MaxProviderRunningJobs,
+		MaxQueuedJobs:            settings.Runtime.MaxQueuedJobs,
 	}
 	return Normalize(settings)
 }
@@ -329,6 +446,9 @@ func CreditCostForPlatform(settings Settings, platform string, count int) int64 
 }
 
 func (s *Store) init() error {
+	if s.isPostgres() {
+		return nil
+	}
 	_, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS business_system_settings (
 		key TEXT PRIMARY KEY,
 		value_json BLOB NOT NULL,
@@ -336,6 +456,72 @@ func (s *Store) init() error {
 		updated_at TEXT NOT NULL
 	);`)
 	return err
+}
+
+func (s *Store) isPostgres() bool {
+	return database.IsPostgres(s.driver)
+}
+
+func (s *Store) rebind(query string) string {
+	return database.Rebind(s.driver, query)
+}
+
+func normalizeBillingLevels(levels []BillingLevelSettings, defaults []BillingLevelSettings) []BillingLevelSettings {
+	if len(levels) == 0 {
+		return append([]BillingLevelSettings(nil), defaults...)
+	}
+	items := make([]BillingLevelSettings, 0, len(levels))
+	seen := make(map[string]struct{}, len(levels))
+	for index, level := range levels {
+		name := strings.TrimSpace(level.Name)
+		tag := normalizeLevelTag(level.Tag)
+		if tag == "" {
+			continue
+		}
+		if name == "" {
+			name = tag
+		}
+		if _, ok := seen[tag]; ok {
+			continue
+		}
+		seen[tag] = struct{}{}
+		sortOrder := level.SortOrder
+		if sortOrder < 0 {
+			sortOrder = index * 10
+		}
+		items = append(items, BillingLevelSettings{
+			Name:        name,
+			Tag:         tag,
+			Description: strings.TrimSpace(level.Description),
+			Enabled:     level.Enabled,
+			SortOrder:   sortOrder,
+		})
+	}
+	if len(items) == 0 {
+		return append([]BillingLevelSettings(nil), defaults...)
+	}
+	return items
+}
+
+func normalizeLevelTag(value string) string {
+	tag := strings.ToLower(strings.TrimSpace(value))
+	if tag == "" {
+		return ""
+	}
+	var builder strings.Builder
+	for _, r := range tag {
+		switch {
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r == ':', r == '-', r == '_':
+			builder.WriteRune(r)
+		default:
+			builder.WriteRune('-')
+		}
+	}
+	return strings.Trim(builder.String(), "-")
 }
 
 func normalizeRole(value string) string {

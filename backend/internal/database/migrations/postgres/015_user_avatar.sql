@@ -1,0 +1,2 @@
+ALTER TABLE business_users
+	ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT '';

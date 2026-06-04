@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,7 +13,8 @@ import (
 	"imagestudio/internal/businessauth"
 	"imagestudio/internal/businesscredits"
 	"imagestudio/internal/businessimage"
-	"imagestudio/internal/businesstracker"
+	"imagestudio/internal/businesspayments"
+	"imagestudio/internal/businesssettings"
 )
 
 func paginationFromQuery(r *http.Request, prefix string, defaultPageSize int, maxPageSize int) (int, int, int) {
@@ -131,8 +133,22 @@ type paginationMeta struct {
 
 type businessUserWithUsage struct {
 	businessauth.User
-	Usage  businessimage.UserUsage `json:"usage"`
-	Credit businesscredits.Summary `json:"credit"`
+	Usage   businessimage.UserUsage    `json:"usage"`
+	Credit  businesscredits.Summary    `json:"credit"`
+	Billing businessUserBillingSummary `json:"billing"`
+}
+
+type businessUserWithBilling struct {
+	businessauth.User
+	Billing businessUserBillingSummary `json:"billing"`
+}
+
+type businessUserBillingSummary struct {
+	SubscriptionLevel         businessBillingLevelView      `json:"subscriptionLevel"`
+	WalletLevel               businessBillingLevelView      `json:"walletLevel"`
+	Subscription              businesspayments.Subscription `json:"subscription,omitempty"`
+	SubscriptionLevelOverride bool                          `json:"subscriptionLevelOverride"`
+	WalletLevelOverride       bool                          `json:"walletLevelOverride"`
 }
 
 type businessUsageRecordWithUser struct {
@@ -145,8 +161,14 @@ type businessUsageRecordWithUser struct {
 var errBusinessUserNotDeleted = errors.New("business user is not deleted")
 
 type businessMeResponse struct {
-	User   businessauth.User       `json:"user"`
-	Credit businesscredits.Summary `json:"credit"`
+	User             businessauth.User       `json:"user"`
+	Credit           businesscredits.Summary `json:"credit"`
+	ApiAccessEnabled bool                    `json:"apiAccessEnabled"`
+}
+
+type businessCreditLedgerResponse struct {
+	Items []businesscredits.LedgerEntry `json:"items"`
+	Page  paginationMeta                `json:"page"`
 }
 
 type businessUserDetailResponse struct {
@@ -198,7 +220,7 @@ type businessDashboardResponse struct {
 }
 
 func (s *Server) handleGetBusinessDashboard(w http.ResponseWriter, r *http.Request) {
-	userStore, err := businessauth.NewStore(s.cfg)
+	userStore, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -210,7 +232,7 @@ func (s *Server) handleGetBusinessDashboard(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "usage store failed"})
 		return
@@ -229,7 +251,7 @@ func (s *Server) handleGetBusinessDashboard(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -346,7 +368,7 @@ func (s *Server) handleGetBusinessDashboard(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleListBusinessUsers(w http.ResponseWriter, r *http.Request) {
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -366,7 +388,7 @@ func (s *Server) handleListBusinessUsers(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "usage store failed"})
 		return
@@ -378,7 +400,7 @@ func (s *Server) handleListBusinessUsers(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -395,18 +417,79 @@ func (s *Server) handleListBusinessUsers(w http.ResponseWriter, r *http.Request)
 	}
 
 	items := make([]businessUserWithUsage, 0, len(users))
+	settings := s.businessSystemSettingsForContext(r.Context())
+	paymentStore, _ := s.newBusinessPaymentStore()
+	if paymentStore != nil {
+		defer paymentStore.Close()
+	}
 	for _, user := range users {
 		usage := usages[user.ID]
 		usage.UserID = user.ID
 		credit := credits[user.ID]
 		credit.UserID = user.ID
 		items = append(items, businessUserWithUsage{
-			User:   user,
-			Usage:  usage,
-			Credit: credit,
+			User:    user,
+			Usage:   usage,
+			Credit:  credit,
+			Billing: s.businessUserBillingSummary(r.Context(), paymentStore, user, settings),
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) businessUserBillingSummary(ctx context.Context, store *businesspayments.Store, user businessauth.User, settings businesssettings.Settings) businessUserBillingSummary {
+	subscriptionOverrideTag := configuredBillingLevelTag(user.SubscriptionLevelTag, settings.Billing.SubscriptionLevels, "tier:")
+	walletOverrideTag := configuredBillingLevelTag(user.WalletLevelTag, settings.Billing.WalletLevels, "wallet:")
+	subscriptionTag := subscriptionOverrideTag
+	if subscriptionTag == "" {
+		subscriptionTag = businessSubscriptionLevelDispatchTagFromStore(ctx, store, user.ID, settings)
+	}
+	walletTag := walletOverrideTag
+	if walletTag == "" {
+		walletTag = businessWalletLevelDispatchTagFromStore(ctx, store, user.ID, settings)
+	}
+	summary := businessUserBillingSummary{
+		SubscriptionLevel:         businessBillingLevelViewFromTag(subscriptionTag, settings.Billing.SubscriptionLevels, defaultSubscriptionDispatchTag),
+		WalletLevel:               businessBillingLevelViewFromTag(walletTag, settings.Billing.WalletLevels, defaultWalletDispatchTag),
+		SubscriptionLevelOverride: subscriptionOverrideTag != "",
+		WalletLevelOverride:       walletOverrideTag != "",
+	}
+	if store == nil {
+		return summary
+	}
+	subscription, err := store.GetCurrentSubscription(ctx, strings.TrimSpace(user.ID))
+	if err == nil && subscription.ID != "" {
+		summary.Subscription = subscription
+	}
+	return summary
+}
+
+func businessSubscriptionLevelDispatchTagFromStore(ctx context.Context, store *businesspayments.Store, userID string, settings businesssettings.Settings) string {
+	fallback := fallbackBillingLevelTag(settings.Billing.SubscriptionLevels, defaultSubscriptionDispatchTag)
+	if store == nil {
+		return fallback
+	}
+	subscription, err := store.GetCurrentSubscription(ctx, strings.TrimSpace(userID))
+	if err != nil || !subscription.Active || subscription.Status != businesspayments.SubscriptionStatusActive || strings.TrimSpace(subscription.PackageID) == "" {
+		return fallback
+	}
+	pkg, ok, err := store.GetPackage(ctx, subscription.PackageID, true)
+	if err != nil || !ok {
+		return fallback
+	}
+	return selectConfiguredBillingLevelTag([]string{pkg.LevelTag}, settings.Billing.SubscriptionLevels, fallback)
+}
+
+func businessWalletLevelDispatchTagFromStore(ctx context.Context, store *businesspayments.Store, userID string, settings businesssettings.Settings) string {
+	fallback := fallbackBillingLevelTag(settings.Billing.WalletLevels, defaultWalletDispatchTag)
+	if store == nil {
+		return fallback
+	}
+	tags, err := store.UserPaidPackageLevelTags(ctx, strings.TrimSpace(userID), businesspayments.PackageTypeBalance)
+	if err != nil {
+		return fallback
+	}
+	return selectConfiguredBillingLevelTag(tags, settings.Billing.WalletLevels, fallback)
 }
 
 func (s *Server) purgeExpiredDeletedBusinessUsers(r *http.Request, userStore *businessauth.Store) error {
@@ -419,12 +502,12 @@ func (s *Server) purgeExpiredDeletedBusinessUsers(r *http.Request, userStore *bu
 		return nil
 	}
 
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		return err
 	}
 	defer imageStore.Close()
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		return err
 	}
@@ -490,7 +573,7 @@ func (s *Server) clearBusinessUserData(
 	if err := creditStore.DeleteUserCreditData(r.Context(), userID); err != nil {
 		return err
 	}
-	trackerStore, err := businesstracker.NewStore(s.cfg)
+	trackerStore, err := s.newBusinessTrackerStore()
 	if err != nil {
 		return err
 	}
@@ -505,7 +588,7 @@ func (s *Server) handleGetBusinessUserDetail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	userStore, err := businessauth.NewStore(s.cfg)
+	userStore, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -525,7 +608,7 @@ func (s *Server) handleGetBusinessUserDetail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "usage store failed"})
 		return
@@ -568,7 +651,7 @@ func (s *Server) handleGetBusinessUserDetail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -605,7 +688,7 @@ func (s *Server) handleGetBusinessMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authorization is invalid"})
 		return
 	}
-	userStore, err := businessauth.NewStore(s.cfg)
+	userStore, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -621,7 +704,7 @@ func (s *Server) handleGetBusinessMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -632,7 +715,58 @@ func (s *Server) handleGetBusinessMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, businessMeResponse{User: user, Credit: credit})
+	apiAccess, err := userStore.IsUserAPIAccessEnabled(r.Context(), session.UserID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, businessMeResponse{User: user, Credit: credit, ApiAccessEnabled: apiAccess})
+}
+
+func (s *Server) handleUpdateBusinessUserAPIAccess(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		return
+	}
+	userID := strings.TrimSpace(r.PathValue("id"))
+	if userID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "user id is required"})
+		return
+	}
+	store, err := s.newBusinessAuthStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
+		return
+	}
+	defer store.Close()
+	ok, err := store.SetUserAPIAccessEnabled(r.Context(), userID, body.Enabled)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "user not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "apiAccessEnabled": body.Enabled})
+}
+
+func (s *Server) handleListUsersAPIAccess(w http.ResponseWriter, r *http.Request) {
+	store, err := s.newBusinessAuthStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
+		return
+	}
+	defer store.Close()
+	ids, err := store.ListAPIAccessEnabledUserIDs(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enabledUserIds": ids})
 }
 
 func (s *Server) handleChangeBusinessMePassword(w http.ResponseWriter, r *http.Request) {
@@ -653,7 +787,7 @@ func (s *Server) handleChangeBusinessMePassword(w http.ResponseWriter, r *http.R
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "new password must be at least 6 characters"})
 		return
 	}
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -681,13 +815,13 @@ func (s *Server) handleListBusinessUsage(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authorization is invalid"})
 		return
 	}
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
 	}
 	defer creditStore.Close()
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "usage store failed"})
 		return
@@ -706,20 +840,20 @@ func (s *Server) handleListBusinessUsage(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleListAllBusinessUsage(w http.ResponseWriter, r *http.Request) {
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
 	}
 	defer creditStore.Close()
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "usage store failed"})
 		return
 	}
 	defer imageStore.Close()
 
-	userStore, err := businessauth.NewStore(s.cfg)
+	userStore, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -808,7 +942,7 @@ func (s *Server) handleCreateBusinessUser(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -847,7 +981,7 @@ func (s *Server) handleCreateBusinessUser(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if initialBalance > 0 {
-		creditStore, err := businesscredits.NewStore(s.cfg)
+		creditStore, err := s.newBusinessCreditStore()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 			return
@@ -871,7 +1005,7 @@ func (s *Server) handleUpdateBusinessUser(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -902,6 +1036,70 @@ func (s *Server) handleUpdateBusinessUser(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"item": user})
 }
 
+func (s *Server) handleUpdateBusinessUserBillingLevels(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		SubscriptionLevelTag string `json:"subscriptionLevelTag"`
+		WalletLevelTag       string `json:"walletLevelTag"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		return
+	}
+	settings := s.businessSystemSettings(r)
+	subscriptionLevelTag := normalizeProviderDispatchTag(body.SubscriptionLevelTag)
+	walletLevelTag := normalizeProviderDispatchTag(body.WalletLevelTag)
+	if subscriptionLevelTag != "" {
+		subscriptionLevelTag = configuredBillingLevelTag(subscriptionLevelTag, settings.Billing.SubscriptionLevels, "tier:")
+		if subscriptionLevelTag == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid subscription level"})
+			return
+		}
+	}
+	if walletLevelTag != "" {
+		walletLevelTag = configuredBillingLevelTag(walletLevelTag, settings.Billing.WalletLevels, "wallet:")
+		if walletLevelTag == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid wallet level"})
+			return
+		}
+	}
+
+	store, err := s.newBusinessAuthStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
+		return
+	}
+	defer store.Close()
+	if err := s.purgeExpiredDeletedBusinessUsers(r, store); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+
+	user, ok, err := store.UpdateUserBillingLevels(r.Context(), r.PathValue("id"), subscriptionLevelTag, walletLevelTag)
+	if errors.Is(err, businessauth.ErrUserDeleted) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "deleted user cannot be edited"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "user not found"})
+		return
+	}
+
+	paymentStore, _ := s.newBusinessPaymentStore()
+	if paymentStore != nil {
+		defer paymentStore.Close()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"item": businessUserWithBilling{
+			User:    user,
+			Billing: s.businessUserBillingSummary(r.Context(), paymentStore, user, settings),
+		},
+	})
+}
+
 func (s *Server) handleUpdateBusinessUserStatus(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Status string `json:"status"`
@@ -921,7 +1119,7 @@ func (s *Server) handleUpdateBusinessUserStatus(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -959,7 +1157,7 @@ func (s *Server) handleDeleteBusinessUser(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -992,7 +1190,7 @@ func (s *Server) handleRestoreBusinessUser(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "user id is required"})
 		return
 	}
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -1020,7 +1218,7 @@ func (s *Server) handlePurgeBusinessUser(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "user id is required"})
 		return
 	}
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -1030,13 +1228,13 @@ func (s *Server) handlePurgeBusinessUser(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "usage store failed"})
 		return
 	}
 	defer imageStore.Close()
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -1065,7 +1263,7 @@ func (s *Server) handleClearBusinessUserData(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "user id is required"})
 		return
 	}
-	userStore, err := businessauth.NewStore(s.cfg)
+	userStore, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -1084,13 +1282,13 @@ func (s *Server) handleClearBusinessUserData(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "user not found"})
 		return
 	}
-	imageStore, err := businessimage.NewStore(s.cfg)
+	imageStore, err := s.newBusinessImageStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "usage store failed"})
 		return
 	}
 	defer imageStore.Close()
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -1109,7 +1307,7 @@ func (s *Server) handleGetBusinessCredit(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authorization is invalid"})
 		return
 	}
-	store, err := businesscredits.NewStore(s.cfg)
+	store, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -1121,6 +1319,30 @@ func (s *Server) handleGetBusinessCredit(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, summary)
+}
+
+func (s *Server) handleListBusinessCreditLedger(w http.ResponseWriter, r *http.Request) {
+	session, ok := requestAuthSession(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authorization is invalid"})
+		return
+	}
+	page, pageSize, offset := paginationFromQuery(r, "", 10, 50)
+	store, err := s.newBusinessCreditStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
+		return
+	}
+	defer store.Close()
+	items, total, err := store.UserFacingLedgerEntriesPage(r.Context(), session.UserID, pageSize, offset)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, businessCreditLedgerResponse{
+		Items: items,
+		Page:  paginationMeta{Page: page, PageSize: pageSize, Total: total},
+	})
 }
 
 func (s *Server) handleSetBusinessUserCredit(w http.ResponseWriter, r *http.Request) {
@@ -1144,7 +1366,7 @@ func (s *Server) handleSetBusinessUserCredit(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	userStore, err := businessauth.NewStore(s.cfg)
+	userStore, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return
@@ -1165,7 +1387,7 @@ func (s *Server) handleSetBusinessUserCredit(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "credit store failed"})
 		return
@@ -1212,7 +1434,7 @@ func (s *Server) handleResetBusinessUserPassword(w http.ResponseWriter, r *http.
 		return
 	}
 
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "user store failed"})
 		return

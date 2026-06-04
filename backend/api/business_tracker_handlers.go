@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-
-	"imagestudio/internal/businesstracker"
 )
 
 func (s *Server) handleBusinessTrackerSummary(w http.ResponseWriter, r *http.Request) {
@@ -15,7 +13,7 @@ func (s *Server) handleBusinessTrackerSummary(w http.ResponseWriter, r *http.Req
 			windowSeconds = parsed
 		}
 	}
-	store, err := businesstracker.NewStore(s.cfg)
+	store, err := s.newBusinessTrackerStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "tracker store failed"})
 		return

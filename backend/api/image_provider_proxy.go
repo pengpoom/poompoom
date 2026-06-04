@@ -24,35 +24,61 @@ import (
 	"imagestudio/internal/businesscredits"
 	"imagestudio/internal/businessimage"
 	"imagestudio/internal/businessjobs"
+	"imagestudio/internal/businessmodels"
+	"imagestudio/internal/businesspayments"
 	"imagestudio/internal/businessproviders"
 	"imagestudio/internal/businesssettings"
 	"imagestudio/internal/businesstracker"
+	"imagestudio/internal/riskcontrol"
 )
 
 const maxImageProviderRequestBytes = 96 << 20
+
+var imageSourceFetchClient = &http.Client{Timeout: 30 * time.Second}
+
 const maxImageProviderResponseBytes = 80 << 20
 const maxProviderImageGenerationAttempts = 2
 const imageProviderOpenAICompatible = "openai_compatible"
 const imageProviderGeminiBanana = "gemini_banana"
+const imageProviderSourcePool = "provider_pool"
+const imageProviderSourceLegacy = "legacy_provider"
+const imageProviderSourceAPIAccess = "api_access"
+const imageProviderSourceEnv = "environment"
 const defaultGeminiBananaModel = "gemini-2.5-flash-image"
 
 type imageProviderProxyConfig struct {
-	Provider       string
-	ProviderID     string
-	ProviderName   string
-	Platform       string
-	BaseURL        string
-	APIKey         string
-	Model          string
-	RequestTimeout time.Duration
+	Provider               string
+	ProviderID             string
+	ProviderName           string
+	ProviderSource         string
+	ProviderGroupID        string
+	ProviderGroupMatchMode string
+	ProviderGroupTags      string
+	DispatchStrategy       string
+	DispatchTrace          []string
+	DispatchTags           []string
+	Platform               string
+	BaseURL                string
+	APIKey                 string
+	Model                  string
+	RequestTimeout         time.Duration
 }
 
 type providerImageGenerateMetadata struct {
-	ConversationID string
-	TurnID         string
-	JobID          string
-	Title          string
-	Platform       string
+	ConversationID    string
+	TurnID            string
+	JobID             string
+	Title             string
+	Platform          string
+	ModelID           string
+	ModelLabel        string
+	Vendor            string
+	VendorLabel       string
+	CreditCost        int64
+	CompareBatchID    string
+	CompareModelIndex int
+	CompareModelCount int
+	DispatchTags      []string
 }
 
 type providerImageSource struct {
@@ -78,6 +104,7 @@ type providerImageGenerateExecution struct {
 	UserID             string
 	Payload            map[string]any
 	StartedAt          time.Time
+	TrustedPayload     bool
 	AfterRunningMarked func()
 }
 
@@ -109,6 +136,19 @@ func newProviderImageGenerateSubmitError(result providerImageGenerateResult) err
 	return &providerImageGenerateSubmitError{result: result}
 }
 
+type providerImageGenerateJobSubmitError struct {
+	result providerImageGenerateResult
+	job    businessjobs.Job
+}
+
+func (e *providerImageGenerateJobSubmitError) Error() string {
+	return strings.TrimSpace(e.result.ErrorMessage)
+}
+
+func newProviderImageGenerateJobSubmitError(result providerImageGenerateResult, job businessjobs.Job) error {
+	return &providerImageGenerateJobSubmitError{result: result, job: job}
+}
+
 func providerImageGenerateSuccess(body []byte, contentType string) providerImageGenerateResult {
 	if strings.TrimSpace(contentType) == "" {
 		contentType = "application/json"
@@ -130,12 +170,73 @@ func providerImageGenerateError(statusCode int, code, message string) providerIm
 
 func providerImageGenerateAdmissionError(err error) providerImageGenerateResult {
 	if errors.Is(err, errImageAdmissionQueueFull) {
-		return providerImageGenerateError(http.StatusTooManyRequests, "image_queue_full", "现在使用人数较多，请稍后使用。")
+		return providerImageGenerateError(http.StatusTooManyRequests, "image_queue_full", imageBusyMessage)
 	}
 	if errors.Is(err, errImageAdmissionQueueTimeout) {
-		return providerImageGenerateError(http.StatusGatewayTimeout, "image_queue_timeout", "现在使用人数较多，请稍后使用。")
+		return providerImageGenerateError(http.StatusGatewayTimeout, "image_queue_timeout", imageBusyMessage)
 	}
-	return providerImageGenerateError(http.StatusGatewayTimeout, "image_queue_cancelled", "现在使用人数较多，请稍后使用。")
+	return providerImageGenerateError(http.StatusGatewayTimeout, "image_queue_cancelled", imageBusyMessage)
+}
+
+func providerImageCapacityError(code string) providerImageGenerateResult {
+	return providerImageGenerateError(http.StatusTooManyRequests, code, businessJobCapacityMessage(code))
+}
+
+func riskControlProviderImageMessage(decision riskcontrol.Decision) string {
+	if decision.Action == riskcontrol.ActionError {
+		switch decision.InternalErrorCode {
+		case riskcontrol.DecisionErrorConfig:
+			return "风控配置异常，请联系管理员"
+		default:
+			return "风控服务暂不可用，请稍后重试"
+		}
+	}
+	return firstNonEmpty(strings.TrimSpace(decision.Message), "内容审计命中风险规则，请调整输入后重试")
+}
+
+func riskControlProviderImageError(decision riskcontrol.Decision) providerImageGenerateResult {
+	if decision.Action == riskcontrol.ActionError {
+		code := firstNonEmpty(decision.InternalErrorCode, riskcontrol.DecisionErrorUnavailable)
+		statusCode := http.StatusServiceUnavailable
+		if code == riskcontrol.DecisionErrorConfig {
+			statusCode = http.StatusInternalServerError
+		}
+		return providerImageGenerateError(statusCode, code, riskControlProviderImageMessage(decision))
+	}
+	return providerImageGenerateError(http.StatusForbidden, "risk_control_blocked", riskControlProviderImageMessage(decision))
+}
+
+func (s *Server) checkProviderImageRiskControl(ctx context.Context, userID string, metadata providerImageGenerateMetadata, providerCfg imageProviderProxyConfig, prompt string, images []riskcontrol.ModerationImage) riskcontrol.Decision {
+	store, err := s.newRiskControlStore()
+	if err != nil {
+		return riskcontrol.ErrorDecision(err)
+	}
+	defer store.Close()
+	service := riskcontrol.NewService(store)
+	decision, err := service.Check(ctx, riskcontrol.CheckInput{
+		UserID:         userID,
+		JobID:          metadata.JobID,
+		ConversationID: metadata.ConversationID,
+		TurnID:         metadata.TurnID,
+		Platform:       providerCfg.Platform,
+		Model:          providerCfg.Model,
+		Prompt:         prompt,
+		Images:         images,
+	})
+	if err != nil {
+		return riskcontrol.ErrorDecision(err)
+	}
+	return decision
+}
+
+func riskControlJobErrorCode(decision riskcontrol.Decision) string {
+	if decision.Action == riskcontrol.ActionError {
+		return "risk_control_error"
+	}
+	if decision.Action == riskcontrol.ActionAllow {
+		return "risk_control_skipped"
+	}
+	return "risk_control_blocked"
 }
 
 func (result providerImageGenerateResult) write(w http.ResponseWriter) {
@@ -218,6 +319,13 @@ func (s *Server) handleProviderImageGenerateSubmit(w http.ResponseWriter, r *htt
 
 	job, err := s.createQueuedProviderImageJob(r.Context(), userID, payload, startedAt)
 	if err != nil {
+		var jobSubmitErr *providerImageGenerateJobSubmitError
+		if errors.As(err, &jobSubmitErr) {
+			s.notifyBusinessImageJob(jobSubmitErr.job)
+			jobSubmitErr.result.write(w)
+			return
+		}
+		s.recordFailedProviderImageSubmit(r.Context(), userID, payload, err, startedAt)
 		var submitErr *providerImageGenerateSubmitError
 		if errors.As(err, &submitErr) {
 			submitErr.result.write(w)
@@ -227,7 +335,7 @@ func (s *Server) handleProviderImageGenerateSubmit(w http.ResponseWriter, r *htt
 		return
 	}
 
-	s.wakeBusinessImageJobWorker()
+	s.notifyBusinessImageJob(job)
 
 	writeJSON(w, http.StatusAccepted, providerImageGenerateJobPayload{
 		Job:            job,
@@ -249,32 +357,167 @@ func providerImagePayloadJSON(payload map[string]any) []byte {
 	return raw
 }
 
+func persistProviderConfigInPayload(payload map[string]any, providerCfg imageProviderProxyConfig) {
+	if payload == nil {
+		return
+	}
+	delete(payload, "providerSource")
+	delete(payload, "providerId")
+	delete(payload, "providerName")
+	delete(payload, "providerGroupId")
+	delete(payload, "providerGroupMatchMode")
+	delete(payload, "providerGroupTags")
+	delete(payload, "dispatchStrategy")
+	delete(payload, "dispatchTrace")
+	if providerCfg.ProviderSource != "" {
+		payload["providerSource"] = providerCfg.ProviderSource
+	}
+	if providerCfg.Platform != "" {
+		payload["platform"] = providerCfg.Platform
+	}
+	if providerCfg.ProviderID != "" {
+		payload["providerId"] = providerCfg.ProviderID
+	}
+	if providerCfg.ProviderName != "" {
+		payload["providerName"] = providerCfg.ProviderName
+	}
+	if providerCfg.ProviderGroupID != "" {
+		payload["providerGroupId"] = providerCfg.ProviderGroupID
+	}
+	if providerCfg.ProviderGroupMatchMode != "" {
+		payload["providerGroupMatchMode"] = providerCfg.ProviderGroupMatchMode
+	}
+	if providerCfg.ProviderGroupTags != "" {
+		payload["providerGroupTags"] = providerCfg.ProviderGroupTags
+	}
+	if providerCfg.DispatchStrategy != "" {
+		payload["dispatchStrategy"] = providerCfg.DispatchStrategy
+	}
+	if len(providerCfg.DispatchTrace) > 0 {
+		payload["dispatchTrace"] = providerCfg.DispatchTrace
+	}
+	if len(providerCfg.DispatchTags) > 0 {
+		setProviderDispatchTagPayload(payload, "dispatchTags", providerCfg.DispatchTags)
+	}
+}
+
+func providerPayloadForConfig(payload map[string]any, providerCfg imageProviderProxyConfig) (map[string]any, map[string]any) {
+	nextPayload := cloneProviderPayload(payload)
+	nextPayload["model"] = providerImageRequestModel(nextPayload, providerCfg)
+	persistProviderConfigInPayload(nextPayload, providerCfg)
+	return nextPayload, buildProviderImageGeneratePayload(nextPayload)
+}
+
+func (s *Server) prepareProviderImageModelPayload(ctx context.Context, payload map[string]any) providerImageGenerateMetadata {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if item, ok := s.resolveBusinessImageModel(ctx, payload); ok {
+		applyBusinessImageModelPayload(payload, item)
+		return providerImageGenerateMetadataFromModel(payload, item)
+	}
+	return extractProviderImageGenerateMetadata(payload)
+}
+
+func providerImageCreditCost(settings businesssettings.Settings, metadata providerImageGenerateMetadata, platform string, count int) int64 {
+	fallbackUnitCost := businesssettings.CreditCostForPlatform(settings, platform, 1)
+	return businessmodels.CreditCostForModel(businessmodels.Model{
+		ID:         metadata.ModelID,
+		Platform:   platform,
+		CreditCost: metadata.CreditCost,
+	}, count, fallbackUnitCost)
+}
+
 func (s *Server) prepareProviderImagePayload(ctx context.Context, userID string, payload map[string]any) (map[string]any, providerResolvedEditInput, error) {
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	if !providerPayloadIsEdit(payload) {
+	sources := providerImageSourcesFromPayload(payload["sourceImages"])
+	if len(sources) == 0 {
 		return payload, providerResolvedEditInput{}, nil
 	}
-	editInput, err := s.resolveProviderEditInputs(payload)
+	sourceInput, err := s.resolveProviderSourceImages(sources, providerPayloadIsEdit(payload))
 	if err != nil {
 		return payload, providerResolvedEditInput{}, err
 	}
 	nextPayload := cloneProviderPayload(payload)
-	sourceImages := make([]map[string]any, 0, len(editInput.Images)+1)
+	sourceImageCapacity := len(sourceInput.Images)
+	if sourceInput.Mask != nil {
+		sourceImageCapacity++
+	}
+	sourceImages := make([]map[string]any, 0, sourceImageCapacity)
 	conversationID := strings.TrimSpace(stringValue(nextPayload["conversationId"]))
 	generationID := firstNonEmpty(
 		strings.TrimSpace(stringValue(nextPayload["jobId"])),
 		strings.TrimSpace(stringValue(nextPayload["turnId"])),
 	)
-	for index, image := range editInput.Images {
+	for index, image := range sourceInput.Images {
 		sourceImages = append(sourceImages, s.providerEditAssetPayload(ctx, userID, conversationID, generationID, index, image))
 	}
-	if editInput.Mask != nil {
-		sourceImages = append(sourceImages, s.providerEditAssetPayload(ctx, userID, conversationID, generationID, len(sourceImages), *editInput.Mask))
+	if sourceInput.Mask != nil {
+		sourceImages = append(sourceImages, s.providerEditAssetPayload(ctx, userID, conversationID, generationID, len(sourceImages), *sourceInput.Mask))
 	}
 	nextPayload["sourceImages"] = sourceImages
-	return nextPayload, editInput, nil
+	if providerPayloadIsEdit(payload) {
+		return nextPayload, sourceInput, nil
+	}
+	return nextPayload, providerResolvedEditInput{}, nil
+}
+
+func (s *Server) providerRiskControlImagesFromPayload(payload map[string]any) ([]riskcontrol.ModerationImage, error) {
+	sources := providerImageSourcesFromPayload(payload["sourceImages"])
+	if len(sources) == 0 {
+		return nil, nil
+	}
+	images := make([]riskcontrol.ModerationImage, 0, len(sources))
+	for _, source := range sources {
+		if strings.EqualFold(strings.TrimSpace(source.Role), "mask") {
+			continue
+		}
+		data, err := s.resolveProviderSourceImageBytes(source)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) == 0 {
+			continue
+		}
+		images = append(images, riskcontrol.ModerationImage{
+			MimeType: http.DetectContentType(data),
+			Data:     data,
+		})
+	}
+	return images, nil
+}
+
+func (s *Server) resolveProviderEditInputs(payload map[string]any) (providerResolvedEditInput, error) {
+	return s.resolveProviderSourceImages(providerImageSourcesFromPayload(payload["sourceImages"]), true)
+}
+
+func (s *Server) resolveProviderSourceImages(sources []providerImageSource, requireImage bool) (providerResolvedEditInput, error) {
+	result := providerResolvedEditInput{Images: make([]providerEditAsset, 0, len(sources))}
+	for _, source := range sources {
+		data, err := s.resolveProviderSourceImageBytes(source)
+		if err != nil {
+			return providerResolvedEditInput{}, err
+		}
+		asset := providerEditAsset{
+			Source: source,
+			Data:   data,
+		}
+		if strings.EqualFold(strings.TrimSpace(source.Role), "mask") {
+			result.Mask = &asset
+			continue
+		}
+		result.Images = append(result.Images, asset)
+	}
+	if requireImage && len(result.Images) == 0 {
+		return providerResolvedEditInput{}, &providerGenerationError{
+			HTTPStatus: http.StatusBadRequest,
+			Code:       "image_required",
+			Message:    "编辑模式至少需要一张源图",
+		}
+	}
+	return result, nil
 }
 
 func cloneProviderPayload(payload map[string]any) map[string]any {
@@ -282,6 +525,32 @@ func cloneProviderPayload(payload map[string]any) map[string]any {
 	for key, value := range payload {
 		next[key] = value
 	}
+	return next
+}
+
+func sanitizeClientProviderSelectionPayload(payload map[string]any) map[string]any {
+	if payload == nil {
+		return nil
+	}
+	if strings.TrimSpace(stringValue(payload["providerSource"])) == "" &&
+		strings.TrimSpace(stringValue(payload["providerId"])) == "" &&
+		strings.TrimSpace(stringValue(payload["providerName"])) == "" &&
+		strings.TrimSpace(stringValue(payload["providerGroupId"])) == "" &&
+		strings.TrimSpace(stringValue(payload["providerGroupMatchMode"])) == "" &&
+		strings.TrimSpace(stringValue(payload["providerGroupTags"])) == "" &&
+		strings.TrimSpace(stringValue(payload["dispatchStrategy"])) == "" &&
+		len(providerDispatchTagStrings(payload["dispatchTrace"])) == 0 {
+		return payload
+	}
+	next := cloneProviderPayload(payload)
+	delete(next, "providerSource")
+	delete(next, "providerId")
+	delete(next, "providerName")
+	delete(next, "providerGroupId")
+	delete(next, "providerGroupMatchMode")
+	delete(next, "providerGroupTags")
+	delete(next, "dispatchStrategy")
+	delete(next, "dispatchTrace")
 	return next
 }
 
@@ -324,21 +593,32 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 	if payload == nil {
 		payload = map[string]any{}
 	}
+	payload = sanitizeClientProviderSelectionPayload(payload)
+	metadata := s.prepareProviderImageModelPayload(ctx, payload)
 	if startedAt.IsZero() {
 		startedAt = time.Now().UTC()
 	}
-	metadata := extractProviderImageGenerateMetadata(payload)
-	providerCfg, err := s.imageProviderProxyConfig(metadata.Platform)
+	metadata = s.enrichProviderImageDispatchTags(ctx, userID, payload, metadata, false)
+	providerRequest := append([]string{metadata.Platform}, metadata.DispatchTags...)
+	providerCfg, err := s.imageProviderProxyConfig(providerRequest...)
 	if err != nil {
-		return businessjobs.Job{}, newProviderImageGenerateSubmitError(providerImageGenerateError(http.StatusInternalServerError, "provider_not_configured", err.Error()))
+		result := providerImageGenerateError(http.StatusInternalServerError, "provider_not_configured", err.Error())
+		if job, saveErr := s.saveFailedProviderImageSubmitJob(ctx, userID, payload, metadata, result, startedAt); saveErr == nil && job.ID != "" {
+			return businessjobs.Job{}, newProviderImageGenerateJobSubmitError(result, job)
+		}
+		return businessjobs.Job{}, newProviderImageGenerateSubmitError(result)
 	}
+	systemSettings := s.businessSystemSettingsForContext(ctx)
 	prompt := strings.TrimSpace(stringValue(payload["prompt"]))
 	if prompt == "" {
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
 		return businessjobs.Job{}, newProviderImageGenerateSubmitError(providerImageGenerateError(http.StatusBadRequest, "invalid_request", "prompt is required"))
 	}
 	payload["prompt"] = prompt
 	requestModel := providerImageRequestModel(payload, providerCfg)
+	providerCfg.Model = requestModel
 	payload["model"] = requestModel
+	persistProviderConfigInPayload(payload, providerCfg)
 	if normalizePositiveInt(payload["n"]) <= 0 {
 		payload["n"] = 1
 	}
@@ -350,40 +630,172 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 	if requestedCount <= 0 {
 		requestedCount = 1
 	}
-	systemSettings := s.businessSystemSettingsForContext(ctx)
 	if systemSettings.Generation.MaxCount > 0 && requestedCount > systemSettings.Generation.MaxCount {
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
 		return businessjobs.Job{}, newProviderImageGenerateSubmitError(providerImageGenerateError(http.StatusBadRequest, "invalid_request", fmt.Sprintf("单次最多生成 %d 张图片", systemSettings.Generation.MaxCount)))
 	}
 	payload, _, err = s.prepareProviderImagePayload(ctx, userID, payload)
 	if err != nil {
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
 		if providerErr, ok := err.(*providerGenerationError); ok {
 			return businessjobs.Job{}, newProviderImageGenerateSubmitError(providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, providerErr.Message))
 		}
 		return businessjobs.Job{}, err
 	}
+	riskImages, err := s.providerRiskControlImagesFromPayload(payload)
+	if err != nil {
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
+		providerErr := providerGenerationErrorDetails(err)
+		return businessjobs.Job{}, newProviderImageGenerateSubmitError(providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, providerErr.Message))
+	}
+	if decision := s.checkProviderImageRiskControl(ctx, userID, metadata, providerCfg, prompt, riskImages); !decision.Allowed {
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
+		result := riskControlProviderImageError(decision)
+		jobResult := result
+		jobResult.ErrorCode = riskControlJobErrorCode(decision)
+		if job, saveErr := s.saveFailedProviderImageSubmitJob(ctx, userID, payload, metadata, jobResult, startedAt); saveErr == nil && job.ID != "" {
+			return businessjobs.Job{}, newProviderImageGenerateJobSubmitError(result, job)
+		}
+		return businessjobs.Job{}, newProviderImageGenerateSubmitError(result)
+	}
 	generationID := firstNonEmpty(metadata.JobID, metadata.TurnID)
 	job := businessjobs.Job{
-		ID:             metadata.JobID,
-		UserID:         userID,
-		ConversationID: metadata.ConversationID,
-		GenerationID:   generationID,
-		TurnID:         metadata.TurnID,
-		Platform:       providerCfg.Platform,
-		ProviderID:     providerCfg.ProviderID,
-		ProviderName:   providerCfg.ProviderName,
-		Model:          requestModel,
-		Prompt:         prompt,
-		Size:           strings.TrimSpace(stringValue(payload["size"])),
-		Quality:        strings.TrimSpace(stringValue(payload["quality"])),
-		RequestedCount: requestedCount,
-		Status:         businessjobs.StatusQueued,
-		Stage:          "queued",
-		CreditReserved: businesssettings.CreditCostForPlatform(systemSettings, providerCfg.Platform, requestedCount),
-		PayloadJSON:    providerImagePayloadJSON(payload),
-		CreatedAt:      startedAt.Format(time.RFC3339Nano),
-		QueuedAt:       startedAt.Format(time.RFC3339Nano),
+		ID:                metadata.JobID,
+		UserID:            userID,
+		ConversationID:    metadata.ConversationID,
+		GenerationID:      generationID,
+		TurnID:            metadata.TurnID,
+		Platform:          providerCfg.Platform,
+		ProviderID:        providerCfg.ProviderID,
+		ProviderName:      providerCfg.ProviderName,
+		Model:             requestModel,
+		CompareBatchID:    metadata.CompareBatchID,
+		CompareModelIndex: metadata.CompareModelIndex,
+		CompareModelCount: metadata.CompareModelCount,
+		Prompt:            prompt,
+		Size:              strings.TrimSpace(stringValue(payload["size"])),
+		Quality:           strings.TrimSpace(stringValue(payload["quality"])),
+		RequestedCount:    requestedCount,
+		Status:            businessjobs.StatusQueued,
+		Stage:             "queued",
+		CreditReserved:    providerImageCreditCost(systemSettings, metadata, providerCfg.Platform, requestedCount),
+		PayloadJSON:       providerImagePayloadJSON(payload),
+		CreatedAt:         startedAt.Format(time.RFC3339Nano),
+		QueuedAt:          startedAt.Format(time.RFC3339Nano),
 	}
-	store, err := businessjobs.NewStore(s.cfg)
+	store, err := s.newBusinessJobStore()
+	if err != nil {
+		return businessjobs.Job{}, err
+	}
+	defer store.Close()
+	saved, err := store.SaveQueuedWithCapacity(ctx, job, businessJobCapacityLimits(systemSettings))
+	if err != nil {
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
+		if capacityCode := businessJobCapacityErrorCode(err); capacityCode != "" {
+			return businessjobs.Job{}, newProviderImageGenerateSubmitError(providerImageCapacityError(capacityCode))
+		}
+		return businessjobs.Job{}, err
+	}
+	s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, businessjobs.StatusQueued, "", startedAt)
+	return saved, nil
+}
+
+func (s *Server) recordFailedProviderImageSubmit(ctx context.Context, userID string, payload map[string]any, err error, startedAt time.Time) {
+	if payload == nil {
+		return
+	}
+	metadata := s.prepareProviderImageModelPayload(ctx, payload)
+	if strings.TrimSpace(metadata.ConversationID) == "" || strings.TrimSpace(metadata.TurnID) == "" {
+		return
+	}
+	prompt := strings.TrimSpace(stringValue(payload["prompt"]))
+	if prompt == "" {
+		return
+	}
+	providerCfg := imageProviderProxyConfig{
+		Platform: businessproviders.NormalizePlatform(metadata.Platform),
+		Model:    strings.TrimSpace(stringValue(payload["model"])),
+	}
+	if providerCfg.Platform == "" {
+		if item, ok := s.resolveBusinessImageModel(ctx, payload); ok {
+			providerCfg.Platform = item.Platform
+		}
+	}
+	message := "提交任务失败"
+	var submitErr *providerImageGenerateSubmitError
+	if errors.As(err, &submitErr) {
+		message = providerImageGenerationFailureReason(submitErr.result, message)
+	} else if err != nil {
+		message = firstNonEmpty(strings.TrimSpace(err.Error()), message)
+	}
+	s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", message, startedAt)
+}
+
+func providerImageGenerationFailureReason(result providerImageGenerateResult, fallback string) string {
+	code := strings.TrimSpace(result.ErrorCode)
+	if strings.HasPrefix(code, "risk_control_") {
+		return code
+	}
+	return firstNonEmpty(strings.TrimSpace(result.ErrorMessage), fallback)
+}
+
+func (s *Server) saveFailedProviderImageSubmitJob(ctx context.Context, userID string, payload map[string]any, metadata providerImageGenerateMetadata, result providerImageGenerateResult, startedAt time.Time) (businessjobs.Job, error) {
+	if payload == nil {
+		return businessjobs.Job{}, fmt.Errorf("payload is required")
+	}
+	if strings.TrimSpace(metadata.JobID) == "" {
+		metadata.JobID = businessjobs.NewJobID()
+		payload["jobId"] = metadata.JobID
+	}
+	if strings.TrimSpace(metadata.TurnID) == "" {
+		metadata.TurnID = metadata.JobID
+		payload["turnId"] = metadata.TurnID
+	}
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+	}
+	platform := businessproviders.NormalizePlatform(metadata.Platform)
+	if platform == "" {
+		if item, ok := s.resolveBusinessImageModel(ctx, payload); ok {
+			applyBusinessImageModelPayload(payload, item)
+			platform = item.Platform
+			metadata = providerImageGenerateMetadataFromModel(payload, item)
+		} else {
+			platform = businessproviders.PlatformGPTImage
+		}
+	}
+	prompt := strings.TrimSpace(stringValue(payload["prompt"]))
+	requestedCount := normalizePositiveInt(payload["n"])
+	if requestedCount <= 0 {
+		requestedCount = 1
+	}
+	finishedAt := time.Now().UTC()
+	job := businessjobs.Job{
+		ID:                metadata.JobID,
+		UserID:            userID,
+		ConversationID:    metadata.ConversationID,
+		GenerationID:      firstNonEmpty(metadata.JobID, metadata.TurnID),
+		TurnID:            metadata.TurnID,
+		Platform:          platform,
+		Model:             strings.TrimSpace(stringValue(payload["model"])),
+		CompareBatchID:    metadata.CompareBatchID,
+		CompareModelIndex: metadata.CompareModelIndex,
+		CompareModelCount: metadata.CompareModelCount,
+		Prompt:            prompt,
+		Size:              strings.TrimSpace(stringValue(payload["size"])),
+		Quality:           strings.TrimSpace(stringValue(payload["quality"])),
+		RequestedCount:    requestedCount,
+		Status:            businessjobs.StatusFailed,
+		Stage:             "dispatch",
+		ErrorCode:         strings.TrimSpace(result.ErrorCode),
+		ErrorMessage:      strings.TrimSpace(result.ErrorMessage),
+		PayloadJSON:       providerImagePayloadJSON(payload),
+		CreatedAt:         startedAt.Format(time.RFC3339Nano),
+		QueuedAt:          startedAt.Format(time.RFC3339Nano),
+		FinishedAt:        finishedAt.Format(time.RFC3339Nano),
+		TotalDurationMS:   finishedAt.Sub(startedAt).Milliseconds(),
+	}
+	store, err := s.newBusinessJobStore()
 	if err != nil {
 		return businessjobs.Job{}, err
 	}
@@ -392,16 +804,30 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 	if err != nil {
 		return businessjobs.Job{}, err
 	}
-	s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, businessjobs.StatusQueued, "", startedAt)
+	s.recordFailedProviderImageSubmit(ctx, userID, payload, newProviderImageGenerateSubmitError(result), startedAt)
+	s.saveBusinessImageTracker(context.Background(), businesstracker.Record{
+		ID:              businesstracker.NewRecordID(),
+		UserID:          userID,
+		Platform:        platform,
+		Model:           job.Model,
+		Status:          businesstracker.StatusFailed,
+		Stage:           job.Stage,
+		ErrorCode:       job.ErrorCode,
+		ErrorMessage:    job.ErrorMessage,
+		CreatedAt:       startedAt.Format(time.RFC3339Nano),
+		FinishedAt:      finishedAt.Format(time.RFC3339Nano),
+		TotalDurationMS: job.TotalDurationMS,
+	})
 	return saved, nil
 }
 
 func (s *Server) runProviderImageGenerateJob(userID string, payload map[string]any, startedAt time.Time) {
 	s.executeProviderImageGenerate(providerImageGenerateExecution{
-		Context:   context.Background(),
-		UserID:    userID,
-		Payload:   payload,
-		StartedAt: startedAt,
+		Context:        context.Background(),
+		UserID:         userID,
+		Payload:        payload,
+		StartedAt:      startedAt,
+		TrustedPayload: true,
 	})
 }
 
@@ -414,11 +840,15 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	if startedAt.IsZero() {
 		startedAt = time.Now().UTC()
 	}
+	if !execution.TrustedPayload {
+		execution.Payload = sanitizeClientProviderSelectionPayload(execution.Payload)
+	}
 	userID := strings.TrimSpace(execution.UserID)
 	payload := execution.Payload
 	if payload == nil {
 		payload = map[string]any{}
 	}
+	metadata := s.prepareProviderImageModelPayload(ctx, payload)
 	tracker := businesstracker.Record{
 		ID:        businesstracker.NewRecordID(),
 		UserID:    userID,
@@ -437,23 +867,26 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		s.saveBusinessImageTracker(context.Background(), tracker)
 	}
 
-	metadata := extractProviderImageGenerateMetadata(payload)
+	metadata = s.enrichProviderImageDispatchTags(ctx, userID, payload, metadata, execution.TrustedPayload)
 	tracker.ConversationID = metadata.ConversationID
 	tracker.TurnID = metadata.TurnID
 	tracker.GenerationID = firstNonEmpty(metadata.JobID, metadata.TurnID)
 	tracker.Platform = businessproviders.NormalizePlatform(metadata.Platform)
 	job := businessjobs.Job{
-		ID:             firstNonEmpty(metadata.JobID, businessjobs.NewJobID()),
-		UserID:         userID,
-		ConversationID: metadata.ConversationID,
-		GenerationID:   firstNonEmpty(metadata.JobID, metadata.TurnID),
-		TurnID:         metadata.TurnID,
-		Platform:       tracker.Platform,
-		Status:         businessjobs.StatusQueued,
-		Stage:          "received",
-		PayloadJSON:    providerImagePayloadJSON(payload),
-		CreatedAt:      startedAt.Format(time.RFC3339Nano),
-		QueuedAt:       startedAt.Format(time.RFC3339Nano),
+		ID:                firstNonEmpty(metadata.JobID, businessjobs.NewJobID()),
+		UserID:            userID,
+		ConversationID:    metadata.ConversationID,
+		GenerationID:      firstNonEmpty(metadata.JobID, metadata.TurnID),
+		TurnID:            metadata.TurnID,
+		Platform:          tracker.Platform,
+		CompareBatchID:    metadata.CompareBatchID,
+		CompareModelIndex: metadata.CompareModelIndex,
+		CompareModelCount: metadata.CompareModelCount,
+		Status:            businessjobs.StatusQueued,
+		Stage:             "received",
+		PayloadJSON:       providerImagePayloadJSON(payload),
+		CreatedAt:         startedAt.Format(time.RFC3339Nano),
+		QueuedAt:          startedAt.Format(time.RFC3339Nano),
 	}
 	jobCtx, cancelJobContext := context.WithCancel(ctx)
 	unregisterJob := s.registerActiveBusinessImageJob(job.ID, cancelJobContext)
@@ -461,7 +894,7 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	defer cancelJobContext()
 
 	saveJob := func(next businessjobs.Job) {
-		store, err := businessjobs.NewStore(s.cfg)
+		store, err := s.newBusinessJobStore()
 		if err != nil {
 			return
 		}
@@ -469,6 +902,15 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		if current, ok, getErr := store.Get(context.Background(), next.ID, next.UserID); getErr == nil && ok {
 			if current.CreditRefunded > next.CreditRefunded {
 				next.CreditRefunded = current.CreditRefunded
+			}
+			if next.ClaimedBy == "" {
+				next.ClaimedBy = current.ClaimedBy
+			}
+			if next.ClaimedAt == "" {
+				next.ClaimedAt = current.ClaimedAt
+			}
+			if next.Attempts < current.Attempts {
+				next.Attempts = current.Attempts
 			}
 			if shouldPreserveCurrentBusinessImageJob(current, next) {
 				job = current
@@ -482,6 +924,18 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		if err == nil {
 			job = saved
 		}
+	}
+	saveRunningJob := func(next businessjobs.Job, settings businesssettings.Settings) error {
+		store, err := s.newBusinessJobStore()
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		saved, err := store.SaveRunningWithProviderCapacity(context.Background(), next, businessJobCapacityLimits(settings))
+		if err == nil {
+			job = saved
+		}
+		return err
 	}
 	finishJob := func(status, stage, errorCode, errorMessage string) {
 		finishedAt := time.Now().UTC()
@@ -501,7 +955,7 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		finishJob(businessjobs.StatusCancelled, "cancelled", "cancelled", message)
 		finishTracker(businesstracker.StatusFailed, "cancelled", "cancelled", message)
 	}
-	providerCfg, err := s.imageProviderProxyConfig(metadata.Platform)
+	providerCfg, err := s.imageProviderProxyConfigFromPayload(payload)
 	if err != nil {
 		job.Status = businessjobs.StatusFailed
 		job.Stage = "provider_config"
@@ -518,16 +972,30 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	job.Platform = providerCfg.Platform
 	job.ProviderID = providerCfg.ProviderID
 	job.ProviderName = providerCfg.ProviderName
+	blockRiskControl := func(decision riskcontrol.Decision) providerImageGenerateResult {
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
+		result := riskControlProviderImageError(decision)
+		jobErrorCode := riskControlJobErrorCode(decision)
+		job.PayloadJSON = providerImagePayloadJSON(payload)
+		saveJob(job)
+		s.recordProviderImageGeneration(context.Background(), userID, metadata, payload, nil, "failed", jobErrorCode, startedAt)
+		finishJob(businessjobs.StatusFailed, "risk_control", jobErrorCode, result.ErrorMessage)
+		finishTracker(businesstracker.StatusFailed, "risk_control", jobErrorCode, result.ErrorMessage)
+		return result
+	}
 	prompt := strings.TrimSpace(stringValue(payload["prompt"]))
 	if prompt == "" {
 		job.Prompt = prompt
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
 		finishJob(businessjobs.StatusFailed, "validation", "invalid_request", "prompt is required")
 		finishTracker(businesstracker.StatusFailed, "validation", "invalid_request", "prompt is required")
 		return providerImageGenerateError(http.StatusBadRequest, "invalid_request", "prompt is required")
 	}
 	payload["prompt"] = prompt
 	requestModel := providerImageRequestModel(payload, providerCfg)
+	providerCfg.Model = requestModel
 	payload["model"] = requestModel
+	persistProviderConfigInPayload(payload, providerCfg)
 	tracker.Model = requestModel
 	job.Prompt = prompt
 	job.Model = requestModel
@@ -544,12 +1012,38 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	if systemSettings.Generation.MaxCount > 0 && requestedCount > systemSettings.Generation.MaxCount {
 		tracker.RequestedCount = requestedCount
 		job.RequestedCount = requestedCount
-		job.CreditReserved = businesssettings.CreditCostForPlatform(systemSettings, providerCfg.Platform, requestedCount)
+		job.CreditReserved = providerImageCreditCost(systemSettings, metadata, providerCfg.Platform, requestedCount)
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
 		finishJob(businessjobs.StatusFailed, "validation", "invalid_request", fmt.Sprintf("单次最多生成 %d 张图片", systemSettings.Generation.MaxCount))
 		finishTracker(businesstracker.StatusFailed, "validation", "invalid_request", fmt.Sprintf("单次最多生成 %d 张图片", systemSettings.Generation.MaxCount))
 		return providerImageGenerateError(http.StatusBadRequest, "invalid_request", fmt.Sprintf("单次最多生成 %d 张图片", systemSettings.Generation.MaxCount))
 	}
-	creditCost := businesssettings.CreditCostForPlatform(systemSettings, providerCfg.Platform, requestedCount)
+	var editInput providerResolvedEditInput
+	payload, editInput, err = s.prepareProviderImagePayload(ctx, userID, payload)
+	if err != nil {
+		job.PayloadJSON = providerImagePayloadJSON(payload)
+		providerErr := providerGenerationErrorDetails(err)
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
+		s.recordProviderImageGeneration(ctx, userID, metadata, payload, providerErr.ResponseBody, "failed", providerErr.Message, startedAt)
+		finishJob(businessjobs.StatusFailed, "validation", providerErr.Code, providerErr.Message)
+		finishTracker(businesstracker.StatusFailed, "validation", providerErr.Code, providerErr.Message)
+		return providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, providerErr.Message)
+	}
+	if !execution.TrustedPayload {
+		riskImages, err := s.providerRiskControlImagesFromPayload(payload)
+		if err != nil {
+			providerErr := providerGenerationErrorDetails(err)
+			s.reportProviderPoolRelease(context.Background(), providerCfg)
+			s.recordProviderImageGeneration(ctx, userID, metadata, payload, providerErr.ResponseBody, "failed", providerErr.Message, startedAt)
+			finishJob(businessjobs.StatusFailed, "validation", providerErr.Code, providerErr.Message)
+			finishTracker(businesstracker.StatusFailed, "validation", providerErr.Code, providerErr.Message)
+			return providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, providerErr.Message)
+		}
+		if decision := s.checkProviderImageRiskControl(ctx, userID, metadata, providerCfg, prompt, riskImages); !decision.Allowed {
+			return blockRiskControl(decision)
+		}
+	}
+	creditCost := providerImageCreditCost(systemSettings, metadata, providerCfg.Platform, requestedCount)
 	generationID := firstNonEmpty(metadata.JobID, metadata.TurnID)
 	tracker.RequestedCount = requestedCount
 	tracker.CreditReserved = creditCost
@@ -557,11 +1051,13 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	job.RequestedCount = requestedCount
 	job.CreditReserved = creditCost
 	if errors.Is(jobCtx.Err(), context.Canceled) {
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
 		cancelGeneration("任务已取消")
 		return providerImageGenerateError(http.StatusConflict, "cancelled", "任务已取消")
 	}
 	if latestJob, ok := s.businessImageJobByID(job.ID, userID); ok && businessJobCancelled(latestJob) {
 		job = latestJob
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
 		cancelGeneration("任务已取消")
 		return providerImageGenerateError(http.StatusConflict, "cancelled", "任务已取消")
 	}
@@ -575,14 +1071,16 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		tracker.QueueWaitMS = admissionInfo.QueueWaitMS
 		job.QueueWaitMS = admissionInfo.QueueWaitMS
 		if errors.Is(jobCtx.Err(), context.Canceled) {
+			s.reportProviderPoolRelease(context.Background(), providerCfg)
 			s.recordProviderImageGenerationPlaceholder(context.Background(), userID, metadata, payload, providerCfg, "cancelled", "任务已取消", startedAt)
 			finishJob(businessjobs.StatusCancelled, "cancelled", "cancelled", "任务已取消")
 			finishTracker(businesstracker.StatusFailed, "cancelled", "cancelled", "任务已取消")
 			return providerImageGenerateError(http.StatusConflict, "cancelled", "任务已取消")
 		}
-		s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", "现在使用人数较多，请稍后使用。", startedAt)
-		finishJob(businessjobs.StatusFailed, "admission", imageAdmissionErrorCode(admissionErr), "现在使用人数较多，请稍后使用。")
-		finishTracker(businesstracker.StatusFailed, "admission", imageAdmissionErrorCode(admissionErr), "现在使用人数较多，请稍后使用。")
+		s.reportProviderPoolRelease(context.Background(), providerCfg)
+		s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", imageBusyMessage, startedAt)
+		finishJob(businessjobs.StatusFailed, "admission", imageAdmissionErrorCode(admissionErr), imageBusyMessage)
+		finishTracker(businesstracker.StatusFailed, "admission", imageAdmissionErrorCode(admissionErr), imageBusyMessage)
 		return providerImageGenerateAdmissionError(admissionErr)
 	}
 	defer releaseAdmission()
@@ -593,7 +1091,22 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	job.Status = businessjobs.StatusRunning
 	job.Stage = "running"
 	job.StartedAt = tracker.AdmittedAt
-	saveJob(job)
+	job.LeaseUntil = time.Now().UTC().Add(businessImageJobRunningLeaseDuration).Format(time.RFC3339Nano)
+	if err := saveRunningJob(job, systemSettings); err != nil {
+		if capacityCode := businessJobCapacityErrorCode(err); capacityCode != "" {
+			message := businessJobCapacityMessage(capacityCode)
+			s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", message, startedAt)
+			finishJob(businessjobs.StatusFailed, "provider_capacity", capacityCode, message)
+			finishTracker(businesstracker.StatusFailed, "provider_capacity", capacityCode, message)
+			return providerImageCapacityError(capacityCode)
+		}
+		s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", err.Error(), startedAt)
+		finishJob(businessjobs.StatusFailed, "provider_capacity", "provider_capacity_check_failed", err.Error())
+		finishTracker(businesstracker.StatusFailed, "provider_capacity", "provider_capacity_check_failed", err.Error())
+		return providerImageGenerateError(http.StatusInternalServerError, "provider_capacity_check_failed", err.Error())
+	}
+	stopHeartbeat := s.startBusinessImageJobHeartbeat(jobCtx, job.ID, userID)
+	defer stopHeartbeat()
 	if execution.AfterRunningMarked != nil {
 		execution.AfterRunningMarked()
 	}
@@ -604,7 +1117,7 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	}
 	s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "running", "", startedAt)
 
-	creditStore, err := businesscredits.NewStore(s.cfg)
+	creditStore, err := s.newBusinessCreditStore()
 	if err != nil {
 		s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", "credit store failed", startedAt)
 		finishJob(businessjobs.StatusFailed, "credit", "credit_store_failed", "credit store failed")
@@ -612,49 +1125,113 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		return providerImageGenerateError(http.StatusInternalServerError, "credit_store_failed", "credit store failed")
 	}
 	defer creditStore.Close()
-	if _, _, err := creditStore.Reserve(ctx, userID, creditCost, generationID); err != nil {
-		if errors.Is(err, businesscredits.ErrInsufficientBalance) {
-			s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", "点数余额不足", startedAt)
-			finishJob(businessjobs.StatusFailed, "credit", "insufficient_credits", "点数余额不足")
-			finishTracker(businesstracker.StatusFailed, "credit", "insufficient_credits", "点数余额不足")
-			return providerImageGenerateError(http.StatusPaymentRequired, "insufficient_credits", "点数余额不足")
-		}
+	paymentStore, err := s.newBusinessPaymentStore()
+	if err != nil {
+		s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", "payment store failed", startedAt)
+		finishJob(businessjobs.StatusFailed, "credit", "payment_store_failed", "payment store failed")
+		finishTracker(businesstracker.StatusFailed, "credit", "payment_store_failed", "payment store failed")
+		return providerImageGenerateError(http.StatusInternalServerError, "payment_store_failed", "payment store failed")
+	}
+	defer paymentStore.Close()
+	subscriptionReserved := int64(0)
+	if subscriptionReserve, err := paymentStore.ReserveSubscriptionCredits(ctx, userID, creditCost, generationID); err != nil {
 		s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", err.Error(), startedAt)
-		finishJob(businessjobs.StatusFailed, "credit", "credit_reserve_failed", err.Error())
-		finishTracker(businesstracker.StatusFailed, "credit", "credit_reserve_failed", err.Error())
-		return providerImageGenerateError(http.StatusInternalServerError, "credit_reserve_failed", err.Error())
+		finishJob(businessjobs.StatusFailed, "credit", "subscription_credit_reserve_failed", err.Error())
+		finishTracker(businesstracker.StatusFailed, "credit", "subscription_credit_reserve_failed", err.Error())
+		return providerImageGenerateError(http.StatusInternalServerError, "subscription_credit_reserve_failed", err.Error())
+	} else {
+		subscriptionReserved = subscriptionReserve.Reserved
+	}
+	balanceReserved := creditCost - subscriptionReserved
+	if balanceReserved > 0 {
+		if _, _, err := creditStore.Reserve(ctx, userID, balanceReserved, generationID); err != nil {
+			if subscriptionReserved > 0 {
+				_, _ = paymentStore.RefundSubscriptionCredits(context.Background(), userID, subscriptionReserved, generationID)
+			}
+			if errors.Is(err, businesscredits.ErrInsufficientBalance) {
+				s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", "点数余额不足", startedAt)
+				finishJob(businessjobs.StatusFailed, "credit", "insufficient_credits", "点数余额不足")
+				finishTracker(businesstracker.StatusFailed, "credit", "insufficient_credits", "点数余额不足")
+				return providerImageGenerateError(http.StatusPaymentRequired, "insufficient_credits", "点数余额不足")
+			}
+			s.recordProviderImageGenerationPlaceholder(ctx, userID, metadata, payload, providerCfg, "failed", err.Error(), startedAt)
+			finishJob(businessjobs.StatusFailed, "credit", "credit_reserve_failed", err.Error())
+			finishTracker(businesstracker.StatusFailed, "credit", "credit_reserve_failed", err.Error())
+			return providerImageGenerateError(http.StatusInternalServerError, "credit_reserve_failed", err.Error())
+		}
 	}
 	creditsSettled := false
 	var refundedCredits int64
-	syncRefundedCredits := func() businesscredits.GenerationTotals {
-		totals, err := creditStore.GenerationTotals(context.Background(), userID, generationID)
+	syncRefundedCredits := func() int64 {
+		balanceTotals, err := creditStore.GenerationTotals(context.Background(), userID, generationID)
 		if err != nil {
-			return businesscredits.GenerationTotals{}
+			balanceTotals = businesscredits.GenerationTotals{}
 		}
-		if totals.Refunded > refundedCredits {
-			refundedCredits = totals.Refunded
+		subscriptionTotals, err := paymentStore.SubscriptionGenerationTotals(context.Background(), userID, generationID)
+		if err != nil {
+			subscriptionTotals = businesspayments.SubscriptionTotals{}
+		}
+		totalRefunded := balanceTotals.Refunded + subscriptionTotals.Refunded
+		if totalRefunded > refundedCredits {
+			refundedCredits = totalRefunded
 			tracker.CreditRefunded = refundedCredits
 			job.CreditRefunded = refundedCredits
 		}
-		return totals
+		return totalRefunded
+	}
+	syncReservedCredits := func() int64 {
+		balanceTotals, err := creditStore.GenerationTotals(context.Background(), userID, generationID)
+		if err != nil {
+			balanceTotals = businesscredits.GenerationTotals{}
+		}
+		subscriptionTotals, err := paymentStore.SubscriptionGenerationTotals(context.Background(), userID, generationID)
+		if err != nil {
+			subscriptionTotals = businesspayments.SubscriptionTotals{}
+		}
+		totalReserved := balanceTotals.Reserved + subscriptionTotals.Reserved
+		syncRefundedCredits()
+		tracker.CreditReserved = totalReserved
+		job.CreditReserved = totalReserved
+		return totalReserved
 	}
 	refundReservedCredits := func(amount int64) {
 		if amount <= 0 {
 			return
 		}
-		totals := syncRefundedCredits()
-		if totals.Reserved <= totals.Refunded {
+		balanceTotals, _ := creditStore.GenerationTotals(context.Background(), userID, generationID)
+		subscriptionTotals, _ := paymentStore.SubscriptionGenerationTotals(context.Background(), userID, generationID)
+		totalReserved := balanceTotals.Reserved + subscriptionTotals.Reserved
+		totalRefunded := balanceTotals.Refunded + subscriptionTotals.Refunded
+		if totalReserved <= totalRefunded {
+			syncRefundedCredits()
 			return
 		}
-		refundable := totals.Reserved - totals.Refunded
+		refundable := totalReserved - totalRefunded
 		if amount > refundable {
 			amount = refundable
 		}
-		if _, _, err := creditStore.Refund(context.Background(), userID, amount, generationID); err == nil {
-			refundedCredits = totals.Refunded + amount
-			tracker.CreditRefunded = refundedCredits
-			job.CreditRefunded = refundedCredits
+		remaining := amount
+		balanceRefundable := balanceTotals.Reserved - balanceTotals.Refunded
+		if balanceRefundable > 0 && remaining > 0 {
+			refundAmount := remaining
+			if refundAmount > balanceRefundable {
+				refundAmount = balanceRefundable
+			}
+			if _, _, err := creditStore.Refund(context.Background(), userID, refundAmount, generationID); err == nil {
+				remaining -= refundAmount
+			}
 		}
+		subscriptionRefundable := subscriptionTotals.Reserved - subscriptionTotals.Refunded
+		if subscriptionRefundable > 0 && remaining > 0 {
+			refundAmount := remaining
+			if refundAmount > subscriptionRefundable {
+				refundAmount = subscriptionRefundable
+			}
+			if _, err := paymentStore.RefundSubscriptionCredits(context.Background(), userID, refundAmount, generationID); err == nil {
+				remaining -= refundAmount
+			}
+		}
+		syncRefundedCredits()
 	}
 	refundCredits := func(amount int64) {
 		if !systemSettings.Billing.RefundOnFailure {
@@ -663,25 +1240,38 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		}
 		refundReservedCredits(amount)
 	}
+	reserveAdditionalCredits := func(amount int64) error {
+		if amount <= 0 {
+			syncReservedCredits()
+			return nil
+		}
+		subscriptionReserve, err := paymentStore.ReserveSubscriptionCredits(context.Background(), userID, amount, generationID)
+		if err != nil {
+			syncReservedCredits()
+			return err
+		}
+		remaining := amount - subscriptionReserve.Reserved
+		if remaining > 0 {
+			if _, _, err := creditStore.Reserve(context.Background(), userID, remaining, generationID); err != nil {
+				if subscriptionReserve.Reserved > 0 {
+					_, _ = paymentStore.RefundSubscriptionCredits(context.Background(), userID, subscriptionReserve.Reserved, generationID)
+				}
+				syncReservedCredits()
+				return err
+			}
+		}
+		syncReservedCredits()
+		return nil
+	}
 	if strings.TrimSpace(stringValue(payload["response_format"])) == "" {
 		payload["response_format"] = "b64_json"
 	}
-	var editInput providerResolvedEditInput
-	payload, editInput, err = s.prepareProviderImagePayload(ctx, userID, payload)
-	if err != nil {
-		job.PayloadJSON = providerImagePayloadJSON(payload)
-		saveJob(job)
-		providerErr := providerGenerationErrorDetails(err)
-		refundCredits(creditCost)
-		job.CreditRefunded = refundedCredits
-		s.recordProviderImageGeneration(ctx, userID, metadata, payload, providerErr.ResponseBody, "failed", providerErr.Message, startedAt)
-		finishJob(businessjobs.StatusFailed, "validation", providerErr.Code, providerErr.Message)
-		finishTracker(businesstracker.StatusFailed, "validation", providerErr.Code, providerErr.Message)
-		return providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, providerErr.Message)
-	}
 	job.PayloadJSON = providerImagePayloadJSON(payload)
 	saveJob(job)
-	providerPayload := buildProviderImageGeneratePayload(payload)
+	var providerPayload map[string]any
+	payload, providerPayload = providerPayloadForConfig(payload, providerCfg)
+	job.PayloadJSON = providerImagePayloadJSON(payload)
+	saveJob(job)
 
 	if latestJob, ok := s.businessImageJobByID(job.ID, userID); ok && businessJobCancelled(latestJob) {
 		job = latestJob
@@ -714,9 +1304,50 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	}
 	var body []byte
 	var contentType string
+	poolFailureReported := false
 	body, contentType, err = executeProviderImageGenerationWithRetry(ctx, providerCfg, providerPayload, requestedCount, editInput, providerImageGenerationHooks{
 		BeforeUpstreamAttempt: markUpstreamStarted,
 	})
+	if err != nil && providerCfg.ProviderSource == imageProviderSourcePool && strings.TrimSpace(providerCfg.ProviderID) != "" && ctx.Err() == nil {
+		providerErr := providerGenerationErrorDetails(err)
+		s.reportProviderPoolFailure(context.Background(), providerCfg, providerErr)
+		poolFailureReported = true
+		if fallbackCfg, ok, fallbackErr := s.imageProviderProxyFallbackConfig(providerCfg.Platform); fallbackErr != nil {
+			err = fallbackErr
+		} else if ok {
+			fallbackCfg.DispatchTags = providerCfg.DispatchTags
+			fallbackCfg.DispatchStrategy = "api_fallback"
+			fallbackCfg.DispatchTrace = appendProviderDispatchTrace(
+				providerCfg,
+				"号池成员失败："+firstNonEmpty(providerCfg.ProviderName, providerCfg.ProviderID),
+				"回退 API 接入："+firstNonEmpty(fallbackCfg.ProviderName, fallbackCfg.ProviderSource),
+			).DispatchTrace
+			providerCfg = fallbackCfg
+			tracker.ProviderID = providerCfg.ProviderID
+			tracker.ProviderName = providerCfg.ProviderName
+			tracker.Platform = providerCfg.Platform
+			job.ProviderID = providerCfg.ProviderID
+			job.ProviderName = providerCfg.ProviderName
+			job.Platform = providerCfg.Platform
+			requestModel = providerImageRequestModel(payload, providerCfg)
+			providerCfg.Model = requestModel
+			payload["model"] = requestModel
+			tracker.Model = requestModel
+			job.Model = requestModel
+			payload, providerPayload = providerPayloadForConfig(payload, providerCfg)
+			job.PayloadJSON = providerImagePayloadJSON(payload)
+			saveJob(job)
+			body, contentType, err = executeProviderImageGenerationWithRetry(ctx, providerCfg, providerPayload, requestedCount, editInput, providerImageGenerationHooks{
+				BeforeUpstreamAttempt: markUpstreamStarted,
+			})
+		} else {
+			err = &providerGenerationError{
+				HTTPStatus: http.StatusBadGateway,
+				Code:       "provider_pool_failed_no_fallback",
+				Message:    "号池上游请求失败，且当前未配置 API 接入兜底",
+			}
+		}
+	}
 	upstreamFinishedAt := time.Now().UTC()
 	if upstreamStarted {
 		tracker.UpstreamFinishedAt = upstreamFinishedAt.Format(time.RFC3339Nano)
@@ -751,6 +1382,11 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		}
 		providerErr := providerGenerationErrorDetails(err)
 		errorMessage := providerErr.Message
+		if !poolFailureReported {
+			s.reportProviderPoolFailure(context.Background(), providerCfg, providerErr)
+		}
+		setProviderFailurePayloadMetadata(payload, providerErr)
+		job.PayloadJSON = providerImagePayloadJSON(payload)
 		refundCredits(creditCost)
 		job.CreditRefunded = refundedCredits
 		s.recordProviderImageGeneration(ctx, userID, metadata, providerPayload, providerErr.ResponseBody, "failed", errorMessage, startedAt)
@@ -759,15 +1395,56 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 		return providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, errorMessage)
 	}
 	actualCount := countProviderImageItems(body)
+	maxReturnCount := systemSettings.Generation.MaxCount
+	if maxReturnCount > 0 && actualCount > maxReturnCount {
+		body = limitProviderImageResponseItems(body, maxReturnCount)
+		actualCount = countProviderImageItems(body)
+	}
 	if actualCount <= 0 {
-		actualCount = requestedCount
+		providerErr := providerGenerationError{
+			HTTPStatus:     http.StatusBadGateway,
+			UpstreamStatus: http.StatusOK,
+			Code:           "provider_empty_response",
+			Message:        "上游接口返回成功，但没有返回可用图片数据",
+			ResponseBody:   body,
+		}
+		s.reportProviderPoolFailure(context.Background(), providerCfg, providerErr)
+		setProviderFailurePayloadMetadata(payload, providerErr)
+		job.PayloadJSON = providerImagePayloadJSON(payload)
+		refundCredits(creditCost)
+		job.CreditRefunded = refundedCredits
+		s.recordProviderImageGeneration(ctx, userID, metadata, providerPayload, providerErr.ResponseBody, "failed", providerErr.Message, startedAt)
+		finishJob(businessjobs.StatusFailed, "upstream", providerErr.Code, providerErr.Message)
+		finishTracker(businesstracker.StatusFailed, "upstream", providerErr.Code, providerErr.Message)
+		return providerImageGenerateError(providerErr.HTTPStatus, providerErr.Code, providerErr.Message)
+	}
+	if actualCount < requestedCount && systemSettings.Billing.RefundPartialCount {
+		actualCost := providerImageCreditCost(systemSettings, metadata, providerCfg.Platform, actualCount)
+		refundCredits(creditCost - actualCost)
+	}
+	if actualCount > requestedCount {
+		billedCount := requestedCount
+		for billedCount < actualCount {
+			currentCost := providerImageCreditCost(systemSettings, metadata, providerCfg.Platform, billedCount)
+			nextCost := providerImageCreditCost(systemSettings, metadata, providerCfg.Platform, billedCount+1)
+			if err := reserveAdditionalCredits(nextCost - currentCost); err != nil {
+				if errors.Is(err, businesscredits.ErrInsufficientBalance) {
+					body = limitProviderImageResponseItems(body, billedCount)
+					actualCount = countProviderImageItems(body)
+					break
+				}
+				refundCredits(syncReservedCredits())
+				job.CreditRefunded = refundedCredits
+				s.recordProviderImageGeneration(ctx, userID, metadata, providerPayload, nil, "failed", err.Error(), startedAt)
+				finishJob(businessjobs.StatusFailed, "credit", "credit_reserve_failed", err.Error())
+				finishTracker(businesstracker.StatusFailed, "credit", "credit_reserve_failed", err.Error())
+				return providerImageGenerateError(http.StatusInternalServerError, "credit_reserve_failed", err.Error())
+			}
+			billedCount++
+		}
 	}
 	tracker.ActualCount = actualCount
 	job.ActualCount = actualCount
-	if actualCount < requestedCount && systemSettings.Billing.RefundPartialCount {
-		actualCost := businesssettings.CreditCostForPlatform(systemSettings, providerCfg.Platform, actualCount)
-		refundCredits(creditCost - actualCost)
-	}
 	if latestJob, ok := s.businessImageJobByID(job.ID, userID); ok && businessJobCancelled(latestJob) {
 		if upstreamStarted {
 			syncRefundedCredits()
@@ -783,7 +1460,9 @@ func (s *Server) executeProviderImageGenerate(execution providerImageGenerateExe
 	tracker.StorageBytes = recordResult.StorageBytes
 	job.PersistDurationMS = recordResult.PersistDurationMS
 	job.StorageBytes = recordResult.StorageBytes
+	syncReservedCredits()
 	job.CreditRefunded = refundedCredits
+	s.reportProviderPoolSuccess(context.Background(), providerCfg)
 	finishJob(businessjobs.StatusSucceeded, "finished", "", "")
 	finishTracker(businesstracker.StatusSucceeded, "finished", "", "")
 	if !creditsSettled {
@@ -799,7 +1478,7 @@ func (s *Server) recordProviderImageGenerationPlaceholder(ctx context.Context, u
 	if conversationID == "" || turnID == "" {
 		return
 	}
-	store, err := businessimage.NewStore(s.cfg)
+	store, err := s.newBusinessImageStore()
 	if err != nil {
 		return
 	}
@@ -850,7 +1529,7 @@ func (s *Server) recordProviderImageGenerationPlaceholder(ctx context.Context, u
 }
 
 func (s *Server) saveBusinessImageTracker(ctx context.Context, record businesstracker.Record) {
-	store, err := businesstracker.NewStore(s.cfg)
+	store, err := s.newBusinessTrackerStore()
 	if err != nil {
 		return
 	}
@@ -869,15 +1548,15 @@ func imageAdmissionErrorCode(err error) string {
 }
 
 func providerImageRequestModel(payload map[string]any, providerCfg imageProviderProxyConfig) string {
+	model := strings.TrimSpace(stringValue(payload["model"]))
+	if model != "" {
+		return model
+	}
 	if providerCfg.Provider == imageProviderGeminiBanana {
-		model := strings.TrimSpace(providerCfg.Model)
+		model = strings.TrimSpace(providerCfg.Model)
 		if model == "" {
 			return defaultGeminiBananaModel
 		}
-		return model
-	}
-	model := strings.TrimSpace(stringValue(payload["model"]))
-	if model != "" {
 		return model
 	}
 	model = strings.TrimSpace(providerCfg.Model)
@@ -889,11 +1568,69 @@ func providerImageRequestModel(payload map[string]any, providerCfg imageProvider
 
 func extractProviderImageGenerateMetadata(payload map[string]any) providerImageGenerateMetadata {
 	return providerImageGenerateMetadata{
-		ConversationID: strings.TrimSpace(stringValue(payload["conversationId"])),
-		TurnID:         strings.TrimSpace(stringValue(payload["turnId"])),
-		JobID:          strings.TrimSpace(firstNonEmpty(stringValue(payload["jobId"]), stringValue(payload["taskId"]))),
-		Title:          strings.TrimSpace(stringValue(payload["title"])),
-		Platform:       strings.TrimSpace(stringValue(payload["platform"])),
+		ConversationID:    strings.TrimSpace(stringValue(payload["conversationId"])),
+		TurnID:            strings.TrimSpace(stringValue(payload["turnId"])),
+		JobID:             strings.TrimSpace(stringValue(payload["jobId"])),
+		Title:             strings.TrimSpace(stringValue(payload["title"])),
+		Platform:          strings.TrimSpace(stringValue(payload["platform"])),
+		ModelID:           strings.TrimSpace(stringValue(payload["modelId"])),
+		ModelLabel:        strings.TrimSpace(stringValue(payload["modelLabel"])),
+		Vendor:            strings.TrimSpace(stringValue(payload["vendor"])),
+		VendorLabel:       strings.TrimSpace(stringValue(payload["vendorLabel"])),
+		CreditCost:        normalizeNonNegativeInt64(payload["creditCost"]),
+		CompareBatchID:    strings.TrimSpace(firstNonEmpty(stringValue(payload["compareBatchId"]), stringValue(payload["compareGroupId"]))),
+		CompareModelIndex: normalizeOptionalNonNegativeInt(payload["compareModelIndex"]),
+		CompareModelCount: normalizeOptionalNonNegativeInt(payload["compareModelCount"]),
+		DispatchTags:      extractProviderDispatchTags(payload),
+	}
+}
+
+func extractProviderDispatchTags(payload map[string]any) []string {
+	tags := make([]string, 0, 8)
+	appendTag := func(value string) {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			return
+		}
+		for _, existing := range tags {
+			if existing == value {
+				return
+			}
+		}
+		tags = append(tags, value)
+	}
+	if rawTags, ok := payload["dispatchTags"]; ok {
+		for _, raw := range providerDispatchTagStrings(rawTags) {
+			appendTag(raw)
+		}
+	}
+	for _, key := range []string{"mode", "quality", "size", "model", "modelId", "vendor", "adapter"} {
+		value := strings.TrimSpace(stringValue(payload[key]))
+		if value != "" {
+			appendTag(key + ":" + value)
+		}
+	}
+	return tags
+}
+
+func providerDispatchTagStrings(value any) []string {
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case []string:
+		return typed
+	case []any:
+		items := make([]string, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, stringValue(item))
+		}
+		return items
+	case string:
+		return strings.FieldsFunc(typed, func(r rune) bool {
+			return r == ',' || r == '\n' || r == '\t' || r == ' ' || r == '，'
+		})
+	default:
+		return []string{stringValue(typed)}
 	}
 }
 
@@ -918,16 +1655,16 @@ func buildProviderImageGeneratePayload(payload map[string]any) map[string]any {
 		if _, ok := allowed[key]; !ok {
 			continue
 		}
+		if (key == "sourceImages" || key == "sourceReference") && !providerPayloadIsEdit(payload) {
+			continue
+		}
 		next[key] = value
 	}
 	return next
 }
 
 func providerPayloadIsEdit(payload map[string]any) bool {
-	if strings.EqualFold(strings.TrimSpace(stringValue(payload["mode"])), "edit") {
-		return true
-	}
-	return len(providerImageSourcesFromPayload(payload["sourceImages"])) > 0
+	return strings.EqualFold(strings.TrimSpace(stringValue(payload["mode"])), "edit")
 }
 
 func providerImageSourcesFromPayload(raw any) []providerImageSource {
@@ -954,34 +1691,6 @@ func providerImageSourcesFromPayload(raw any) []providerImageSource {
 		sources = append(sources, normalized)
 	}
 	return sources
-}
-
-func (s *Server) resolveProviderEditInputs(payload map[string]any) (providerResolvedEditInput, error) {
-	sources := providerImageSourcesFromPayload(payload["sourceImages"])
-	result := providerResolvedEditInput{Images: make([]providerEditAsset, 0, len(sources))}
-	for _, source := range sources {
-		data, err := s.resolveProviderSourceImageBytes(source)
-		if err != nil {
-			return providerResolvedEditInput{}, err
-		}
-		asset := providerEditAsset{
-			Source: source,
-			Data:   data,
-		}
-		if strings.EqualFold(strings.TrimSpace(source.Role), "mask") {
-			result.Mask = &asset
-			continue
-		}
-		result.Images = append(result.Images, asset)
-	}
-	if len(result.Images) == 0 {
-		return providerResolvedEditInput{}, &providerGenerationError{
-			HTTPStatus: http.StatusBadRequest,
-			Code:       "image_required",
-			Message:    "编辑模式至少需要一张源图",
-		}
-	}
-	return result, nil
 }
 
 func (s *Server) resolveProviderSourceImageBytes(source providerImageSource) ([]byte, error) {
@@ -1025,7 +1734,7 @@ func (s *Server) resolveProviderSourceImageBytes(source providerImageSource) ([]
 		}
 		return data, nil
 	}
-	resp, err := compatImageFetchClient.Get(rawURL)
+	resp, err := imageSourceFetchClient.Get(rawURL)
 	if err != nil {
 		return nil, &providerGenerationError{
 			HTTPStatus: http.StatusBadGateway,
@@ -1065,7 +1774,7 @@ func (s *Server) recordProviderImageGeneration(ctx context.Context, userID strin
 	if conversationID == "" || turnID == "" {
 		return result
 	}
-	store, err := businessimage.NewStore(s.cfg)
+	store, err := s.newBusinessImageStore()
 	if err != nil {
 		return result
 	}
@@ -1093,6 +1802,7 @@ func (s *Server) recordProviderImageGeneration(ctx context.Context, userID strin
 		result.StorageBytes = stats.StorageBytes
 	}
 	persistedResponse = injectProviderImageResponsePlatform(persistedResponse, metadata.Platform)
+	persistedResponse = injectProviderImageResponseModelMetadata(persistedResponse, metadata)
 	_, _ = store.UpsertConversation(ctx, businessimage.Conversation{
 		ID:        conversationID,
 		UserID:    userID,
@@ -1182,6 +1892,31 @@ func injectProviderImageResponsePlatform(responseBody []byte, platform string) [
 	return next
 }
 
+func injectProviderImageResponseModelMetadata(responseBody []byte, metadata providerImageGenerateMetadata) []byte {
+	if len(responseBody) == 0 {
+		responseBody = []byte(`{}`)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(responseBody, &payload); err != nil {
+		return responseBody
+	}
+	setString := func(key string, value string) {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			payload[key] = value
+		}
+	}
+	setString("modelId", metadata.ModelID)
+	setString("modelLabel", metadata.ModelLabel)
+	setString("vendor", metadata.Vendor)
+	setString("vendorLabel", metadata.VendorLabel)
+	next, err := json.Marshal(payload)
+	if err != nil {
+		return responseBody
+	}
+	return next
+}
+
 type providerGenerationError struct {
 	HTTPStatus     int
 	UpstreamStatus int
@@ -1207,6 +1942,18 @@ func providerGenerationErrorDetails(err error) providerGenerationError {
 		HTTPStatus: http.StatusBadGateway,
 		Code:       "provider_request_failed",
 		Message:    err.Error(),
+	}
+}
+
+func setProviderFailurePayloadMetadata(payload map[string]any, providerErr providerGenerationError) {
+	if payload == nil {
+		return
+	}
+	if code := strings.TrimSpace(providerErr.Code); code != "" {
+		payload["upstreamErrorCode"] = code
+	}
+	if providerErr.UpstreamStatus > 0 {
+		payload["upstreamStatusCode"] = providerErr.UpstreamStatus
 	}
 }
 
@@ -1677,6 +2424,26 @@ func countProviderImageItems(responseBody []byte) int {
 	return count
 }
 
+func limitProviderImageResponseItems(responseBody []byte, limit int) []byte {
+	if limit < 0 {
+		limit = 0
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(responseBody, &payload); err != nil {
+		return responseBody
+	}
+	rawItems, ok := payload["data"].([]any)
+	if !ok || len(rawItems) <= limit {
+		return responseBody
+	}
+	payload["data"] = rawItems[:limit]
+	nextBody, err := json.Marshal(payload)
+	if err != nil {
+		return responseBody
+	}
+	return nextBody
+}
+
 func (s *Server) saveBusinessImageBase64(ctx context.Context, raw, userID, conversationID, generationID string, index int) (string, int64, error) {
 	payload, _, err := decodeBase64ImagePayload(raw)
 	if err != nil {
@@ -1726,7 +2493,7 @@ func (s *Server) saveBusinessImageBytes(ctx context.Context, payload []byte, use
 }
 
 func (s *Server) recordBusinessImageAsset(ctx context.Context, userID, conversationID, generationID, fileName, path, mimeType string, sizeBytes int64, sha256Hex string) {
-	store, err := businessimage.NewStore(s.cfg)
+	store, err := s.newBusinessImageStore()
 	if err != nil {
 		return
 	}
@@ -1841,44 +2608,97 @@ func buildProviderImageConversationTitle(prompt string) string {
 }
 
 func (s *Server) imageProviderProxyConfig(requestedPlatform ...string) (imageProviderProxyConfig, error) {
-	platform := businessproviders.NormalizePlatform(firstNonEmpty(requestedPlatform...))
+	dispatchTags := []string(nil)
+	if len(requestedPlatform) > 1 {
+		dispatchTags = mergeProviderDispatchTags(requestedPlatform[1:])
+	}
+	platformValue := firstNonEmpty(requestedPlatform...)
+	if len(requestedPlatform) > 0 {
+		platformValue = requestedPlatform[0]
+	}
+	platform := businessproviders.NormalizePlatform(platformValue)
 	if platform == "" {
 		platform = businessproviders.PlatformGPTImage
 	}
-	if platform != businessproviders.PlatformGPTImage && platform != businessproviders.PlatformGeminiBanana {
+	if !businessproviders.IsSupportedPlatform(platform) {
 		return imageProviderProxyConfig{}, fmt.Errorf("unsupported provider platform %q", platform)
 	}
+	timeout := s.imageProviderRequestTimeout()
 
+	if poolCfg, ok, err := s.defaultBusinessProviderPoolMember(platform, dispatchTags, timeout); err != nil {
+		return imageProviderProxyConfig{}, err
+	} else if ok {
+		return poolCfg, nil
+	}
+	poolConfigured, err := s.businessProviderPoolConfiguredForPlatform(platform)
+	if err != nil {
+		return imageProviderProxyConfig{}, err
+	}
+
+	providerCfg, ok, err := s.imageProviderProxyConfigWithoutPool(platform, timeout)
+	if err != nil {
+		return imageProviderProxyConfig{}, err
+	}
+	if !ok {
+		if poolConfigured {
+			return imageProviderProxyConfig{}, fmt.Errorf("当前平台没有可用号池成员，请恢复或启用 active 成员，或配置 API 接入作为兜底")
+		}
+		return imageProviderProxyConfig{}, fmt.Errorf("api_access.base_url or IMAGE_BASE_URL is required")
+	}
+	providerCfg.DispatchTags = dispatchTags
+	if poolConfigured {
+		providerCfg.DispatchStrategy = "api_fallback"
+	} else {
+		providerCfg.DispatchStrategy = "api_access"
+	}
+	providerCfg.DispatchTrace = s.providerConfigDispatchTrace(platform, dispatchTags, providerCfg)
+	return providerCfg, nil
+}
+
+func (s *Server) imageProviderProxyFallbackConfig(platform string) (imageProviderProxyConfig, bool, error) {
+	platform = businessproviders.NormalizePlatform(platform)
+	if platform == "" {
+		platform = businessproviders.PlatformGPTImage
+	}
+	if !businessproviders.IsSupportedPlatform(platform) {
+		return imageProviderProxyConfig{}, false, fmt.Errorf("unsupported provider platform %q", platform)
+	}
+	cfg, ok, err := s.imageProviderProxyConfigWithoutPool(platform, s.imageProviderRequestTimeout())
+	if err != nil || !ok {
+		return cfg, ok, err
+	}
+	cfg.DispatchStrategy = "api_fallback"
+	cfg.DispatchTrace = s.providerConfigDispatchTrace(platform, cfg.DispatchTags, cfg)
+	return cfg, true, nil
+}
+
+func (s *Server) imageProviderProxyConfigWithoutPool(platform string, timeout time.Duration) (imageProviderProxyConfig, bool, error) {
 	provider := imageProviderOpenAICompatible
 	providerID := ""
 	providerName := "环境变量 API"
+	providerSource := imageProviderSourceEnv
 	baseURL := normalizeProviderBaseURL(platform, os.Getenv("IMAGE_BASE_URL"))
 	apiKey := strings.TrimSpace(os.Getenv("IMAGE_API_KEY"))
 	model := strings.TrimSpace(firstNonEmpty(os.Getenv("IMAGE_MODEL"), defaultModelForProviderPlatform(platform)))
 	if platform == businessproviders.PlatformGPTImage {
 		provider = strings.ToLower(strings.TrimSpace(firstNonEmpty(os.Getenv("IMAGE_PROVIDER"), imageProviderOpenAICompatible)))
+	} else if mappedProvider := imageProviderAdapterForPlatform(platform); mappedProvider != "" {
+		provider = mappedProvider
 	} else {
 		provider = imageProviderGeminiBanana
-	}
-	timeoutSeconds := normalizeEnvInt("IMAGE_REQUEST_TIMEOUT_SECONDS", 180)
-	if timeoutSeconds <= 0 {
-		timeoutSeconds = 180
 	}
 
 	usedDBProvider := false
 	if dbProvider, ok, err := s.defaultBusinessAPIProvider(platform); err != nil {
-		return imageProviderProxyConfig{}, err
+		return imageProviderProxyConfig{}, false, err
 	} else if ok {
 		baseURL = normalizeProviderBaseURL(platform, dbProvider.BaseURL)
 		apiKey = strings.TrimSpace(dbProvider.APIKey)
 		model = strings.TrimSpace(firstNonEmpty(dbProvider.DefaultModel, model))
 		providerID = dbProvider.ID
 		providerName = dbProvider.Name
-		if platform == businessproviders.PlatformGeminiBanana {
-			provider = imageProviderGeminiBanana
-		} else {
-			provider = imageProviderOpenAICompatible
-		}
+		providerSource = imageProviderSourceLegacy
+		provider = firstNonEmpty(imageProviderAdapterForPlatform(platform), imageProviderOpenAICompatible)
 		usedDBProvider = true
 	}
 
@@ -1891,35 +2711,34 @@ func (s *Server) imageProviderProxyConfig(requestedPlatform ...string) (imagePro
 	}
 	if apiAccessBaseURL != "" || apiAccessAPIKey != "" {
 		if apiAccessBaseURL == "" {
-			return imageProviderProxyConfig{}, fmt.Errorf("api_access.base_url is required when api_access.api_key is configured")
+			return imageProviderProxyConfig{}, false, fmt.Errorf("api_access.base_url is required when api_access.api_key is configured")
 		}
 		if apiAccessAPIKey == "" {
-			return imageProviderProxyConfig{}, fmt.Errorf("api_access.api_key is required when api_access.base_url is configured")
+			return imageProviderProxyConfig{}, false, fmt.Errorf("api_access.api_key is required when api_access.base_url is configured")
 		}
-		switch strings.ToLower(strings.TrimSpace(s.cfg.APIAccess.Platform)) {
-		case "", "gpt-image":
-			if platform == businessproviders.PlatformGPTImage {
-				provider = imageProviderOpenAICompatible
-			}
-		case "gemini-banana":
-			provider = imageProviderGeminiBanana
-		default:
-			return imageProviderProxyConfig{}, fmt.Errorf("unsupported api_access.platform %q", s.cfg.APIAccess.Platform)
+		if apiAccessPlatform != "" {
+			provider = firstNonEmpty(imageProviderAdapterForPlatform(apiAccessPlatform), provider)
+		} else if mappedProvider := imageProviderAdapterForPlatform(platform); mappedProvider != "" {
+			provider = mappedProvider
 		}
 		baseURL = apiAccessBaseURL
 		apiKey = apiAccessAPIKey
 		providerID = "api_access"
 		providerName = "API 接入配置"
+		providerSource = imageProviderSourceAPIAccess
 	}
 
 	if provider != imageProviderOpenAICompatible && provider != imageProviderGeminiBanana {
-		return imageProviderProxyConfig{}, fmt.Errorf("unsupported IMAGE_PROVIDER %q", provider)
+		return imageProviderProxyConfig{}, false, fmt.Errorf("unsupported IMAGE_PROVIDER %q", provider)
+	}
+	if baseURL == "" && apiKey == "" {
+		return imageProviderProxyConfig{}, false, nil
 	}
 	if baseURL == "" {
-		return imageProviderProxyConfig{}, fmt.Errorf("api_access.base_url or IMAGE_BASE_URL is required")
+		return imageProviderProxyConfig{}, false, fmt.Errorf("api_access.base_url or IMAGE_BASE_URL is required")
 	}
 	if apiKey == "" {
-		return imageProviderProxyConfig{}, fmt.Errorf("api_access.api_key or IMAGE_API_KEY is required")
+		return imageProviderProxyConfig{}, false, fmt.Errorf("api_access.api_key or IMAGE_API_KEY is required")
 	}
 	if model == "" {
 		model = defaultModelForProviderPlatform(platform)
@@ -1929,16 +2748,317 @@ func (s *Server) imageProviderProxyConfig(requestedPlatform ...string) (imagePro
 		Provider:       provider,
 		ProviderID:     providerID,
 		ProviderName:   providerName,
+		ProviderSource: providerSource,
 		Platform:       platform,
 		BaseURL:        baseURL,
 		APIKey:         apiKey,
 		Model:          model,
-		RequestTimeout: time.Duration(timeoutSeconds) * time.Second,
+		RequestTimeout: timeout,
+	}, true, nil
+}
+
+func (s *Server) defaultBusinessProviderPoolMember(platform string, dispatchTags []string, timeout time.Duration) (imageProviderProxyConfig, bool, error) {
+	store, err := s.newBusinessProviderStore()
+	if err != nil {
+		return imageProviderProxyConfig{}, false, err
+	}
+	defer store.Close()
+	selection, ok, err := store.SelectMember(context.Background(), businessproviders.PoolSelectionPolicy{
+		Platform: platform,
+		Tags:     dispatchTags,
+	})
+	if err != nil || !ok {
+		return imageProviderProxyConfig{}, ok, err
+	}
+	member := selection.Member
+	baseURL := normalizeProviderBaseURL(platform, member.BaseURL)
+	apiKey := strings.TrimSpace(member.APIKey)
+	model := strings.TrimSpace(member.DefaultModel)
+	if model == "" {
+		model = defaultModelForProviderPlatform(platform)
+	}
+	if baseURL == "" {
+		return imageProviderProxyConfig{}, false, fmt.Errorf("provider pool member baseUrl is required")
+	}
+	if apiKey == "" {
+		return imageProviderProxyConfig{}, false, fmt.Errorf("provider pool member apiKey is required")
+	}
+	provider := firstNonEmpty(imageProviderAdapterForPlatform(platform), imageProviderOpenAICompatible)
+	if err := store.MarkMemberAcquired(context.Background(), member.ID); err != nil {
+		return imageProviderProxyConfig{}, false, err
+	}
+	cfg := imageProviderProxyConfig{
+		Provider:               provider,
+		ProviderID:             member.ID,
+		ProviderName:           member.Name,
+		ProviderSource:         imageProviderSourcePool,
+		ProviderGroupID:        selection.Group.ID,
+		ProviderGroupMatchMode: selection.Group.MatchMode,
+		ProviderGroupTags:      selection.Group.Tags,
+		DispatchStrategy:       selection.Strategy,
+		DispatchTags:           mergeProviderDispatchTags(dispatchTags),
+		Platform:               platform,
+		BaseURL:                baseURL,
+		APIKey:                 apiKey,
+		Model:                  model,
+		RequestTimeout:         timeout,
+	}
+	cfg.DispatchTrace = s.providerConfigDispatchTrace(platform, dispatchTags, cfg)
+	return cfg, true, nil
+}
+
+func (s *Server) businessProviderPoolConfiguredForPlatform(platform string) (bool, error) {
+	store, err := s.newBusinessProviderStore()
+	if err != nil {
+		return false, err
+	}
+	defer store.Close()
+	pools, err := store.ListPools(context.Background())
+	if err != nil {
+		return false, err
+	}
+	for _, pool := range pools {
+		if businessproviders.NormalizePlatform(pool.Platform) != platform || !pool.Enabled {
+			continue
+		}
+		if len(pool.Members) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *Server) providerConfigDispatchTrace(platform string, dispatchTags []string, providerCfg imageProviderProxyConfig) []string {
+	if len(providerCfg.DispatchTrace) > 0 {
+		return providerCfg.DispatchTrace
+	}
+	switch providerCfg.DispatchStrategy {
+	case businessproviders.SelectionStrategyTagged:
+		return []string{
+			"请求标签命中标签池",
+			"标签池命中成员：" + firstNonEmpty(providerCfg.ProviderName, providerCfg.ProviderID),
+		}
+	case businessproviders.SelectionStrategyTaggedFallback:
+		return []string{
+			"请求标签命中标签池",
+			"标签池无可用成员",
+			"fallback 池命中成员：" + firstNonEmpty(providerCfg.ProviderName, providerCfg.ProviderID),
+		}
+	case businessproviders.SelectionStrategyFallback:
+		return []string{
+			"没有标签池命中",
+			"fallback 池命中成员：" + firstNonEmpty(providerCfg.ProviderName, providerCfg.ProviderID),
+		}
+	case "api_fallback":
+		trace := []string{"号池无可用成员"}
+		if providerCfg.ProviderSource == imageProviderSourcePool {
+			trace = append(trace, "API 兜底未触发")
+		} else {
+			trace = append(trace, "回退 API 接入："+firstNonEmpty(providerCfg.ProviderName, providerCfg.ProviderSource))
+		}
+		return trace
+	case "api_access":
+		return []string{"使用 API 接入：" + firstNonEmpty(providerCfg.ProviderName, providerCfg.ProviderSource)}
+	default:
+		if providerCfg.ProviderSource == imageProviderSourcePool {
+			return []string{"号池命中成员：" + firstNonEmpty(providerCfg.ProviderName, providerCfg.ProviderID)}
+		}
+		if providerCfg.ProviderSource != "" {
+			return []string{"使用上游：" + firstNonEmpty(providerCfg.ProviderName, providerCfg.ProviderSource)}
+		}
+	}
+	_ = platform
+	_ = dispatchTags
+	return nil
+}
+
+func appendProviderDispatchTrace(providerCfg imageProviderProxyConfig, items ...string) imageProviderProxyConfig {
+	next := append([]string(nil), providerCfg.DispatchTrace...)
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			next = append(next, item)
+		}
+	}
+	providerCfg.DispatchTrace = next
+	return providerCfg
+}
+
+func (s *Server) imageProviderProxyConfigFromPayload(payload map[string]any) (imageProviderProxyConfig, error) {
+	metadata := extractProviderImageGenerateMetadata(payload)
+	source := strings.TrimSpace(stringValue(payload["providerSource"]))
+	providerID := strings.TrimSpace(stringValue(payload["providerId"]))
+	if source == imageProviderSourcePool && providerID != "" {
+		if poolCfg, err := s.imageProviderProxyConfigFromPoolMember(providerID); err == nil {
+			return applyProviderConfigPayloadMetadata(poolCfg, payload), nil
+		}
+	}
+	providerRequest := append([]string{metadata.Platform}, metadata.DispatchTags...)
+	cfg, err := s.imageProviderProxyConfig(providerRequest...)
+	if err != nil {
+		return imageProviderProxyConfig{}, err
+	}
+	return applyProviderConfigPayloadMetadata(cfg, payload), nil
+}
+
+func applyProviderConfigPayloadMetadata(providerCfg imageProviderProxyConfig, payload map[string]any) imageProviderProxyConfig {
+	if payload == nil {
+		return providerCfg
+	}
+	if len(providerCfg.DispatchTags) == 0 {
+		providerCfg.DispatchTags = mergeProviderDispatchTags(providerDispatchTagStrings(payload["dispatchTags"]))
+	}
+	if providerCfg.DispatchStrategy == "" {
+		providerCfg.DispatchStrategy = strings.TrimSpace(stringValue(payload["dispatchStrategy"]))
+	}
+	if len(providerCfg.DispatchTrace) == 0 {
+		providerCfg.DispatchTrace = providerDispatchTagStrings(payload["dispatchTrace"])
+	}
+	if providerCfg.ProviderGroupMatchMode == "" {
+		providerCfg.ProviderGroupMatchMode = strings.TrimSpace(stringValue(payload["providerGroupMatchMode"]))
+	}
+	if providerCfg.ProviderGroupTags == "" {
+		providerCfg.ProviderGroupTags = strings.TrimSpace(stringValue(payload["providerGroupTags"]))
+	}
+	return providerCfg
+}
+
+func (s *Server) imageProviderProxyConfigFromPoolMember(memberID string) (imageProviderProxyConfig, error) {
+	store, err := s.newBusinessProviderStore()
+	if err != nil {
+		return imageProviderProxyConfig{}, err
+	}
+	defer store.Close()
+	member, ok, err := store.GetMember(context.Background(), memberID)
+	if err != nil {
+		return imageProviderProxyConfig{}, err
+	}
+	if !ok || !member.Enabled {
+		return imageProviderProxyConfig{}, fmt.Errorf("provider pool member not available")
+	}
+	platform := businessproviders.NormalizePlatform(member.Platform)
+	if platform == "" {
+		return imageProviderProxyConfig{}, fmt.Errorf("unsupported provider platform %q", member.Platform)
+	}
+	if member.Status == businessproviders.MemberStatusUnavailable {
+		return imageProviderProxyConfig{}, fmt.Errorf("provider pool member not available")
+	}
+	if cooldownUntilAfterNow(member.CooldownUntil) {
+		return imageProviderProxyConfig{}, fmt.Errorf("provider pool member is cooling down")
+	}
+	baseURL := normalizeProviderBaseURL(platform, member.BaseURL)
+	apiKey := strings.TrimSpace(member.APIKey)
+	model := strings.TrimSpace(member.DefaultModel)
+	if model == "" {
+		model = defaultModelForProviderPlatform(platform)
+	}
+	if baseURL == "" {
+		return imageProviderProxyConfig{}, fmt.Errorf("provider pool member baseUrl is required")
+	}
+	if apiKey == "" {
+		return imageProviderProxyConfig{}, fmt.Errorf("provider pool member apiKey is required")
+	}
+	provider := firstNonEmpty(imageProviderAdapterForPlatform(platform), imageProviderOpenAICompatible)
+	groupMatchMode := ""
+	groupTags := ""
+	if group, ok, err := store.GetGroup(context.Background(), member.GroupID); err == nil && ok {
+		groupMatchMode = group.MatchMode
+		groupTags = group.Tags
+	}
+	return imageProviderProxyConfig{
+		Provider:               provider,
+		ProviderID:             member.ID,
+		ProviderName:           member.Name,
+		ProviderSource:         imageProviderSourcePool,
+		ProviderGroupID:        member.GroupID,
+		ProviderGroupMatchMode: groupMatchMode,
+		ProviderGroupTags:      groupTags,
+		Platform:               platform,
+		BaseURL:                baseURL,
+		APIKey:                 apiKey,
+		Model:                  model,
+		RequestTimeout:         s.imageProviderRequestTimeout(),
 	}, nil
 }
 
+func (s *Server) reportProviderPoolSuccess(ctx context.Context, providerCfg imageProviderProxyConfig) {
+	if providerCfg.ProviderSource != imageProviderSourcePool || strings.TrimSpace(providerCfg.ProviderID) == "" {
+		return
+	}
+	store, err := s.newBusinessProviderStore()
+	if err != nil {
+		return
+	}
+	defer store.Close()
+	_ = store.ReportMemberSuccess(ctx, providerCfg.ProviderID)
+}
+
+func (s *Server) reportProviderPoolRelease(ctx context.Context, providerCfg imageProviderProxyConfig) {
+	if providerCfg.ProviderSource != imageProviderSourcePool || strings.TrimSpace(providerCfg.ProviderID) == "" {
+		return
+	}
+	store, err := s.newBusinessProviderStore()
+	if err != nil {
+		return
+	}
+	defer store.Close()
+	_ = store.ReleaseMember(ctx, providerCfg.ProviderID)
+}
+
+func (s *Server) reportProviderPoolFailure(ctx context.Context, providerCfg imageProviderProxyConfig, providerErr providerGenerationError) {
+	if providerCfg.ProviderSource != imageProviderSourcePool || strings.TrimSpace(providerCfg.ProviderID) == "" {
+		return
+	}
+	store, err := s.newBusinessProviderStore()
+	if err != nil {
+		return
+	}
+	defer store.Close()
+	_ = store.ReportMemberFailure(ctx, providerCfg.ProviderID, businessproviders.MemberFailure{
+		Status:          providerPoolFailureStatus(providerErr),
+		CooldownSeconds: providerPoolFailureCooldownSeconds(providerErr),
+		ErrorMessage:    providerErr.Message,
+	})
+}
+
+func providerPoolFailureStatus(providerErr providerGenerationError) string {
+	if providerErr.UpstreamStatus == http.StatusUnauthorized || providerErr.UpstreamStatus == http.StatusForbidden {
+		return businessproviders.MemberStatusUnavailable
+	}
+	message := strings.ToLower(strings.TrimSpace(providerErr.Message))
+	if strings.Contains(message, "invalid api key") ||
+		strings.Contains(message, "incorrect api key") ||
+		strings.Contains(message, "unauthorized") ||
+		strings.Contains(message, "forbidden") {
+		return businessproviders.MemberStatusUnavailable
+	}
+	return businessproviders.MemberStatusLimited
+}
+
+func providerPoolFailureCooldownSeconds(providerErr providerGenerationError) int {
+	if providerPoolFailureStatus(providerErr) == businessproviders.MemberStatusUnavailable {
+		return 0
+	}
+	if providerErr.UpstreamStatus == http.StatusTooManyRequests {
+		return 600
+	}
+	return 0
+}
+
+func cooldownUntilAfterNow(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return false
+	}
+	return parsed.After(time.Now().UTC())
+}
+
 func (s *Server) defaultBusinessAPIProvider(platform string) (businessproviders.Provider, bool, error) {
-	store, err := businessproviders.NewStore(s.cfg)
+	store, err := s.newBusinessProviderStore()
 	if err != nil {
 		return businessproviders.Provider{}, false, err
 	}
@@ -1950,17 +3070,60 @@ func (s *Server) defaultBusinessAPIProvider(platform string) (businessproviders.
 }
 
 func defaultModelForProviderPlatform(platform string) string {
-	if businessproviders.NormalizePlatform(platform) == businessproviders.PlatformGeminiBanana {
+	switch businessproviders.NormalizePlatform(platform) {
+	case businessproviders.PlatformGeminiBanana:
 		return defaultGeminiBananaModel
+	case businessproviders.PlatformDoubao:
+		return "doubao-seedream-image"
+	case businessproviders.PlatformQwen:
+		return "qwen-image"
+	case businessproviders.PlatformBaidu:
+		return "baidu-image"
+	case businessproviders.PlatformZAI:
+		return "z-ai-image"
+	case businessproviders.PlatformTencent:
+		return "tencent-image"
+	case businessproviders.PlatformKling:
+		return "kling-image"
+	case businessproviders.PlatformGrok:
+		return "grok-image"
 	}
 	return cpaFixedImageModel
 }
 
 func normalizeProviderBaseURL(platform string, value string) string {
-	if businessproviders.NormalizePlatform(platform) == businessproviders.PlatformGeminiBanana {
+	switch businessproviders.NormalizePlatform(platform) {
+	case businessproviders.PlatformGeminiBanana:
 		return normalizeGeminiBananaBaseURL(value)
+	case businessproviders.PlatformGPTImage,
+		businessproviders.PlatformDoubao,
+		businessproviders.PlatformQwen,
+		businessproviders.PlatformBaidu,
+		businessproviders.PlatformZAI,
+		businessproviders.PlatformTencent,
+		businessproviders.PlatformKling,
+		businessproviders.PlatformGrok:
+		return normalizeOpenAICompatibleBaseURL(value)
 	}
 	return normalizeOpenAICompatibleBaseURL(value)
+}
+
+func imageProviderAdapterForPlatform(platform string) string {
+	switch businessproviders.NormalizePlatform(platform) {
+	case businessproviders.PlatformGeminiBanana:
+		return imageProviderGeminiBanana
+	case businessproviders.PlatformGPTImage,
+		businessproviders.PlatformDoubao,
+		businessproviders.PlatformQwen,
+		businessproviders.PlatformBaidu,
+		businessproviders.PlatformZAI,
+		businessproviders.PlatformTencent,
+		businessproviders.PlatformKling,
+		businessproviders.PlatformGrok:
+		return imageProviderOpenAICompatible
+	default:
+		return ""
+	}
 }
 
 func normalizeOpenAICompatibleBaseURL(value string) string {
@@ -2080,6 +3243,66 @@ func normalizePositiveInt(value any) int {
 	default:
 		return 0
 	}
+}
+
+func normalizeOptionalNonNegativeInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		if typed >= 0 {
+			return typed
+		}
+	case int64:
+		if typed >= 0 {
+			return int(typed)
+		}
+	case float64:
+		if typed >= 0 {
+			return int(typed)
+		}
+	case json.Number:
+		parsed, _ := typed.Int64()
+		if parsed >= 0 {
+			return int(parsed)
+		}
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return 0
+		}
+		parsed, _ := strconv.Atoi(trimmed)
+		if parsed >= 0 {
+			return parsed
+		}
+	}
+	return 0
+}
+
+func normalizeNonNegativeInt64(value any) int64 {
+	switch typed := value.(type) {
+	case int:
+		if typed > 0 {
+			return int64(typed)
+		}
+	case int64:
+		if typed > 0 {
+			return typed
+		}
+	case float64:
+		if typed > 0 {
+			return int64(typed)
+		}
+	case json.Number:
+		parsed, _ := typed.Int64()
+		if parsed > 0 {
+			return parsed
+		}
+	case string:
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		if parsed > 0 {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func normalizeEnvInt(key string, fallback int) int {

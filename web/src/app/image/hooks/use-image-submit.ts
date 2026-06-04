@@ -6,11 +6,16 @@ import { toast } from "sonner";
 import {
   generateImageWithOptions,
   type APIAccessPlatform,
+  type ImageModelId,
   type ImageSourcePayload,
   type ImageModel,
   type ImageQuality,
   type ImageResolutionAccess,
 } from "@/lib/api";
+import {
+  defaultModelForPlatform as defaultProviderModelForPlatform,
+  isGeminiPlatform,
+} from "@/lib/provider-platforms";
 import type {
   ImageConversation,
   ImageConversationTurn,
@@ -24,14 +29,30 @@ import {
   buildInpaintSourceReference,
   createConversationTurn,
   createLoadingImages,
+  formatImageError,
   mergeResultImages,
 } from "../submit-utils";
 import { buildSourceRequestImageUrl } from "../view-utils";
 
+export type CompareModelSelection = {
+  id: ImageModelId;
+  label: string;
+  vendor: string;
+  vendorLabel: string;
+  adapter: string;
+  platform: APIAccessPlatform;
+  model: ImageModel;
+};
+
+export type ImageModelSelection = CompareModelSelection;
+
 type UseImageSubmitOptions = {
   mode: ImageMode;
   imagePrompt: string;
-  imageModel: ImageModel;
+  selectedModel: ImageModelSelection;
+  editModels: ImageModelSelection[];
+  compareEnabled: boolean;
+  compareModels: ImageModelSelection[];
   imageSources: StoredSourceImage[];
   sourceImages: StoredSourceImage[];
   parsedCount: number;
@@ -71,7 +92,17 @@ function buildConversationBase(
     resolutionAccess: draftTurn.resolutionAccess,
     quality: draftTurn.quality,
     providerPlatform: draftTurn.providerPlatform,
+    modelId: draftTurn.modelId,
+    modelLabel: draftTurn.modelLabel,
+    vendor: draftTurn.vendor,
+    vendorLabel: draftTurn.vendorLabel,
+    adapter: draftTurn.adapter,
     scale: draftTurn.scale,
+    compareBatchId: draftTurn.compareBatchId,
+    compareGroupId: draftTurn.compareGroupId,
+    compareModelLabel: draftTurn.compareModelLabel,
+    compareModelIndex: draftTurn.compareModelIndex,
+    compareModelCount: draftTurn.compareModelCount,
     sourceImages: draftTurn.sourceImages,
     images: draftTurn.images,
     createdAt: draftTurn.createdAt,
@@ -79,6 +110,18 @@ function buildConversationBase(
     error: draftTurn.error,
     turns: [draftTurn],
   };
+}
+
+function resultImageCount(items: Array<{ url?: string; b64_json?: string }>) {
+  return items.filter((item) => item.url || item.b64_json).length;
+}
+
+function shouldRunModelCompare(
+  mode: ImageMode,
+  enabled: boolean,
+  models: ImageModelSelection[],
+) {
+  return mode === "generate" && enabled && models.length > 1;
 }
 
 function buildSourceReference(payload: {
@@ -124,7 +167,7 @@ function normalizeImageQuality(value: string | undefined, fallback: ImageQuality
 }
 
 function defaultImageModelForPlatform(platform: APIAccessPlatform): ImageModel {
-  return platform === "gemini-banana" ? "gemini-2.5-flash-image" : "gpt-image-2";
+  return defaultProviderModelForPlatform(platform);
 }
 
 function imageModelForPlatform(
@@ -132,19 +175,39 @@ function imageModelForPlatform(
   model: ImageModel | undefined,
 ): ImageModel {
   const trimmed = String(model || "").trim();
-  if (platform === "gemini-banana" && (!trimmed || trimmed.startsWith("gpt-image-"))) {
+  if (isGeminiPlatform(platform) && (!trimmed || trimmed.startsWith("gpt-image-"))) {
     return defaultImageModelForPlatform(platform);
   }
-  if (platform === "gpt-image" && (!trimmed || trimmed.startsWith("gemini-"))) {
+  if (!isGeminiPlatform(platform) && (!trimmed || trimmed.startsWith("gemini-"))) {
     return defaultImageModelForPlatform(platform);
   }
   return trimmed || defaultImageModelForPlatform(platform);
 }
 
+function modelSelectionFromTurn(
+  turn: ImageConversationTurn,
+  fallback: ImageModelSelection,
+): ImageModelSelection {
+  const platform = turn.providerPlatform ?? fallback.platform;
+  const model = imageModelForPlatform(platform, turn.model || fallback.model);
+  return {
+    id: String(turn.modelId || fallback.id || model).trim(),
+    label: String(turn.modelLabel || turn.compareModelLabel || fallback.label || model).trim(),
+    vendor: String(turn.vendor || fallback.vendor || "").trim(),
+    vendorLabel: String(turn.vendorLabel || fallback.vendorLabel || "").trim(),
+    adapter: String(turn.adapter || fallback.adapter || "").trim(),
+    platform,
+    model,
+  };
+}
+
 export function useImageSubmit({
   mode,
   imagePrompt,
-  imageModel,
+  selectedModel,
+  editModels,
+  compareEnabled,
+  compareModels,
   imageSources,
   sourceImages,
   parsedCount,
@@ -176,7 +239,7 @@ export function useImageSubmit({
       aspectRatio: _aspectRatio,
       resolutionTier: _resolutionTier,
       quality: overrideQuality,
-      providerPlatform: overrideProviderPlatform,
+      modelId: overrideModelId,
     }: {
       prompt: string;
       mask: {
@@ -186,9 +249,29 @@ export function useImageSubmit({
       aspectRatio?: string;
       resolutionTier?: string;
       quality?: string;
-      providerPlatform?: APIAccessPlatform;
+      modelId?: ImageModelId;
     }) => {
       if (isSelectionEditDispatchingRef.current || !editorTarget) {
+        return;
+      }
+      const baseSelection =
+        (overrideModelId
+          ? editModels.find((item) => item.id === overrideModelId)
+          : undefined) ??
+        (editorTarget.modelId
+          ? editModels.find((item) => item.id === editorTarget.modelId)
+          : undefined) ??
+        (editorTarget.providerPlatform && editorTarget.model
+          ? editModels.find(
+              (item) =>
+                item.platform === editorTarget.providerPlatform &&
+                item.model === editorTarget.model,
+            )
+          : undefined) ??
+        editModels.find((item) => item.id === selectedModel.id) ??
+        editModels[0];
+      if (!baseSelection) {
+        toast.error("当前没有可用于编辑的模型");
         return;
       }
       isSelectionEditDispatchingRef.current = true;
@@ -203,16 +286,11 @@ export function useImageSubmit({
       const nextQuality = supportsEditableOutputOptions
         ? normalizeImageQuality(overrideQuality, imageQuality)
         : imageQuality;
-      const nextProviderPlatform =
-        overrideProviderPlatform ?? editorTarget.providerPlatform ?? providerPlatform;
-      const baseModel =
-        editorTarget.providerPlatform === nextProviderPlatform
-          ? editorTarget.model
-          : imageModel;
+      const nextProviderPlatform = baseSelection.platform;
       const turnId = makeId();
       const jobId = makeId();
       const now = new Date().toISOString();
-      const requestModel = imageModelForPlatform(nextProviderPlatform, baseModel);
+      const requestModel = imageModelForPlatform(nextProviderPlatform, baseSelection.model);
       const draftTurn = createConversationTurn({
         turnId,
         title: buildConversationTitle("edit", prompt),
@@ -226,6 +304,11 @@ export function useImageSubmit({
           : undefined,
         quality: supportsEditableOutputOptions ? nextQuality : undefined,
         providerPlatform: nextProviderPlatform,
+        modelId: baseSelection.id,
+        modelLabel: baseSelection.label,
+        vendor: baseSelection.vendor,
+        vendorLabel: baseSelection.vendorLabel,
+        adapter: baseSelection.adapter,
         sourceImages: [
           buildSourceReference({
             id: makeId(),
@@ -273,7 +356,12 @@ export function useImageSubmit({
 
         const response = await generateImageWithOptions(prompt, {
           mode: "edit",
+          modelId: baseSelection.id,
           model: requestModel,
+          modelLabel: baseSelection.label,
+          vendor: baseSelection.vendor,
+          vendorLabel: baseSelection.vendorLabel,
+          adapter: baseSelection.adapter,
           count: 1,
           size: supportsEditableOutputOptions ? imageSize : undefined,
           quality: nextQuality,
@@ -289,6 +377,7 @@ export function useImageSubmit({
           turnId,
           response.data || [],
           1,
+          jobId,
         );
         const jobOnlyResponse =
           Boolean(response.jobId || response.job) &&
@@ -315,8 +404,7 @@ export function useImageSubmit({
           toast.success("图片编辑完成");
         }
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "提交编辑失败";
+        const message = formatImageError(error || "提交编辑失败");
         await updateConversation(conversationId, (current) => ({
           ...(current ?? buildConversationBase(conversationId, draftTurn)),
           turns: (current?.turns ?? [draftTurn]).map((turn) =>
@@ -343,14 +431,14 @@ export function useImageSubmit({
     [
       closeSelectionEditor,
       editorTarget,
+      editModels,
       focusConversation,
-      imageModel,
       imageQuality,
       imageResolutionAccess,
       imageSize,
-      providerPlatform,
       makeId,
       persistConversation,
+      selectedModel.id,
       selectedConversationId,
       setImagePrompt,
       setSourceImages,
@@ -380,14 +468,16 @@ export function useImageSubmit({
       );
       const turnQuality = turn.quality || "high";
       const turnProviderPlatform = turn.providerPlatform ?? providerPlatform;
-      const requestModel = imageModelForPlatform(turnProviderPlatform, turn.model);
+      const turnSelection = modelSelectionFromTurn(turn, selectedModel);
+      const requestModel = imageModelForPlatform(turnProviderPlatform, turnSelection.model);
+      const previousCount = Math.max(1, turn.count || 1);
       const isSingleImageRetry =
         turnMode === "generate" &&
         typeof imageIndex === "number" &&
         imageIndex >= 0 &&
-        (turn.count || 1) > 1;
-      const displayCount = Math.max(1, turn.count || 1);
-      const requestCount = isSingleImageRetry ? 1 : displayCount;
+        previousCount > 1;
+      const displayCount = isSingleImageRetry ? previousCount : 1;
+      const requestCount = 1;
 
       if (turnMode === "generate" && !prompt) {
         toast.error("该记录缺少提示词，无法重试");
@@ -422,7 +512,18 @@ export function useImageSubmit({
         resolutionAccess: turn.resolutionAccess,
         quality: turnQuality,
         providerPlatform: turnProviderPlatform,
+        modelId: turnSelection.id,
+        modelLabel: turnSelection.label,
+        vendor: turnSelection.vendor,
+        vendorLabel: turnSelection.vendorLabel,
+        adapter: turnSelection.adapter,
+        compareBatchId: turn.compareBatchId || turn.compareGroupId,
+        compareGroupId: turn.compareGroupId || turn.compareBatchId,
+        compareModelLabel: turn.compareModelLabel,
+        compareModelIndex: turn.compareModelIndex,
+        compareModelCount: turn.compareModelCount,
         sourceImages: turnSourceImages,
+        hasAttachment: turnSourceImages.length > 0 || turn.hasAttachment,
         sourceReference: turn.sourceReference,
         images: nextImages,
         createdAt: new Date().toISOString(),
@@ -444,7 +545,12 @@ export function useImageSubmit({
 
         const response = await generateImageWithOptions(prompt, {
           mode: turnMode,
+          modelId: turnSelection.id,
           model: requestModel,
+          modelLabel: turnSelection.label,
+          vendor: turnSelection.vendor,
+          vendorLabel: turnSelection.vendorLabel,
+          adapter: turnSelection.adapter,
           count: requestCount,
           size: turn.size,
           quality: turnQuality,
@@ -453,13 +559,21 @@ export function useImageSubmit({
           conversationId,
           turnId: turn.id,
           title: buildConversationTitle(turnMode, prompt),
-          sourceImages: turnMode === "edit" ? sourceImagePayloads(turnSourceImages) : undefined,
+          compareBatchId: turn.compareBatchId || turn.compareGroupId,
+          compareGroupId: turn.compareGroupId || turn.compareBatchId,
+          compareModelLabel: turn.compareModelLabel,
+          compareModelIndex: turn.compareModelIndex,
+          compareModelCount: turn.compareModelCount,
+          sourceImages: sourceImagePayloads(turnSourceImages),
+          hasAttachment: turnSourceImages.length > 0 || turn.hasAttachment,
           sourceReference: turn.sourceReference,
         });
+        const responseItems = response.data || [];
         const resultImages = mergeResultImages(
           turn.id,
-          response.data || [],
-          requestCount,
+          responseItems,
+          Math.max(requestCount, resultImageCount(responseItems)),
+          retryJobId,
         );
         const jobOnlyResponse =
           Boolean(response.jobId || response.job) &&
@@ -492,8 +606,7 @@ export function useImageSubmit({
           toast.success(isSingleImageRetry ? "失败图片已重新生成" : "已重新生成");
         }
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "提交任务失败";
+        const message = formatImageError(error || "提交任务失败");
         await updateConversation(conversationId, (current) => ({
           ...(current ?? buildConversationBase(conversationId, draftTurn)),
           turns: (current?.turns ?? [draftTurn]).map((item) =>
@@ -540,6 +653,7 @@ export function useImageSubmit({
       makeId,
       onSubmitSettled,
       providerPlatform,
+      selectedModel,
       setSubmitElapsedSeconds,
       updateConversation,
     ],
@@ -565,27 +679,44 @@ export function useImageSubmit({
     isSubmitDispatchingRef.current = true;
 
     const conversationId = selectedConversationId ?? makeId();
-    const turnId = makeId();
-    const jobId = makeId();
     const expectedCount = mode === "generate" ? parsedCount : 1;
-    const requestModel = imageModelForPlatform(providerPlatform, imageModel);
-    const draftTurn = createConversationTurn({
-      turnId,
-      title: buildConversationTitle(mode, prompt),
-      mode,
-      prompt,
-      model: requestModel,
-      count: expectedCount,
-      size: imageSize,
-      resolutionAccess: imageResolutionAccess,
-      quality: imageQuality,
-      providerPlatform,
-      sourceImages,
-      images: createLoadingImages(expectedCount, turnId),
-      createdAt: new Date().toISOString(),
-      status: "queued",
-      jobId,
+    const runCompare = shouldRunModelCompare(mode, compareEnabled, compareModels);
+    const compareBatchId = runCompare ? makeId() : undefined;
+    const selectedModels = runCompare ? compareModels : [selectedModel];
+    const now = new Date().toISOString();
+    const draftTurns = selectedModels.map((selection, index) => {
+      const turnId = makeId();
+      const requestModel = imageModelForPlatform(selection.platform, selection.model);
+      return createConversationTurn({
+        turnId,
+        title: buildConversationTitle(mode, prompt),
+        mode,
+        prompt,
+        model: requestModel,
+        count: expectedCount,
+        size: imageSize,
+        resolutionAccess: imageResolutionAccess,
+        quality: imageQuality,
+        providerPlatform: selection.platform,
+        modelId: selection.id,
+        modelLabel: selection.label,
+        vendor: selection.vendor,
+        vendorLabel: selection.vendorLabel,
+        adapter: selection.adapter,
+        compareBatchId,
+        compareGroupId: compareBatchId,
+        compareModelLabel: runCompare ? selection.label : undefined,
+        compareModelIndex: runCompare ? index : undefined,
+        compareModelCount: runCompare ? selectedModels.length : undefined,
+        sourceImages,
+        hasAttachment: sourceImages.length > 0,
+        images: createLoadingImages(expectedCount, turnId),
+        createdAt: now,
+        status: "queued",
+        jobId: makeId(),
+      });
     });
+    const firstDraftTurn = draftTurns[0];
 
     setSubmitElapsedSeconds(0);
     focusConversation(conversationId);
@@ -595,78 +726,112 @@ export function useImageSubmit({
     try {
       if (selectedConversationId) {
         await updateConversation(conversationId, (current) => ({
-          ...(current ?? buildConversationBase(conversationId, draftTurn)),
-          turns: [...(current?.turns ?? []), draftTurn],
+          ...(current ?? buildConversationBase(conversationId, firstDraftTurn)),
+          turns: [...(current?.turns ?? []), ...draftTurns],
         }));
       } else {
         await persistConversation(
-          buildConversationBase(conversationId, draftTurn),
+          {
+            ...buildConversationBase(conversationId, firstDraftTurn),
+            turns: draftTurns,
+          },
         );
       }
 
-      const response = await generateImageWithOptions(prompt, {
-        mode,
-        model: requestModel,
-        count: expectedCount,
-        size: imageSize,
-        quality: imageQuality,
-        platform: providerPlatform,
-        jobId,
-        conversationId,
-        turnId,
-        title: draftTurn.title,
-        sourceImages: mode === "edit" ? sourceImagePayloads(sourceImages) : undefined,
-      });
-      const resultImages = mergeResultImages(
-        turnId,
-        response.data || [],
-        expectedCount,
-      );
-      const jobOnlyResponse =
-        Boolean(response.jobId || response.job) &&
-        (response.data || []).length === 0;
+      const submitResults = await Promise.allSettled(
+        draftTurns.map(async (draftTurn) => {
+          try {
+            const response = await generateImageWithOptions(prompt, {
+              mode,
+              modelId: draftTurn.modelId,
+              model: draftTurn.model,
+              modelLabel: draftTurn.modelLabel,
+              vendor: draftTurn.vendor,
+              vendorLabel: draftTurn.vendorLabel,
+              adapter: draftTurn.adapter,
+              count: expectedCount,
+              size: imageSize,
+              quality: imageQuality,
+              platform: draftTurn.providerPlatform,
+              jobId: draftTurn.jobId,
+              conversationId,
+              turnId: draftTurn.id,
+              title: draftTurn.title,
+              compareBatchId: draftTurn.compareBatchId || draftTurn.compareGroupId,
+              compareGroupId: draftTurn.compareGroupId || draftTurn.compareBatchId,
+              compareModelLabel: draftTurn.compareModelLabel,
+              compareModelIndex: draftTurn.compareModelIndex,
+              compareModelCount: draftTurn.compareModelCount,
+              sourceImages: sourceImagePayloads(sourceImages),
+              hasAttachment: sourceImages.length > 0,
+            });
+            const responseItems = response.data || [];
+            const resultImages = mergeResultImages(
+              draftTurn.id,
+              responseItems,
+              Math.max(expectedCount, resultImageCount(responseItems)),
+              draftTurn.jobId,
+            );
+            const jobOnlyResponse =
+              Boolean(response.jobId || response.job) &&
+              (response.data || []).length === 0;
 
-      if (!jobOnlyResponse) {
-        await updateConversation(conversationId, (current) => ({
-          ...(current ?? buildConversationBase(conversationId, draftTurn)),
-          turns: (current?.turns ?? [draftTurn]).map((turn) =>
-            turn.id === turnId
-              ? {
-                  ...turn,
-                  status: resultImages.some((image) => image.status === "error")
-                    ? "error"
-                    : "success",
-                  error: resultImages.some((image) => image.status === "error")
-                    ? "部分图片生成失败"
-                    : undefined,
-                  images: resultImages,
-                }
-              : turn,
-          ),
-        }));
-        toast.success("图片生成完成");
+            if (!jobOnlyResponse) {
+              await updateConversation(conversationId, (current) => ({
+                ...(current ?? buildConversationBase(conversationId, firstDraftTurn)),
+                turns: (current?.turns ?? draftTurns).map((turn) =>
+                  turn.id === draftTurn.id
+                    ? {
+                        ...turn,
+                        status: resultImages.some((image) => image.status === "error")
+                          ? "error"
+                          : "success",
+                        error: resultImages.some((image) => image.status === "error")
+                          ? "部分图片生成失败"
+                          : undefined,
+                        images: resultImages,
+                      }
+                    : turn,
+                ),
+              }));
+            }
+          } catch (error) {
+            const message = formatImageError(error || "提交任务失败");
+            await updateConversation(conversationId, (current) => ({
+              ...(current ?? buildConversationBase(conversationId, firstDraftTurn)),
+              turns: (current?.turns ?? draftTurns).map((turn) =>
+                turn.id === draftTurn.id
+                  ? {
+                      ...turn,
+                      status: "error",
+                      error: message,
+                      images: turn.images.map((image) => ({
+                        ...image,
+                        status: "error" as const,
+                        error: message,
+                      })),
+                    }
+                  : turn,
+              ),
+            }));
+            throw error;
+          }
+        }),
+      );
+      const failedSubmitCount = submitResults.filter(
+        (result) => result.status === "rejected",
+      ).length;
+      if (failedSubmitCount > 0) {
+        if (!runCompare || failedSubmitCount === draftTurns.length) {
+          throw new Error("提交任务失败");
+        }
+        toast.warning(`部分模型提交失败，已提交 ${draftTurns.length - failedSubmitCount} 个对比任务`);
+      } else {
+        toast.success(runCompare ? "模型对比任务已提交" : "图片任务已提交");
       }
       resetComposer(mode === "generate" ? "generate" : "edit");
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "提交任务失败";
-      await updateConversation(conversationId, (current) => ({
-        ...(current ?? buildConversationBase(conversationId, draftTurn)),
-        turns: (current?.turns ?? [draftTurn]).map((turn) =>
-          turn.id === turnId
-            ? {
-                ...turn,
-                status: "error",
-                error: message,
-                images: turn.images.map((image) => ({
-                  ...image,
-                  status: "error" as const,
-                  error: message,
-                })),
-              }
-            : turn,
-        ),
-      }));
+      const message = formatImageError(error || "提交任务失败");
       toast.error(message);
     } finally {
       isSubmitDispatchingRef.current = false;
@@ -674,9 +839,9 @@ export function useImageSubmit({
     }
   }, [
     focusConversation,
-    imageModel,
+    compareEnabled,
+    compareModels,
     imagePrompt,
-    providerPlatform,
     imageSources,
     makeId,
     mode,
@@ -687,6 +852,7 @@ export function useImageSubmit({
     persistConversation,
     resetComposer,
     selectedConversationId,
+    selectedModel,
     setImagePrompt,
     setSourceImages,
     setSubmitElapsedSeconds,

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 	"imagestudio/internal/cliproxy"
 	"imagestudio/internal/config"
 	"imagestudio/internal/configstore"
+	"imagestudio/internal/database"
 )
 
 func main() {
@@ -73,6 +75,16 @@ func main() {
 		}
 	}
 
+	db, err := openPrimaryDatabase(cfg)
+	if err != nil {
+		fatalStartup(logger, paths, "初始化数据库失败", err,
+			"请检查 database.driver、database.dsn 以及数据库服务是否可连接",
+		)
+	}
+	if db != nil {
+		defer db.Close()
+	}
+
 	store, err := accounts.NewStore(cfg)
 	if err != nil {
 		fatalStartup(logger, paths, "初始化账号存储失败", err)
@@ -87,7 +99,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           api.SetupRouter(cfg, store, syncClient),
+		Handler:           api.SetupRouterWithDatabase(cfg, store, syncClient, db),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -131,6 +143,27 @@ func main() {
 	defer cancel()
 	_ = server.Shutdown(shutCtx)
 	logger.Info("server stopped")
+}
+
+func openPrimaryDatabase(cfg *config.Config) (*sql.DB, error) {
+	driver := strings.ToLower(strings.TrimSpace(cfg.Database.Driver))
+	if driver == "" {
+		driver = "postgres"
+	}
+	if !strings.EqualFold(driver, "postgres") {
+		return nil, fmt.Errorf("unsupported primary database driver %q", driver)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db, err := database.Open(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := database.Migrate(ctx, db, cfg.Database.Driver); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
 }
 
 func envString(key, fallback string) string {
@@ -184,16 +217,26 @@ func applyEnvConfigOverrides(cfg *config.Config) error {
 			}
 		}
 	}
+	putBool := func(envKey, section, key string) {
+		if value := os.Getenv(envKey); strings.TrimSpace(value) != "" {
+			put(section, key, strings.EqualFold(strings.TrimSpace(value), "true"))
+		}
+	}
 
 	putString("APP_AUTH_KEY", "app", "auth_key")
 	putString("APP_API_KEY", "app", "api_key")
+	putString("DATABASE_DRIVER", "database", "driver")
+	putString("DATABASE_DSN", "database", "dsn")
+	putInt("DATABASE_MAX_OPEN_CONNS", "database", "max_open_conns")
+	putInt("DATABASE_MAX_IDLE_CONNS", "database", "max_idle_conns")
+	putInt("DATABASE_CONN_MAX_LIFETIME_SECONDS", "database", "conn_max_lifetime_seconds")
+	putString("JOB_QUEUE_BACKEND", "job_queue", "backend")
 	putString("STORAGE_BACKEND", "storage", "backend")
 	putString("STORAGE_CONFIG_BACKEND", "storage", "config_backend")
 	putString("STORAGE_IMAGE_STORAGE", "storage", "image_storage")
 	putString("STORAGE_IMAGE_CONVERSATION_STORAGE", "storage", "image_conversation_storage")
 	putString("STORAGE_IMAGE_DATA_STORAGE", "storage", "image_data_storage")
 	putString("STORAGE_IMAGE_DIR", "storage", "image_dir")
-	putString("STORAGE_SQLITE_PATH", "storage", "sqlite_path")
 	putString("REDIS_ADDR", "storage", "redis_addr")
 	putString("REDIS_PASSWORD", "storage", "redis_password")
 	putInt("REDIS_DB", "storage", "redis_db")
@@ -213,6 +256,11 @@ func applyEnvConfigOverrides(cfg *config.Config) error {
 	putString("SUB2API_PASSWORD", "sub2api", "password")
 	putString("SUB2API_API_KEY", "sub2api", "api_key")
 	putString("SUB2API_GROUP_ID", "sub2api", "group_id")
+	putBool("EXTERNAL_API_ENABLED", "external_api", "enabled")
+	putString("EXTERNAL_API_BASE_URL", "external_api", "base_url")
+	putString("EXTERNAL_API_SIGNING_SECRET", "external_api", "signing_secret")
+	putInt("EXTERNAL_API_DEFAULT_RATE_LIMIT_PER_MINUTE", "external_api", "default_rate_limit_per_minute")
+	putInt("EXTERNAL_API_DEFAULT_CONCURRENCY_LIMIT", "external_api", "default_concurrency_limit")
 
 	if len(overrides) == 0 {
 		return nil

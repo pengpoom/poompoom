@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -23,6 +24,15 @@ import (
 	"imagestudio/internal/accounts"
 	"imagestudio/internal/buildinfo"
 	"imagestudio/internal/businessauth"
+	"imagestudio/internal/businesscodes"
+	"imagestudio/internal/businesscredits"
+	"imagestudio/internal/businessimage"
+	"imagestudio/internal/businessjobs"
+	"imagestudio/internal/businessnotifications"
+	"imagestudio/internal/businesspayments"
+	"imagestudio/internal/businessproviders"
+	"imagestudio/internal/businesssettings"
+	"imagestudio/internal/businesstracker"
 	"imagestudio/internal/cliproxy"
 	"imagestudio/internal/config"
 	"imagestudio/internal/middleware"
@@ -33,6 +43,7 @@ import (
 type Server struct {
 	cfg                    *config.Config
 	runtimeMu              sync.RWMutex
+	db                     *sql.DB
 	store                  *accounts.Store
 	syncClient             *cliproxy.Client
 	syncRunMu              sync.RWMutex
@@ -51,14 +62,13 @@ type Server struct {
 	staticDir              string
 	reqLogs                *imageRequestLogStore
 	imageAdmission         *imageAdmissionController
-	imageTasks             *imageTaskManager
 	loginLimiter           *loginRateLimiter
 	bootstrapWarningOnce   sync.Once
 	businessJobMu          sync.RWMutex
 	activeBusinessJobs     map[string]activeBusinessImageJob
 	businessJobReconcileMu sync.Mutex
 	businessJobWorkerOnce  sync.Once
-	businessJobWorkerWake  chan struct{}
+	businessJobDispatcher  businessJobDispatcher
 	officialClientFactory  func(accessToken, proxyURL string, authData map[string]any, requestConfig handler.ImageRequestConfig) imageWorkflowClient
 	responsesClientFactory func(accessToken, proxyURL string, authData map[string]any, requestConfig handler.ImageRequestConfig) imageWorkflowClient
 	cpaClientFactory       func(baseURL, apiKey string, timeout time.Duration, routeStrategy string) cpaRouteAwareImageWorkflowClient
@@ -106,14 +116,16 @@ type authSession struct {
 	Email     string
 	Role      string
 	UserID    string
+	AvatarURL string
 	ExpiresAt time.Time
 }
 
 type loginAccount struct {
-	Username string
-	Email    string
-	Role     string
-	UserID   string
+	Username  string
+	Email     string
+	Role      string
+	UserID    string
+	AvatarURL string
 }
 
 func (e *requestError) Error() string {
@@ -121,17 +133,21 @@ func (e *requestError) Error() string {
 }
 
 func NewServer(cfg *config.Config, store *accounts.Store, syncClient *cliproxy.Client) *Server {
+	return NewServerWithDatabase(cfg, store, syncClient, nil)
+}
+
+func NewServerWithDatabase(cfg *config.Config, store *accounts.Store, syncClient *cliproxy.Client, db *sql.DB) *Server {
 	server := &Server{
-		cfg:                   cfg,
-		store:                 store,
-		syncClient:            syncClient,
-		syncRunCache:          map[string]*sourceSyncRunResult{},
-		staticDir:             cfg.ResolvePath(cfg.Server.StaticDir),
-		reqLogs:               newImageRequestLogStore(),
-		imageAdmission:        newImageAdmissionController(),
-		loginLimiter:          newLoginRateLimiter(5, 15*time.Minute),
-		activeBusinessJobs:    map[string]activeBusinessImageJob{},
-		businessJobWorkerWake: make(chan struct{}, 1),
+		cfg:                cfg,
+		db:                 db,
+		store:              store,
+		syncClient:         syncClient,
+		syncRunCache:       map[string]*sourceSyncRunResult{},
+		staticDir:          cfg.ResolvePath(cfg.Server.StaticDir),
+		reqLogs:            newImageRequestLogStore(),
+		imageAdmission:     newImageAdmissionController(),
+		loginLimiter:       newLoginRateLimiter(5, 15*time.Minute),
+		activeBusinessJobs: map[string]activeBusinessImageJob{},
 		officialClientFactory: func(accessToken, proxyURL string, authData map[string]any, requestConfig handler.ImageRequestConfig) imageWorkflowClient {
 			return handler.NewChatGPTClientWithProxyAndConfig(
 				accessToken,
@@ -172,8 +188,77 @@ func NewServer(cfg *config.Config, store *accounts.Store, syncClient *cliproxy.C
 			)
 		},
 	}
-	server.imageTasks = newImageTaskManager(server)
 	return server
+}
+
+func (s *Server) newBusinessAuthStore() (*businessauth.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businessauth.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businessauth.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessCreditStore() (*businesscredits.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businesscredits.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businesscredits.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessCodeStore() (*businesscodes.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businesscodes.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businesscodes.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessPaymentStore() (*businesspayments.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businesspayments.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businesspayments.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessJobStore() (*businessjobs.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businessjobs.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businessjobs.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessImageStore() (*businessimage.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businessimage.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businessimage.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessSettingsStore() (*businesssettings.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businesssettings.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businesssettings.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessProviderStore() (*businessproviders.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businessproviders.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businessproviders.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessNotificationStore() (*businessnotifications.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businessnotifications.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businessnotifications.NewStore(s.cfg)
+}
+
+func (s *Server) newBusinessTrackerStore() (*businesstracker.Store, error) {
+	if s != nil && s.db != nil && strings.EqualFold(strings.TrimSpace(s.cfg.Database.Driver), "postgres") {
+		return businesstracker.NewStoreWithDB(s.db, s.cfg.Database.Driver), nil
+	}
+	return businesstracker.NewStore(s.cfg)
 }
 
 func (s *Server) getStore() *accounts.Store {
@@ -406,7 +491,6 @@ func storageSettingsChanged(previous, next configPayload) bool {
 		previous.Storage.AuthDir != next.Storage.AuthDir ||
 		previous.Storage.StateFile != next.Storage.StateFile ||
 		previous.Storage.SyncStateDir != next.Storage.SyncStateDir ||
-		previous.Storage.SQLitePath != next.Storage.SQLitePath ||
 		previous.Storage.ImageDir != next.Storage.ImageDir ||
 		previous.Storage.ImageStorage != next.Storage.ImageStorage ||
 		previous.Storage.ImageConversationStorage != next.Storage.ImageConversationStorage ||
@@ -426,6 +510,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /auth/register/options", http.HandlerFunc(s.handleRegistrationOptions))
 	mux.Handle("POST /auth/register/code", http.HandlerFunc(s.handleSendRegistrationVerificationCode))
 	mux.Handle("POST /auth/register", http.HandlerFunc(s.handleRegisterBusinessUser))
+	mux.Handle("POST /auth/password-reset/code", http.HandlerFunc(s.handleSendPasswordResetVerificationCode))
+	mux.Handle("POST /auth/password-reset", http.HandlerFunc(s.handleResetPasswordByEmailVerification))
 	mux.Handle("GET /version", http.HandlerFunc(s.handleVersion))
 	mux.Handle("GET /health", http.HandlerFunc(handleHealth))
 	mux.Handle("GET /api/site", http.HandlerFunc(s.handleGetPublicSiteSettings))
@@ -448,12 +534,19 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/sync/status", s.requireAdminAuth(http.HandlerFunc(s.handleSyncStatus)))
 	mux.Handle("POST /api/sync/run", s.requireAdminAuth(http.HandlerFunc(s.handleRunSync)))
 	mux.Handle("GET /api/business/admin/dashboard", s.requireAdminAuth(http.HandlerFunc(s.handleGetBusinessDashboard)))
+	mux.Handle("GET /api/business/admin/api-keys", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListAPIKeys)))
+	mux.Handle("POST /api/business/admin/api-keys", s.requireAdminAuth(http.HandlerFunc(s.handleAdminCreateAPIKey)))
+	mux.Handle("PATCH /api/business/admin/api-keys/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminUpdateAPIKey)))
+	mux.Handle("POST /api/business/admin/api-keys/{id}/revoke", s.requireAdminAuth(http.HandlerFunc(s.handleAdminRevokeAPIKey)))
+	mux.Handle("GET /api/business/admin/users-api-access", s.requireAdminAuth(http.HandlerFunc(s.handleListUsersAPIAccess)))
 	mux.Handle("GET /api/business/system-settings", s.requireAdminAuth(http.HandlerFunc(s.handleGetBusinessSystemSettings)))
 	mux.Handle("PUT /api/business/system-settings", s.requireAdminAuth(http.HandlerFunc(s.handleUpdateBusinessSystemSettings)))
 	mux.Handle("GET /api/business/users", s.requireAdminAuth(http.HandlerFunc(s.handleListBusinessUsers)))
 	mux.Handle("POST /api/business/users", s.requireAdminAuth(http.HandlerFunc(s.handleCreateBusinessUser)))
 	mux.Handle("GET /api/business/users/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleGetBusinessUserDetail)))
 	mux.Handle("PATCH /api/business/users/{id}/status", s.requireAdminAuth(http.HandlerFunc(s.handleUpdateBusinessUserStatus)))
+	mux.Handle("PATCH /api/business/users/{id}/api-access", s.requireAdminAuth(http.HandlerFunc(s.handleUpdateBusinessUserAPIAccess)))
+	mux.Handle("PATCH /api/business/users/{id}/billing-levels", s.requireAdminAuth(http.HandlerFunc(s.handleUpdateBusinessUserBillingLevels)))
 	mux.Handle("PATCH /api/business/users/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleUpdateBusinessUser)))
 	mux.Handle("DELETE /api/business/users/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleDeleteBusinessUser)))
 	mux.Handle("POST /api/business/users/{id}/restore", s.requireAdminAuth(http.HandlerFunc(s.handleRestoreBusinessUser)))
@@ -461,8 +554,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/business/users/{id}/data", s.requireAdminAuth(http.HandlerFunc(s.handleClearBusinessUserData)))
 	mux.Handle("PATCH /api/business/users/{id}/password", s.requireAdminAuth(http.HandlerFunc(s.handleResetBusinessUserPassword)))
 	mux.Handle("PUT /api/business/users/{id}/credit", s.requireAdminAuth(http.HandlerFunc(s.handleSetBusinessUserCredit)))
+	mux.Handle("GET /api/business/users/{id}/subscription", s.requireAdminAuth(http.HandlerFunc(s.handleAdminGetBusinessSubscription)))
 	mux.Handle("GET /api/business/admin/usage", s.requireAdminAuth(http.HandlerFunc(s.handleListAllBusinessUsage)))
 	mux.Handle("GET /api/business/admin/jobs", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListBusinessImageJobs)))
+	mux.Handle("GET /api/business/admin/compare-batches/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminGetBusinessImageCompareBatch)))
+	mux.Handle("GET /api/business/admin/risk-control/config", s.requireAdminAuth(http.HandlerFunc(s.handleGetRiskControlConfig)))
+	mux.Handle("PUT /api/business/admin/risk-control/config", s.requireAdminAuth(http.HandlerFunc(s.handleUpdateRiskControlConfig)))
+	mux.Handle("GET /api/business/admin/risk-control/status", s.requireAdminAuth(http.HandlerFunc(s.handleGetRiskControlStatus)))
+	mux.Handle("GET /api/business/admin/risk-control/logs", s.requireAdminAuth(http.HandlerFunc(s.handleListRiskControlLogs)))
+	mux.Handle("POST /api/business/admin/risk-control/test", s.requireAdminAuth(http.HandlerFunc(s.handleTestRiskControl)))
 	mux.Handle("GET /api/business/storage/report", s.requireAdminAuth(http.HandlerFunc(s.handleBusinessStorageReport)))
 	mux.Handle("POST /api/business/storage/backfill-assets", s.requireAdminAuth(http.HandlerFunc(s.handleBackfillBusinessStorageAssets)))
 	mux.Handle("GET /api/business/tracker/summary", s.requireAdminAuth(http.HandlerFunc(s.handleBusinessTrackerSummary)))
@@ -472,10 +572,73 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/business/api-providers/{id}/default", s.requireAdminAuth(http.HandlerFunc(s.handleSetDefaultBusinessAPIProvider)))
 	mux.Handle("POST /api/business/api-providers/{id}/test", s.requireAdminAuth(http.HandlerFunc(s.handleTestBusinessAPIProvider)))
 	mux.Handle("DELETE /api/business/api-providers/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleDeleteBusinessAPIProvider)))
+	mux.Handle("GET /api/business/provider-pools", s.requireAdminAuth(http.HandlerFunc(s.handleListBusinessProviderPools)))
+	mux.Handle("POST /api/business/provider-pools", s.requireAdminAuth(http.HandlerFunc(s.handleCreateBusinessProviderGroup)))
+	mux.Handle("POST /api/business/provider-pools/preview", s.requireAdminAuth(http.HandlerFunc(s.handlePreviewBusinessProviderDispatch)))
+	mux.Handle("PUT /api/business/provider-pools/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleUpdateBusinessProviderGroup)))
+	mux.Handle("POST /api/business/provider-pools/{id}/default", s.requireAdminAuth(http.HandlerFunc(s.handleSetDefaultBusinessProviderGroup)))
+	mux.Handle("POST /api/business/provider-pools/{id}/test", s.requireAdminAuth(http.HandlerFunc(s.handleTestBusinessProviderGroup)))
+	mux.Handle("DELETE /api/business/provider-pools/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleDeleteBusinessProviderGroup)))
+	mux.Handle("POST /api/business/provider-pool-members", s.requireAdminAuth(http.HandlerFunc(s.handleCreateBusinessProviderMember)))
+	mux.Handle("PUT /api/business/provider-pool-members/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleUpdateBusinessProviderMember)))
+	mux.Handle("POST /api/business/provider-pool-members/{id}/test", s.requireAdminAuth(http.HandlerFunc(s.handleTestBusinessProviderMember)))
+	mux.Handle("POST /api/business/provider-pool-members/{id}/recover", s.requireAdminAuth(http.HandlerFunc(s.handleRecoverBusinessProviderMember)))
+	mux.Handle("DELETE /api/business/provider-pool-members/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleDeleteBusinessProviderMember)))
+	mux.Handle("GET /api/business/admin/image-models", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListImageModels)))
+	mux.Handle("POST /api/business/admin/image-models", s.requireAdminAuth(http.HandlerFunc(s.handleAdminCreateImageModel)))
+	mux.Handle("PUT /api/business/admin/image-models/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminUpdateImageModel)))
+	mux.Handle("POST /api/business/admin/image-models/{id}/default", s.requireAdminAuth(http.HandlerFunc(s.handleAdminSetDefaultImageModel)))
+	mux.Handle("POST /api/business/admin/image-models/{id}/test", s.requireAdminAuth(http.HandlerFunc(s.handleAdminTestImageModel)))
+	mux.Handle("DELETE /api/business/admin/image-models/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminDeleteImageModel)))
+	mux.Handle("GET /api/business/admin/notifications", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListBusinessNotifications)))
+	mux.Handle("POST /api/business/admin/notifications", s.requireAdminAuth(http.HandlerFunc(s.handleAdminCreateBusinessNotification)))
+	mux.Handle("PUT /api/business/admin/notifications/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminUpdateBusinessNotification)))
+	mux.Handle("DELETE /api/business/admin/notifications/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminDeleteBusinessNotification)))
+	mux.Handle("GET /api/business/admin/codes", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListBusinessCodes)))
+	mux.Handle("POST /api/business/admin/codes", s.requireAdminAuth(http.HandlerFunc(s.handleAdminCreateBusinessCode)))
+	mux.Handle("POST /api/business/admin/codes/batch-status", s.requireAdminAuth(http.HandlerFunc(s.handleAdminBatchUpdateBusinessCodeStatus)))
+	mux.Handle("PUT /api/business/admin/codes/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminUpdateBusinessCode)))
+	mux.Handle("GET /api/business/admin/codes/{id}/usages", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListBusinessCodeUsages)))
+	mux.Handle("DELETE /api/business/admin/codes/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminDeleteBusinessCode)))
+	mux.Handle("GET /api/business/admin/affiliate/referrals", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListBusinessAffiliateReferrals)))
+	mux.Handle("GET /api/business/admin/payment/packages", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListPaymentPackages)))
+	mux.Handle("POST /api/business/admin/payment/packages", s.requireAdminAuth(http.HandlerFunc(s.handleAdminCreatePaymentPackage)))
+	mux.Handle("PUT /api/business/admin/payment/packages/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminUpdatePaymentPackage)))
+	mux.Handle("DELETE /api/business/admin/payment/packages/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminDeletePaymentPackage)))
+	mux.Handle("GET /api/business/admin/payment/providers", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListPaymentProviders)))
+	mux.Handle("POST /api/business/admin/payment/providers", s.requireAdminAuth(http.HandlerFunc(s.handleAdminCreatePaymentProvider)))
+	mux.Handle("PUT /api/business/admin/payment/providers/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminUpdatePaymentProvider)))
+	mux.Handle("DELETE /api/business/admin/payment/providers/{id}", s.requireAdminAuth(http.HandlerFunc(s.handleAdminDeletePaymentProvider)))
+	mux.Handle("GET /api/business/admin/payment/orders", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListPaymentOrders)))
+	mux.Handle("GET /api/business/admin/payment/subscriptions", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListBusinessSubscriptions)))
+	mux.Handle("POST /api/business/admin/payment/orders/{id}/complete", s.requireAdminAuth(http.HandlerFunc(s.handleAdminCompletePaymentOrder)))
+	mux.Handle("POST /api/business/admin/payment/orders/{id}/cancel", s.requireAdminAuth(http.HandlerFunc(s.handleAdminCancelPaymentOrder)))
+	mux.Handle("POST /api/business/admin/payment/orders/{id}/refund", s.requireAdminAuth(http.HandlerFunc(s.handleAdminRefundPaymentOrder)))
+	mux.Handle("GET /api/business/admin/payment/orders/{id}/audit", s.requireAdminAuth(http.HandlerFunc(s.handleAdminListPaymentOrderAuditLogs)))
 	mux.Handle("GET /api/business/me", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessMe)))
+	mux.Handle("POST /api/business/me/avatar", s.requireUIAuth(http.HandlerFunc(s.handleUploadBusinessMeAvatar)))
 	mux.Handle("PATCH /api/business/me/password", s.requireUIAuth(http.HandlerFunc(s.handleChangeBusinessMePassword)))
+	mux.Handle("GET /api/business/api-keys", s.requireUIAuth(http.HandlerFunc(s.handleListMyAPIKeys)))
+	mux.Handle("POST /api/business/api-keys", s.requireUIAuth(http.HandlerFunc(s.handleCreateMyAPIKey)))
+	mux.Handle("POST /api/business/api-keys/{id}/revoke", s.requireUIAuth(http.HandlerFunc(s.handleRevokeMyAPIKey)))
+	mux.Handle("GET /api/business/avatars/{name}", s.requireUIAuth(http.HandlerFunc(s.handleBusinessAvatarFile)))
 	mux.Handle("GET /api/business/credit", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessCredit)))
+	mux.Handle("GET /api/business/credit/ledger", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessCreditLedger)))
+	mux.Handle("POST /api/business/credit/redeem", s.requireUIAuth(http.HandlerFunc(s.handleRedeemBusinessCode)))
+	mux.Handle("GET /api/business/affiliate", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessAffiliateSummary)))
+	mux.Handle("GET /api/business/subscription", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessSubscription)))
+	mux.Handle("GET /api/business/billing-levels", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessBillingLevels)))
+	mux.Handle("GET /api/business/payment/packages", s.requireUIAuth(http.HandlerFunc(s.handleListPaymentPackages)))
+	mux.Handle("GET /api/business/payment/methods", s.requireUIAuth(http.HandlerFunc(s.handleListPaymentMethods)))
+	mux.Handle("GET /api/business/payment/orders", s.requireUIAuth(http.HandlerFunc(s.handleListPaymentOrders)))
+	mux.Handle("POST /api/business/payment/orders", s.requireUIAuth(http.HandlerFunc(s.handleCreatePaymentOrder)))
+	mux.Handle("GET /api/business/payment/webhook/easypay", http.HandlerFunc(s.handleEasyPayWebhook))
+	mux.Handle("POST /api/business/payment/webhook/easypay", http.HandlerFunc(s.handleEasyPayWebhook))
+	mux.Handle("GET /api/business/notifications", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessNotifications)))
+	mux.Handle("POST /api/business/notifications/read", s.requireUIAuth(http.HandlerFunc(s.handleMarkBusinessNotificationsRead)))
 	mux.Handle("GET /api/business/usage", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessUsage)))
+	mux.Handle("GET /api/business/assets", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessAssets)))
+	mux.Handle("GET /api/business/image-models", s.requireUIAuth(http.HandlerFunc(s.handleListImageModels)))
 	mux.Handle("GET /api/business/jobs", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessImageJobs)))
 	mux.Handle("GET /api/business/jobs/{id}", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessImageJob)))
 	mux.Handle("POST /api/business/jobs/{id}/cancel", s.requireUIAuth(http.HandlerFunc(s.handleCancelBusinessImageJob)))
@@ -488,11 +651,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/business/image/conversations", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessImageConversations)))
 	mux.Handle("DELETE /api/business/image/conversations", s.requireUIAuth(http.HandlerFunc(s.handleClearBusinessImageConversations)))
 	mux.Handle("GET /api/business/image/conversations/{id}", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessImageConversation)))
+	mux.Handle("PATCH /api/business/image/conversations/{id}", s.requireUIAuth(http.HandlerFunc(s.handleRenameBusinessImageConversation)))
 	mux.Handle("DELETE /api/business/image/conversations/{id}", s.requireUIAuth(http.HandlerFunc(s.handleDeleteBusinessImageConversation)))
 	mux.Handle("POST /api/image/generate", s.requireUIAuth(http.HandlerFunc(s.handleProviderImageGenerateSubmit)))
 
-	mux.Handle("POST /v1/images/generations", s.requireImageAuth(http.HandlerFunc(s.handleImageGenerations)))
-	mux.Handle("POST /v1/images/edits", s.requireImageAuth(http.HandlerFunc(s.handleImageEdits)))
 	mux.Handle("POST /v1/chat/completions", s.requireImageAuth(http.HandlerFunc(s.handleImageChatCompletions)))
 	mux.Handle("POST /v1/responses", s.requireImageAuth(http.HandlerFunc(s.handleImageResponses)))
 	mux.Handle("GET /v1/models", s.requireImageAuth(http.HandlerFunc(s.handleModels)))
@@ -506,12 +668,16 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Email    string `json:"email"`
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Email          string `json:"email"`
+		Username       string `json:"username"`
+		Password       string `json:"password"`
+		TurnstileToken string `json:"turnstileToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		return
+	}
+	if !s.verifyTurnstileForSettings(w, r, s.businessSystemSettingsForContext(r.Context()), turnstileActionLogin, body.TurnstileToken) {
 		return
 	}
 
@@ -539,6 +705,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": message})
 		return
 	}
+	if account.Role != authRoleAdmin && !isEmailLoginCredential(credential) {
+		s.loginLimiter.recordFailure(limitKey)
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "请使用邮箱登录"})
+		return
+	}
 	s.loginLimiter.recordSuccess(limitKey)
 	token, session, err := s.createAuthSession(r.Context(), account)
 	if err != nil {
@@ -553,6 +724,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"username":  session.Username,
 		"email":     session.Email,
 		"userId":    session.UserID,
+		"avatarUrl": session.AvatarURL,
 		"expiresAt": session.ExpiresAt.Format(time.RFC3339),
 		"version":   buildinfo.ResolveVersion(s.cfg.App.Version),
 	})
@@ -921,133 +1093,6 @@ func (s *Server) handleRunSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"result": result, "status": status})
 }
 
-func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) {
-	if s.rejectIfMaintenanceMode(w) {
-		return
-	}
-	var req struct {
-		Model          string `json:"model"`
-		Prompt         string `json:"prompt"`
-		N              int    `json:"n"`
-		Size           string `json:"size"`
-		Quality        string `json:"quality"`
-		Background     string `json:"background"`
-		ResponseFormat string `json:"response_format"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
-		return
-	}
-	if strings.TrimSpace(req.Prompt) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "prompt is required"})
-		return
-	}
-	if req.N < 1 {
-		req.N = 1
-	}
-
-	payload, err := s.executeImageGeneration(r.Context(), imageGenerationRequest{
-		Model:          req.Model,
-		Prompt:         req.Prompt,
-		N:              req.N,
-		Size:           req.Size,
-		Quality:        req.Quality,
-		Background:     req.Background,
-		ResponseFormat: req.ResponseFormat,
-	}, r)
-	if err != nil {
-		writeImageRequestError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, payload)
-}
-
-func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
-	if s.rejectIfMaintenanceMode(w) {
-		return
-	}
-	if err := r.ParseMultipartForm(int64(max(1, s.cfg.App.MaxUploadSizeMB)) << 20); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid multipart form"})
-		return
-	}
-
-	prompt := strings.TrimSpace(r.FormValue("prompt"))
-	if prompt == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "prompt is required"})
-		return
-	}
-	requestedModel := normalizeRequestedImageModel(r.FormValue("model"), s.cfg.ChatGPT.Model)
-	responseFormat := firstNonEmpty(r.FormValue("response_format"), s.cfg.App.ImageFormat, "url")
-	size := strings.TrimSpace(r.FormValue("size"))
-	quality := strings.TrimSpace(r.FormValue("quality"))
-	mask, err := readOptionalMultipartFile(r.MultipartForm, "mask")
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
-		return
-	}
-
-	inpaintRequest := parseInpaintRequest(r)
-	var payload map[string]any
-	var data []map[string]any
-	var execErr error
-	if inpaintRequest.originalFileID != "" && inpaintRequest.originalGenID != "" {
-		if strings.TrimSpace(inpaintRequest.sourceAccountID) == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "source_account_id is required for selection edit"})
-			return
-		}
-		payload, execErr = s.executeImageSelectionEdit(r.Context(), imageSelectionEditRequest{
-			Model:           requestedModel,
-			Prompt:          prompt,
-			Mask:            mask,
-			OriginalFileID:  inpaintRequest.originalFileID,
-			OriginalGenID:   inpaintRequest.originalGenID,
-			ConversationID:  inpaintRequest.conversationID,
-			ParentMessageID: inpaintRequest.parentMessageID,
-			SourceAccountID: inpaintRequest.sourceAccountID,
-			ResponseFormat:  responseFormat,
-		}, r)
-		if execErr != nil {
-			err = execErr
-		} else {
-			data = compatResponseDataItems(payload)
-		}
-	} else {
-		images, readErr := readImagesFromMultipart(r.MultipartForm)
-		if readErr != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": readErr.Error()})
-			return
-		}
-		if len(images) == 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "at least one image is required"})
-			return
-		}
-
-		payload, execErr = s.executeImageEdit(r.Context(), imageEditRequest{
-			Model:          requestedModel,
-			Prompt:         prompt,
-			Images:         images,
-			Mask:           mask,
-			Size:           size,
-			Quality:        quality,
-			ResponseFormat: responseFormat,
-		}, r)
-		if execErr != nil {
-			err = execErr
-		} else {
-			data = compatResponseDataItems(payload)
-		}
-	}
-	if err != nil {
-		writeImageRequestError(w, err)
-		return
-	}
-	if payload != nil {
-		writeJSON(w, http.StatusOK, payload)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"created": time.Now().Unix(), "data": data})
-}
-
 type imageRequestMetadata struct {
 	size         string
 	quality      string
@@ -1243,9 +1288,9 @@ func (s *Server) runPureCPAImageRequest(
 	if admissionErr != nil {
 		err := admissionErr
 		if errors.Is(admissionErr, errImageAdmissionQueueFull) {
-			err = newRequestError("image_queue_full", "现在使用人数较多，请稍后使用。")
+			err = newRequestError("image_queue_full", "前方爆满，请稍后使用。")
 		} else if errors.Is(admissionErr, errImageAdmissionQueueTimeout) {
-			err = newRequestError("image_queue_timeout", "现在使用人数较多，请稍后使用。")
+			err = newRequestError("image_queue_timeout", "前方爆满，请稍后使用。")
 		}
 		entry := imageRequestLogEntry{
 			StartedAt:            startedAt.Format(time.RFC3339Nano),
@@ -1400,9 +1445,9 @@ func (s *Server) runImageRequestWithAdmission(ctx context.Context, authFile *acc
 		if admissionErr != nil {
 			err := admissionErr
 			if errors.Is(admissionErr, errImageAdmissionQueueFull) {
-				err = newRequestError("image_queue_full", "现在使用人数较多，请稍后使用。")
+				err = newRequestError("image_queue_full", "前方爆满，请稍后使用。")
 			} else if errors.Is(admissionErr, errImageAdmissionQueueTimeout) {
-				err = newRequestError("image_queue_timeout", "现在使用人数较多，请稍后使用。")
+				err = newRequestError("image_queue_timeout", "前方爆满，请稍后使用。")
 			}
 			entry := imageRequestLogEntry{
 				StartedAt:            startedAt.Format(time.RFC3339Nano),
@@ -1760,7 +1805,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		token = authCookieFromRequest(r)
 	}
 	if token != "" {
-		store, err := businessauth.NewStore(s.cfg)
+		store, err := s.newBusinessAuthStore()
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "session store failed"})
 			return
@@ -1801,7 +1846,7 @@ func (s *Server) authSessionForToken(ctx context.Context, token string) (authSes
 }
 
 func (s *Server) persistentAuthSessionForToken(ctx context.Context, token string) (authSession, bool, error) {
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		return authSession{}, false, err
 	}
@@ -1823,6 +1868,7 @@ func (s *Server) persistentAuthSessionForToken(ctx context.Context, token string
 		Email:     session.User.Email,
 		Role:      session.User.Role,
 		UserID:    session.User.ID,
+		AvatarURL: session.User.AvatarURL,
 		ExpiresAt: expiresAt,
 	}, true, nil
 }
@@ -1895,7 +1941,7 @@ func (s *Server) loginAccountForCredentials(ctx context.Context, username, passw
 	if credential == "" || password == "" {
 		return loginAccount{}, false, nil
 	}
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		return loginAccount{}, false, err
 	}
@@ -1908,10 +1954,11 @@ func (s *Server) loginAccountForCredentials(ctx context.Context, username, passw
 		return loginAccount{}, false, err
 	}
 	return loginAccount{
-		Username: user.Username,
-		Email:    user.Email,
-		Role:     user.Role,
-		UserID:   user.ID,
+		Username:  user.Username,
+		Email:     user.Email,
+		Role:      user.Role,
+		UserID:    user.ID,
+		AvatarURL: user.AvatarURL,
 	}, true, nil
 }
 
@@ -1920,7 +1967,7 @@ func (s *Server) loginFailureMessage(ctx context.Context, credential string) (st
 	if credential == "" {
 		return "该账号未注册", nil
 	}
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		return "", err
 	}
@@ -1983,7 +2030,7 @@ func (s *Server) createAuthSession(ctx context.Context, account loginAccount) (s
 		return "", authSession{}, err
 	}
 	expiresAt := time.Now().Add(sessionTTL())
-	store, err := businessauth.NewStore(s.cfg)
+	store, err := s.newBusinessAuthStore()
 	if err != nil {
 		return "", authSession{}, err
 	}
@@ -1993,14 +2040,16 @@ func (s *Server) createAuthSession(ctx context.Context, account loginAccount) (s
 		Email:     account.Email,
 		Role:      account.Role,
 		UserID:    account.UserID,
+		AvatarURL: account.AvatarURL,
 		ExpiresAt: expiresAt,
 	}
 	_, err = store.CreateSession(ctx, sessionID, token, businessauth.User{
-		ID:       account.UserID,
-		Username: account.Username,
-		Email:    account.Email,
-		Role:     account.Role,
-		Status:   businessauth.StatusActive,
+		ID:        account.UserID,
+		Username:  account.Username,
+		Email:     account.Email,
+		Role:      account.Role,
+		Status:    businessauth.StatusActive,
+		AvatarURL: account.AvatarURL,
 	}, expiresAt)
 	if err != nil {
 		return "", authSession{}, err
@@ -2119,34 +2168,6 @@ func resolveStaticAsset(staticDir, requestPath string) string {
 	return ""
 }
 
-func readImagesFromMultipart(form *multipart.Form) ([][]byte, error) {
-	images := make([][]byte, 0)
-	for _, key := range []string{"image", "image[]"} {
-		files := form.File[key]
-		for _, fileHeader := range files {
-			data, err := readMultipartFile(fileHeader)
-			if err != nil {
-				return nil, err
-			}
-			images = append(images, data)
-		}
-	}
-
-	for _, key := range []string{"image_base64", "imageBase64"} {
-		if form.Value[key] == nil {
-			continue
-		}
-		for _, raw := range form.Value[key] {
-			decoded, err := decodeBase64Image(raw)
-			if err != nil {
-				return nil, err
-			}
-			images = append(images, decoded)
-		}
-	}
-	return images, nil
-}
-
 func readAuthFilesFromMultipart(form *multipart.Form) ([]accounts.ImportedAuthFile, error) {
 	if form == nil {
 		return nil, nil
@@ -2180,32 +2201,6 @@ func readAuthFilesFromMultipart(form *multipart.Form) ([]accounts.ImportedAuthFi
 	return files, nil
 }
 
-func readOptionalMultipartFile(form *multipart.Form, key string) ([]byte, error) {
-	files := form.File[key]
-	if len(files) == 0 {
-		return nil, nil
-	}
-	return readMultipartFile(files[0])
-}
-
-type inpaintRequest struct {
-	originalFileID  string
-	originalGenID   string
-	conversationID  string
-	parentMessageID string
-	sourceAccountID string
-}
-
-func parseInpaintRequest(r *http.Request) inpaintRequest {
-	return inpaintRequest{
-		originalFileID:  strings.TrimSpace(r.FormValue("original_file_id")),
-		originalGenID:   strings.TrimSpace(r.FormValue("original_gen_id")),
-		conversationID:  strings.TrimSpace(r.FormValue("conversation_id")),
-		parentMessageID: strings.TrimSpace(r.FormValue("parent_message_id")),
-		sourceAccountID: strings.TrimSpace(r.FormValue("source_account_id")),
-	}
-}
-
 func readMultipartFile(fileHeader *multipart.FileHeader) ([]byte, error) {
 	file, err := fileHeader.Open()
 	if err != nil {
@@ -2213,18 +2208,6 @@ func readMultipartFile(fileHeader *multipart.FileHeader) ([]byte, error) {
 	}
 	defer file.Close()
 	return io.ReadAll(file)
-}
-
-func decodeBase64Image(value string) ([]byte, error) {
-	cleaned := strings.TrimSpace(value)
-	if idx := strings.Index(cleaned, ","); idx >= 0 {
-		cleaned = cleaned[idx+1:]
-	}
-	decoded, err := base64.StdEncoding.DecodeString(cleaned)
-	if err != nil {
-		return nil, fmt.Errorf("invalid base64 image")
-	}
-	return decoded, nil
 }
 
 func (s *Server) findAccountByID(accountID string) (accounts.PublicAccount, error) {
@@ -2309,6 +2292,10 @@ func emailFromUsername(username string) string {
 		return username
 	}
 	return username + "@local.invalid"
+}
+
+func isEmailLoginCredential(credential string) bool {
+	return strings.Count(strings.TrimSpace(credential), "@") == 1
 }
 
 func stringValue(value any) string {

@@ -16,11 +16,24 @@ func (s *Server) handleGetPublicSiteSettings(w http.ResponseWriter, r *http.Requ
 			"subtitle": settings.Site.Subtitle,
 			"logoUrl":  settings.Site.LogoURL,
 		},
+		"turnstile": publicTurnstileSettings(settings),
 	})
 }
 
+func publicTurnstileSettings(settings businesssettings.Settings) map[string]any {
+	settings = businesssettings.Normalize(settings)
+	return map[string]any{
+		"enabled":        settings.User.TurnstileEnabled,
+		"siteKey":        settings.User.TurnstileSiteKey,
+		"login":          settings.User.TurnstileLogin,
+		"registerCode":   settings.User.TurnstileRegisterCode,
+		"registerSubmit": settings.User.TurnstileRegisterSubmit,
+		"passwordReset":  settings.User.TurnstilePasswordReset,
+	}
+}
+
 func (s *Server) handleGetBusinessSystemSettings(w http.ResponseWriter, r *http.Request) {
-	store, err := businesssettings.NewStore(s.cfg)
+	store, err := s.newBusinessSettingsStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "settings store failed"})
 		return
@@ -50,7 +63,7 @@ func (s *Server) handleUpdateBusinessSystemSettings(w http.ResponseWriter, r *ht
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
 		return
 	}
-	store, err := businesssettings.NewStore(s.cfg)
+	store, err := s.newBusinessSettingsStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "settings store failed"})
 		return
@@ -73,7 +86,7 @@ func (s *Server) businessSystemSettings(r *http.Request) businesssettings.Settin
 }
 
 func (s *Server) businessSystemSettingsForContext(ctx context.Context) businesssettings.Settings {
-	store, err := businesssettings.NewStore(s.cfg)
+	store, err := s.newBusinessSettingsStore()
 	if err != nil {
 		return businesssettings.Defaults()
 	}
@@ -89,7 +102,7 @@ func (s *Server) businessSystemSettingsForContext(ctx context.Context) businesss
 }
 
 func (s *Server) applyPersistedBusinessRuntimeSettings(ctx context.Context) {
-	store, err := businesssettings.NewStore(s.cfg)
+	store, err := s.newBusinessSettingsStore()
 	if err != nil {
 		return
 	}

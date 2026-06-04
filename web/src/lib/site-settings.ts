@@ -7,6 +7,14 @@ export const DEFAULT_SITE_SETTINGS: PublicSiteSettings["site"] = {
   subtitle: "图片生成工作台",
   logoUrl: "",
 };
+export const DEFAULT_TURNSTILE_SETTINGS = {
+  enabled: false,
+  siteKey: "",
+  login: false,
+  registerCode: false,
+  registerSubmit: false,
+  passwordReset: false,
+};
 
 export const SITE_SETTINGS_CHANGED_EVENT = "image-studio:site-settings-changed";
 
@@ -54,6 +62,34 @@ export function usePublicSiteSettings() {
   return site;
 }
 
+export function usePublicTurnstileSettings() {
+  const [turnstile, setTurnstile] = useState(DEFAULT_TURNSTILE_SETTINGS);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSettings = async () => {
+      try {
+        const result = await fetchPublicSiteSettings();
+        if (!cancelled) {
+          setTurnstile(normalizeTurnstileSettings(result.turnstile));
+        }
+      } catch {
+        if (!cancelled) {
+          setTurnstile(DEFAULT_TURNSTILE_SETTINGS);
+        }
+      }
+    };
+
+    void loadSettings();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return turnstile;
+}
+
 export function dispatchSiteSettingsChanged(site: PublicSiteSettings["site"]) {
   window.dispatchEvent(new CustomEvent<SiteSettingsChangedDetail>(SITE_SETTINGS_CHANGED_EVENT, {
     detail: normalizeSiteSettings(site),
@@ -70,4 +106,17 @@ export function siteInitials(name: string) {
     return asciiWords.slice(0, 2).map((word) => word[0]).join("").toUpperCase();
   }
   return Array.from(normalized).slice(0, 2).join("");
+}
+
+function normalizeTurnstileSettings(value: PublicSiteSettings["turnstile"] | undefined | null) {
+  const siteKey = String(value?.siteKey || "").trim();
+  const enabled = Boolean(value?.enabled && siteKey);
+  return {
+    enabled,
+    siteKey,
+    login: enabled && Boolean(value?.login),
+    registerCode: enabled && Boolean(value?.registerCode),
+    registerSubmit: enabled && Boolean(value?.registerSubmit),
+    passwordReset: enabled && Boolean(value?.passwordReset),
+  };
 }

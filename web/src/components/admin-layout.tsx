@@ -2,20 +2,22 @@ import type { ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import { adminLabelClass, adminPanelClass, adminSubPanelClass } from "@/components/admin-styles";
 
 export function AdminPage({
   children,
   className,
-  maxWidth = "max-w-[1400px]",
+  maxWidth = "",
 }: {
   children: ReactNode;
   className?: string;
   maxWidth?: string;
 }) {
   return (
-    <main className="app-admin-page-bg relative min-h-full px-5 py-5 text-[var(--app-text-primary)] sm:px-7 sm:py-7 lg:px-10 lg:py-8 xl:px-12">
-      <div className={cn("relative z-10 mx-auto flex w-full flex-col gap-5 sm:gap-6", maxWidth, className)}>{children}</div>
+    <main
+      className="app-admin-page-bg relative text-[var(--app-text-primary)]"
+      style={{ padding: "26px clamp(24px, 7.5vw, 144px) 40px", minHeight: "100%" }}
+    >
+      <div className={cn("relative z-10 flex w-full flex-col", maxWidth, className)} style={{ gap: 18 }}>{children}</div>
     </main>
   );
 }
@@ -24,22 +26,37 @@ export function AdminHeader({
   title,
   description,
   actions,
+  icon: Icon,
+  iconVariant,
   children,
 }: {
   title: string;
   description?: ReactNode;
   actions?: ReactNode;
+  icon?: LucideIcon;
+  iconVariant?: "" | "sky" | "ok" | "amber" | "violet" | "fail";
   children?: ReactNode;
 }) {
   return (
-    <section className="flex flex-col gap-4 border-b border-[var(--app-border)] pb-5 lg:flex-row lg:items-end lg:justify-between">
-      <div className="min-w-0">
-        {children}
-        <h1 className="text-[26px] font-semibold leading-tight tracking-normal text-[var(--app-text-primary)]">{title}</h1>
-        {description ? <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--app-text-muted)]">{description}</p> : null}
+    <div className="app-page-head">
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <h1 style={{ margin: 0 }}>{title}</h1>
+          {Icon ? (
+            <span className={cn("app-stat-ic", iconVariant || "mono")} style={{ width: 32, height: 32, flexShrink: 0 }}>
+              <Icon className="size-4" />
+            </span>
+          ) : null}
+          {children}
+        </div>
+        {description ? <p>{description}</p> : null}
       </div>
-      {actions ? <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">{actions}</div> : null}
-    </section>
+      {actions ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          {actions}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -50,13 +67,13 @@ export function AdminPanel({
   children: ReactNode;
   className?: string;
 }) {
-  return <section className={cn(adminPanelClass, className)}>{children}</section>;
+  return <section className={cn("app-panel", className)}>{children}</section>;
 }
 
 export function AdminSectionTitle({ title, action }: { title: string; action?: ReactNode }) {
   return (
-    <div className="flex min-h-12 items-center justify-between gap-3 border-b border-[var(--app-border)] px-4 py-3 sm:px-5">
-      <h2 className="text-[15px] font-semibold text-[var(--app-text-primary)]">{title}</h2>
+    <div className="panel-title">
+      <h3>{title}</h3>
       {action}
     </div>
   );
@@ -70,15 +87,28 @@ export function AdminToolbar({
   className?: string;
 }) {
   return (
-    <section
-      className={cn(
-        "rounded-[var(--app-radius-lg)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] p-3 shadow-[var(--app-shadow-floating)] backdrop-blur-2xl",
-        className,
-      )}
-    >
+    <section className={cn("app-toolbar", className)}>
       {children}
     </section>
   );
+}
+
+const iconVariantMap: Record<string, string> = {
+  "text-cyan-300": "",
+  "text-sky-300": "sky",
+  "text-emerald-300": "ok",
+  "text-green-300": "ok",
+  "text-amber-300": "amber",
+  "text-violet-300": "violet",
+  "text-rose-300": "fail",
+  "text-red-300": "fail",
+};
+
+function resolveIconVariant(color: string) {
+  for (const [key, variant] of Object.entries(iconVariantMap)) {
+    if (color.includes(key)) return variant;
+  }
+  return "";
 }
 
 export function AdminStatCard({
@@ -96,14 +126,17 @@ export function AdminStatCard({
   color: string;
   className?: string;
 }) {
+  const variant = resolveIconVariant(color);
   return (
-    <div className={cn(adminSubPanelClass, "flex h-full min-h-[104px] items-center justify-between gap-3 p-4", className)}>
-      <div className="min-w-0">
-        <div className={adminLabelClass}>{label}</div>
-        <div className={cn("mt-2 truncate text-2xl font-semibold leading-none", color)}>{value}</div>
-        {sub ? <div className="mt-1 truncate text-xs text-[var(--app-text-muted)]">{sub}</div> : null}
+    <div className={cn("app-stat", className)}>
+      <span className={cn("app-stat-ic", variant)}>
+        <Icon className="size-5" />
+      </span>
+      <div>
+        <b>{value}</b>
+        <small>{label}</small>
+        {sub ? <><br /><small>{sub}</small></> : null}
       </div>
-      <Icon className={cn("size-5 shrink-0", color)} />
     </div>
   );
 }

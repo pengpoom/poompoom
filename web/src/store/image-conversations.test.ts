@@ -39,7 +39,7 @@ describe("business image history adapter", () => {
     });
 
     expect(conversation.id).toBe("conv-1");
-    expect(conversation.title).toBe("cat");
+    expect(conversation.title).toBe("Cat session");
     expect(conversation.prompt).toBe("cat");
     expect(conversation.status).toBe("success");
     expect(conversation.turns).toHaveLength(1);
@@ -60,6 +60,37 @@ describe("business image history adapter", () => {
       b64_json: "aW1hZ2U=",
       revised_prompt: "a cat",
     });
+  });
+
+  it("falls back to prompt title when server conversation title is empty", () => {
+    const conversation = businessImageConversationDetailToConversation({
+      conversation: {
+        id: "conv-empty-title",
+        user_id: "dev_user",
+        title: "",
+        created_at: "2026-05-13T10:00:00Z",
+        updated_at: "2026-05-13T10:01:00Z",
+      },
+      generations: [
+        {
+          id: "job-empty-title",
+          user_id: "dev_user",
+          conversation_id: "conv-empty-title",
+          turn_id: "turn-empty-title",
+          prompt: "生成一张小猫",
+          model: "gpt-image-2",
+          count: 1,
+          status: "succeeded",
+          response: {
+            data: [{ b64_json: "aW1hZ2U=" }],
+          },
+          created_at: "2026-05-13T10:01:00Z",
+          finished_at: "2026-05-13T10:02:00Z",
+        },
+      ],
+    });
+
+    expect(conversation.title).toBe("生成一张小猫");
   });
 
   it("keeps failed business image generations visible after refresh", () => {
@@ -186,7 +217,9 @@ describe("business image history adapter", () => {
           status: "failed",
           stage: "admission",
           errorCode: "image_queue_timeout",
-          errorMessage: "现在使用人数较多，请稍后使用。",
+          errorMessage: "前方爆满，请稍后使用。",
+          userErrorType: "queue",
+          userErrorMessage: "当前生成请求较多，请稍后再试。",
           queueWaitMs: 5000,
           upstreamDurationMs: 0,
           persistDurationMs: 0,
@@ -194,6 +227,8 @@ describe("business image history adapter", () => {
           storageBytes: 0,
           creditReserved: 1,
           creditRefunded: 1,
+          upstreamSent: false,
+          upstreamStatus: "pending",
           createdAt: "2026-05-17T10:01:00Z",
           queuedAt: "2026-05-17T10:01:00Z",
           finishedAt: "2026-05-17T10:01:05Z",
@@ -206,14 +241,14 @@ describe("business image history adapter", () => {
     expect(conversation.turns?.[0]).toMatchObject({
       id: "turn-1-gen-1",
       status: "error",
-      error: "现在使用人数较多，请稍后使用。",
+      error: "当前生成请求较多，请稍后再试。",
       waitingDetail: "admission",
       waitingSince: "2026-05-17T10:01:00Z",
       finishedAt: "2026-05-17T10:01:05Z",
     });
     expect(conversation.turns?.[0]?.images[0]).toMatchObject({
       status: "error",
-      error: "现在使用人数较多，请稍后使用。",
+      error: "当前生成请求较多，请稍后再试。",
     });
   });
 

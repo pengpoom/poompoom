@@ -7,23 +7,30 @@ import { resetUnauthorizedRedirectState } from "@/lib/request";
 import { usePublicSiteSettings } from "@/lib/site-settings";
 import { AUTH_STATE_CHANGED_EVENT, clearStoredAuthKey, getStoredAuthRole, type AuthRole } from "@/store/auth";
 
+const APIAccessPage = lazy(() => import("@/app/api-access/page"));
+const APIKeysPage = lazy(() => import("@/app/api-keys/page"));
 const AccountsPage = lazy(() => import("@/app/accounts/page"));
+const AffiliatePage = lazy(() => import("@/app/affiliate/page"));
 const AdminUsagePage = lazy(() => import("@/app/admin-usage/page"));
 const AssetsPage = lazy(() => import("@/app/assets/page"));
 const CommunityPage = lazy(() => import("@/app/community/page"));
+const CodesPage = lazy(() => import("@/app/codes/page"));
 const CreditsPage = lazy(() => import("@/app/credits/page"));
 const DashboardPage = lazy(() => import("@/app/dashboard/page"));
+const ForgotPasswordPage = lazy(() => import("@/app/forgot-password/page"));
 const ImagePage = lazy(() => import("@/app/image/page"));
 const LoginPage = lazy(() => import("@/app/login/page"));
 const OperationsPage = lazy(() => import("@/app/operations/page"));
+const PaymentsPage = lazy(() => import("@/app/payments/page"));
 const HomePage = lazy(() => import("@/app/page"));
 const ProfilePage = lazy(() => import("@/app/profile/page"));
+const NotificationsPage = lazy(() => import("@/app/notifications/page"));
+const RiskControlPage = lazy(() => import("@/app/risk-control/page"));
 const SettingsPage = lazy(() => import("@/app/settings/page"));
 const StartupCheckPage = lazy(() => import("@/app/startup-check/page"));
 const StoragePage = lazy(() => import("@/app/storage/page"));
 const ToolsPage = lazy(() => import("@/app/tools/page"));
 const MyUsagePage = lazy(() => import("@/app/usage/page"));
-const UserDetailPage = lazy(() => import("@/app/users/detail/page"));
 const UsersPage = lazy(() => import("@/app/users/page"));
 
 type RouteErrorBoundaryState = {
@@ -214,6 +221,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<PublicOnlyRoute role={role}><HomePage /></PublicOnlyRoute>} />
             <Route path="/login" element={<PublicOnlyRoute role={role}><LoginPage /></PublicOnlyRoute>} />
+            <Route path="/forgot-password" element={<PublicOnlyRoute role={role}><ForgotPasswordPage /></PublicOnlyRoute>} />
             <Route path="/image" element={<ProtectedRoute role={role}><Navigate to="/image/history" replace /></ProtectedRoute>} />
             <Route path="/image/history" element={<ProtectedRoute role={role}><ImagePage /></ProtectedRoute>} />
             <Route path="/image/workspace" element={<ProtectedRoute role={role}><ImagePage /></ProtectedRoute>} />
@@ -223,11 +231,18 @@ export default function App() {
             <Route path="/usage" element={<ProtectedRoute role={role}><MyUsagePage /></ProtectedRoute>} />
             <Route path="/credits" element={<ProtectedRoute role={role}><CreditsPage /></ProtectedRoute>} />
             <Route path="/profile" element={<ProtectedRoute role={role}><ProfilePage /></ProtectedRoute>} />
+            <Route path="/api-access" element={<ProtectedRoute role={role}><APIAccessPage /></ProtectedRoute>} />
             <Route path="/admin/dashboard" element={<ProtectedRoute role={role} adminOnly><DashboardPage /></ProtectedRoute>} />
             <Route path="/admin/usage" element={<ProtectedRoute role={role} adminOnly><AdminUsagePage /></ProtectedRoute>} />
             <Route path="/admin/operations" element={<ProtectedRoute role={role} adminOnly><OperationsPage /></ProtectedRoute>} />
+            <Route path="/risk-control" element={<ProtectedRoute role={role} adminOnly><RiskControlPage /></ProtectedRoute>} />
+            <Route path="/notifications" element={<ProtectedRoute role={role} adminOnly><NotificationsPage /></ProtectedRoute>} />
+            <Route path="/codes" element={<ProtectedRoute role={role} adminOnly><CodesPage /></ProtectedRoute>} />
+            <Route path="/api-keys" element={<ProtectedRoute role={role} adminOnly><APIKeysPage /></ProtectedRoute>} />
+            <Route path="/affiliate" element={<ProtectedRoute role={role} adminOnly><AffiliatePage /></ProtectedRoute>} />
+            <Route path="/payments" element={<ProtectedRoute role={role} adminOnly><PaymentsPage /></ProtectedRoute>} />
             <Route path="/users" element={<ProtectedRoute role={role} adminOnly><UsersPage /></ProtectedRoute>} />
-            <Route path="/users/:id" element={<ProtectedRoute role={role} adminOnly><UserDetailPage /></ProtectedRoute>} />
+            <Route path="/users/:id" element={<ProtectedRoute role={role} adminOnly><UsersPage /></ProtectedRoute>} />
             <Route path="/storage" element={<ProtectedRoute role={role} adminOnly><StoragePage /></ProtectedRoute>} />
             <Route path="/accounts" element={<ProtectedRoute role={role} adminOnly><AccountsPage /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute role={role} adminOnly><SettingsPage /></ProtectedRoute>} />

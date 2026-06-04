@@ -29,6 +29,16 @@ prefer_remote_refresh = true
 refresh_workers = 6
 image_quota_refresh_ttl_seconds = 120
 
+[database]
+driver = "postgres"
+dsn = "postgres://image_studio:image_studio@127.0.0.1:5432/image_studio?sslmode=disable"
+max_open_conns = 20
+max_idle_conns = 10
+conn_max_lifetime_seconds = 300
+
+[job_queue]
+backend = "redis"
+
 [storage]
 backend = "current"
 config_backend = "file"
@@ -39,7 +49,6 @@ image_dir = "data/business-images"
 image_storage = "browser"
 image_conversation_storage = "browser"
 image_data_storage = "browser"
-sqlite_path = "data/image-studio.db"
 redis_addr = "127.0.0.1:6379"
 redis_password = ""
 redis_db = 0
@@ -89,3 +98,14 @@ request_timeout = 20
 
 [log]
 log_all_requests = false
+
+[external_api]
+enabled = false
+base_url = "https://api.example.com"
+default_rate_limit_per_minute = 60
+default_concurrency_limit = 2
+default_idempotency_ttl_hours = 168
+max_prompt_bytes = 20000
+max_metadata_bytes = 4096
+signing_secret = ""
+signed_url_ttl_seconds = 3600

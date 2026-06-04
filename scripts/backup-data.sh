@@ -30,13 +30,6 @@ copy_if_exists() {
   fi
 }
 
-if [ -f "$DATA_DIR/image-studio.db" ] && command -v sqlite3 >/dev/null 2>&1; then
-  sqlite3 "$DATA_DIR/image-studio.db" ".backup '$WORK_DIR/data/image-studio.db'"
-elif [ -f "$DATA_DIR/image-studio.db" ]; then
-  echo "sqlite3 not found; copying SQLite database file directly. Stop the service first for a fully consistent backup." >&2
-  copy_if_exists "$DATA_DIR/image-studio.db" "$WORK_DIR/data/image-studio.db"
-fi
-
 copy_if_exists "$DATA_DIR/config.toml" "$WORK_DIR/data/config.toml"
 copy_if_exists "$DATA_DIR/config.example.toml" "$WORK_DIR/data/config.example.toml"
 copy_if_exists "$DATA_DIR/accounts_state.json" "$WORK_DIR/data/accounts_state.json"

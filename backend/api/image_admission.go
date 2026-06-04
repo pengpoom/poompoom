@@ -14,6 +14,8 @@ var (
 	errImageAdmissionQueueTimeout = errors.New("image admission queue timeout")
 )
 
+const imageBusyMessage = "前方爆满，请稍后使用。"
+
 type imageAdmissionInfo struct {
 	QueueWaitMS          int64
 	InflightCountAtStart int
@@ -177,14 +179,14 @@ func (s *Server) acquireImageAdmission(ctx context.Context) (imageAdmissionInfo,
 
 func writeImageAdmissionError(w http.ResponseWriter, err error) {
 	if errors.Is(err, errImageAdmissionQueueFull) {
-		writeAPIError(w, http.StatusTooManyRequests, "image_queue_full", "现在使用人数较多，请稍后使用。")
+		writeAPIError(w, http.StatusTooManyRequests, "image_queue_full", imageBusyMessage)
 		return
 	}
 	if errors.Is(err, errImageAdmissionQueueTimeout) {
-		writeAPIError(w, http.StatusGatewayTimeout, "image_queue_timeout", "现在使用人数较多，请稍后使用。")
+		writeAPIError(w, http.StatusGatewayTimeout, "image_queue_timeout", imageBusyMessage)
 		return
 	}
-	writeAPIError(w, http.StatusGatewayTimeout, "image_queue_cancelled", "现在使用人数较多，请稍后使用。")
+	writeAPIError(w, http.StatusGatewayTimeout, "image_queue_cancelled", imageBusyMessage)
 }
 
 type imageAdmissionContextKey struct{}

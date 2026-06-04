@@ -4,12 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, LoaderCircle } from "lucide-react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { AppSelect } from "@/components/app-controls";
 import {
   fetchImageAccountPolicy,
   setCachedImageAccountPolicy,
@@ -156,8 +151,8 @@ export function ImagePolicyCard({ accounts }: ImagePolicyCardProps) {
   const shouldShowGroups = imagePolicy.enabled && !isCollapsed;
 
   return (
-    <Card className="rounded-2xl border-white/80 bg-white/90 shadow-sm">
-      <CardContent className="space-y-4 p-5">
+    <div className="rounded-2xl border border-white/80 bg-white/90 shadow-sm">
+      <div className="space-y-4 p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -173,22 +168,21 @@ export function ImagePolicyCard({ accounts }: ImagePolicyCardProps) {
             </p>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <Badge variant={imagePolicy.enabled ? "success" : "secondary"}>
+            <span className={cn("app-badge", imagePolicy.enabled ? "ok" : "off")}>
               {imagePolicy.enabled ? "已启用" : "未启用"}
-            </Badge>
+            </span>
             {imagePolicy.enabled ? (
-              <Badge variant="info">实际发送分组：{effectiveGroupSummary}</Badge>
+              <span className="app-badge warn">实际发送分组：{effectiveGroupSummary}</span>
             ) : null}
-            <Button
+            <button
               type="button"
-              variant="outline"
-              className="h-9 rounded-xl border-stone-200 bg-white px-3 text-stone-700"
+              className="app-btn h-9 rounded-xl px-3"
               onClick={() => setIsCollapsed((current) => !current)}
               disabled={!imagePolicy.enabled}
             >
               {isCollapsed ? <ChevronDown className="size-4" /> : <ChevronUp className="size-4" />}
               {isCollapsed ? "展开分组" : "收起分组"}
-            </Button>
+            </button>
           </div>
         </div>
 
@@ -196,37 +190,34 @@ export function ImagePolicyCard({ accounts }: ImagePolicyCardProps) {
           <div className="rounded-2xl border border-stone-100 bg-stone-50 p-4">
             <div className="mb-2 text-sm font-medium text-stone-800">是否启用</div>
             <div className="flex items-center gap-3">
-              <Checkbox
-                checked={imagePolicy.enabled}
-                onCheckedChange={(checked) =>
-                  updatePolicy({ enabled: Boolean(checked) })
-                }
+              <button
+                type="button"
+                className={cn("app-switch", imagePolicy.enabled && "on")}
+                onClick={() => updatePolicy({ enabled: !imagePolicy.enabled })}
+                aria-pressed={imagePolicy.enabled}
               />
               <span className="text-sm text-stone-600">启用分组轮询</span>
             </div>
           </div>
           <div className="rounded-2xl border border-stone-100 bg-stone-50 p-4">
             <div className="mb-2 text-sm font-medium text-stone-800">排序方式</div>
-            <Select
+            <AppSelect
               value={imagePolicy.sortMode}
-              onValueChange={(value) =>
+              onChange={(value) =>
                 updatePolicy({ sortMode: value as ImageAccountSortMode })
               }
               disabled={!imagePolicy.enabled}
-            >
-              <SelectTrigger className="h-10 rounded-xl border-stone-200 bg-white">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="imported_at">按导入时间</SelectItem>
-                <SelectItem value="name">按名称</SelectItem>
-                <SelectItem value="quota">按剩余额度</SelectItem>
-              </SelectContent>
-            </Select>
+              options={[
+                { value: "imported_at", label: "按导入时间" },
+                { value: "name", label: "按名称" },
+                { value: "quota", label: "按剩余额度" },
+              ]}
+            />
           </div>
           <div className="rounded-2xl border border-stone-100 bg-stone-50 p-4">
             <div className="mb-2 text-sm font-medium text-stone-800">每组账号数</div>
-            <Input
+            <input
+              className="app-input"
               min={1}
               max={100}
               type="number"
@@ -235,12 +226,12 @@ export function ImagePolicyCard({ accounts }: ImagePolicyCardProps) {
                 updatePolicy({ groupSize: Number(event.target.value) || 1 })
               }
               disabled={!imagePolicy.enabled}
-              className="h-10 rounded-xl border-stone-200 bg-white"
             />
           </div>
           <div className="rounded-2xl border border-stone-100 bg-stone-50 p-4">
             <div className="mb-2 text-sm font-medium text-stone-800">保底百分比</div>
-            <Input
+            <input
+              className="app-input"
               min={0}
               max={100}
               type="number"
@@ -249,7 +240,6 @@ export function ImagePolicyCard({ accounts }: ImagePolicyCardProps) {
                 updatePolicy({ reservePercent: Number(event.target.value) || 0 })
               }
               disabled={!imagePolicy.enabled}
-              className="h-10 rounded-xl border-stone-200 bg-white"
             />
           </div>
         </div>
@@ -284,9 +274,9 @@ export function ImagePolicyCard({ accounts }: ImagePolicyCardProps) {
             ) : null}
 
             <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="outline"
-                className="h-9 rounded-xl border-stone-200 bg-white text-stone-700"
+              <button
+                type="button"
+                className="app-btn h-9 rounded-xl"
                 onClick={() =>
                   updatePolicy({
                     enabledGroupIndexes: groups
@@ -297,10 +287,10 @@ export function ImagePolicyCard({ accounts }: ImagePolicyCardProps) {
                 disabled={groups.length === 0}
               >
                 勾选前 2 组
-              </Button>
-              <Button
-                variant="outline"
-                className="h-9 rounded-xl border-stone-200 bg-white text-stone-700"
+              </button>
+              <button
+                type="button"
+                className="app-btn h-9 rounded-xl"
                 onClick={() =>
                   updatePolicy({
                     enabledGroupIndexes: groups.map((group) => group.index),
@@ -309,14 +299,14 @@ export function ImagePolicyCard({ accounts }: ImagePolicyCardProps) {
                 disabled={groups.length === 0}
               >
                 勾选全部分组
-              </Button>
-              <Button
-                variant="outline"
-                className="h-9 rounded-xl border-stone-200 bg-white text-stone-700"
+              </button>
+              <button
+                type="button"
+                className="app-btn h-9 rounded-xl"
                 onClick={() => updatePolicy({ enabledGroupIndexes: [] })}
               >
                 清空分组
-              </Button>
+              </button>
             </div>
           </>
         ) : null}
@@ -347,20 +337,20 @@ export function ImagePolicyCard({ accounts }: ImagePolicyCardProps) {
                       )}
                     >
                       <div className="flex items-start gap-3">
-                        <Checkbox
-                          checked={group.enabled}
-                          onCheckedChange={(checked) =>
-                            toggleGroup(group.index, Boolean(checked))
-                          }
+                        <button
+                          type="button"
+                          className={cn("app-switch", group.enabled && "on")}
+                          onClick={() => toggleGroup(group.index, !group.enabled)}
+                          aria-pressed={group.enabled}
                         />
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-sm font-semibold text-stone-900">
                               {group.label}
                             </span>
-                            <Badge variant={group.enabled ? "success" : "secondary"}>
+                            <span className={cn("app-badge", group.enabled ? "ok" : "off")}>
                               {group.enabled ? "参与轮询" : "不参与"}
-                            </Badge>
+                            </span>
                           </div>
                           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-stone-500">
                             <span>账号 {group.accounts.length}</span>
@@ -386,7 +376,7 @@ export function ImagePolicyCard({ accounts }: ImagePolicyCardProps) {
             </div>
           </div>
         ) : null}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

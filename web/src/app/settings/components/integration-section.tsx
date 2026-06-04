@@ -4,15 +4,7 @@ import { useMemo, useState } from "react";
 import { Link2, LoaderCircle, ListTree } from "lucide-react";
 import { toast } from "sonner";
 
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { AppSelect } from "@/components/app-controls";
 import {
   fetchSub2APIGroups,
   testIntegration,
@@ -22,11 +14,6 @@ import {
 } from "@/lib/api";
 
 import { ConfigSection, Field, TooltipDetails, type SetConfigSection } from "./shared";
-import {
-  settingsActionButtonClass,
-  settingsInputClass,
-  settingsSelectClass,
-} from "./styles";
 
 type IntegrationSectionProps = {
   config: ConfigPayload;
@@ -152,31 +139,30 @@ export function IntegrationSection({ config, setSection }: IntegrationSectionPro
         title="NewAPI 接入"
         description="上游管理页里的 NewAPI 来源和推送会走这里。推荐顺序是先填写“地址 + 用户名 + 密码”完成测试连接，再按需补“系统访问令牌 + 用户 ID”；Session Cookie 只保留给高级兼容场景。"
         actions={
-          <Button
+          <button
             type="button"
-            variant="outline"
-            className={settingsActionButtonClass}
+            className="app-btn"
             onClick={() => void handleTestNewAPI()}
             disabled={testingSource === "newapi"}
           >
             {testingSource === "newapi" ? <LoaderCircle className="size-4 animate-spin" /> : <Link2 className="size-4" />}
             测试连接
-          </Button>
+          </button>
         }
       >
         <Field
           label="NewAPI 地址"
           hint="填写你的 NewAPI 站点根地址，例如 http://127.0.0.1:3000。"
         >
-          <Input
+          <input className="app-input"
             value={config.newapi.baseUrl}
             onChange={(event) => setSection("newapi", { ...config.newapi, baseUrl: event.target.value })}
-            className={settingsInputClass}
+           
           />
         </Field>
 
         <Field label="NewAPI 超时（秒）" hint="配置页测试连接和账号同步时使用。">
-          <Input
+          <input className="app-input"
             type="number"
             value={String(config.newapi.requestTimeout)}
             onChange={(event) =>
@@ -185,7 +171,7 @@ export function IntegrationSection({ config, setSection }: IntegrationSectionPro
                 requestTimeout: Number(event.target.value || 0),
               })
             }
-            className={settingsInputClass}
+           
           />
         </Field>
 
@@ -193,10 +179,10 @@ export function IntegrationSection({ config, setSection }: IntegrationSectionPro
           label="用户名"
           hint="对应 NewAPI 登录页里的“用户名”。页面入口：站点登录页。"
         >
-          <Input
+          <input className="app-input"
             value={config.newapi.username}
             onChange={(event) => setSection("newapi", { ...config.newapi, username: event.target.value })}
-            className={settingsInputClass}
+           
           />
         </Field>
 
@@ -204,11 +190,11 @@ export function IntegrationSection({ config, setSection }: IntegrationSectionPro
           label="密码"
           hint="对应 NewAPI 登录页里的“密码”。页面入口：站点登录页。"
         >
-          <Input
+          <input className="app-input"
             type="password"
             value={config.newapi.password}
             onChange={(event) => setSection("newapi", { ...config.newapi, password: event.target.value })}
-            className={settingsInputClass}
+           
           />
         </Field>
 
@@ -230,11 +216,11 @@ export function IntegrationSection({ config, setSection }: IntegrationSectionPro
             />
           }
         >
-          <Input
+          <input className="app-input"
             type="password"
             value={config.newapi.accessToken}
             onChange={(event) => setSection("newapi", { ...config.newapi, accessToken: event.target.value })}
-            className={settingsInputClass}
+           
           />
         </Field>
 
@@ -242,7 +228,7 @@ export function IntegrationSection({ config, setSection }: IntegrationSectionPro
           label="用户 ID"
           hint="测试连接成功后会自动回填；如果你已经知道自己的用户 ID，也可以直接填写。"
         >
-          <Input
+          <input className="app-input"
             type="number"
             value={String(config.newapi.userId)}
             onChange={(event) =>
@@ -251,7 +237,7 @@ export function IntegrationSection({ config, setSection }: IntegrationSectionPro
                 userId: Number(event.target.value || 0),
               })
             }
-            className={settingsInputClass}
+           
           />
         </Field>
 
@@ -260,10 +246,10 @@ export function IntegrationSection({ config, setSection }: IntegrationSectionPro
           hint="高级备用项，不对应 NewAPI 页面里的常规表单。通常优先使用“用户名/密码”或“系统访问令牌/用户 ID”。"
           fullWidth
         >
-          <Input
+          <input className="app-input"
             value={config.newapi.sessionCookie}
             onChange={(event) => setSection("newapi", { ...config.newapi, sessionCookie: event.target.value })}
-            className={settingsInputClass}
+           
           />
         </Field>
       </ConfigSection>
@@ -273,26 +259,24 @@ export function IntegrationSection({ config, setSection }: IntegrationSectionPro
         description="用于 Sub2API 来源同步和推送。字段名称尽量和 Sub2API 页面里的叫法一致，同时在提示里给出对应页面路径。"
         actions={
           <>
-            <Button
+            <button
               type="button"
-              variant="outline"
-              className={settingsActionButtonClass}
+              className="app-btn"
               onClick={() => void handleTestSub2API()}
               disabled={testingSource === "sub2api"}
             >
               {testingSource === "sub2api" ? <LoaderCircle className="size-4 animate-spin" /> : <Link2 className="size-4" />}
               测试连接
-            </Button>
-            <Button
+            </button>
+            <button
               type="button"
-              variant="outline"
-              className={settingsActionButtonClass}
+              className="app-btn"
               onClick={() => void handleLoadSub2APIGroups()}
               disabled={isLoadingSub2APIGroups}
             >
               {isLoadingSub2APIGroups ? <LoaderCircle className="size-4 animate-spin" /> : <ListTree className="size-4" />}
               拉取分组
-            </Button>
+            </button>
           </>
         }
       >
@@ -300,10 +284,10 @@ export function IntegrationSection({ config, setSection }: IntegrationSectionPro
           label="Sub2API 地址"
           hint="填写你的 Sub2API 站点根地址，例如 http://127.0.0.1:8080。"
         >
-          <Input
+          <input className="app-input"
             value={config.sub2api.baseUrl}
             onChange={(event) => setSection("sub2api", { ...config.sub2api, baseUrl: event.target.value })}
-            className={settingsInputClass}
+           
           />
         </Field>
 
@@ -311,10 +295,10 @@ export function IntegrationSection({ config, setSection }: IntegrationSectionPro
           label="邮箱"
           hint="对应 Sub2API 登录页里的“邮箱”。页面入口：站点登录页。"
         >
-          <Input
+          <input className="app-input"
             value={config.sub2api.email}
             onChange={(event) => setSection("sub2api", { ...config.sub2api, email: event.target.value })}
-            className={settingsInputClass}
+           
           />
         </Field>
 
@@ -322,11 +306,11 @@ export function IntegrationSection({ config, setSection }: IntegrationSectionPro
           label="密码"
           hint="对应 Sub2API 登录页里的“密码”。页面入口：站点登录页。"
         >
-          <Input
+          <input className="app-input"
             type="password"
             value={config.sub2api.password}
             onChange={(event) => setSection("sub2api", { ...config.sub2api, password: event.target.value })}
-            className={settingsInputClass}
+           
           />
         </Field>
 
@@ -334,11 +318,11 @@ export function IntegrationSection({ config, setSection }: IntegrationSectionPro
           label="API 密钥"
           hint="对应 Sub2API 用户侧的“API 密钥”页面。页面路径：左侧菜单 -> API 密钥。如果你使用邮箱密码登录，这里可以留空。"
         >
-          <Input
+          <input className="app-input"
             type="password"
             value={config.sub2api.apiKey}
             onChange={(event) => setSection("sub2api", { ...config.sub2api, apiKey: event.target.value })}
-            className={settingsInputClass}
+           
           />
         </Field>
 
@@ -364,32 +348,24 @@ export function IntegrationSection({ config, setSection }: IntegrationSectionPro
             />
           }
         >
-          <Select
+          <AppSelect
             value={config.sub2api.groupId ? config.sub2api.groupId : "__none__"}
-            onValueChange={(value) =>
+            onChange={(value) =>
               setSection("sub2api", {
                 ...config.sub2api,
                 groupId: value === "__none__" ? "" : value,
               })
             }
-            disabled={isLoadingSub2APIGroups || sub2apiGroupOptions.length === 0}
-          >
-            <SelectTrigger className={settingsSelectClass}>
-              <SelectValue placeholder="先点击“拉取分组”获取可选项" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__">不限制分组</SelectItem>
-              {sub2apiGroupOptions.map((group) => (
-                <SelectItem key={group.id} value={group.id}>
-                  {buildSub2APIGroupLabel(group)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            placeholder="先点击“拉取分组”获取可选项"
+            options={[
+              { value: "__none__", label: "不限制分组" },
+              ...sub2apiGroupOptions.map((group) => ({ value: group.id, label: buildSub2APIGroupLabel(group) })),
+            ]}
+          />
         </Field>
 
         <Field label="Sub2API 超时（秒）" hint="配置页测试连接、拉取分组和账号同步时使用。">
-          <Input
+          <input className="app-input"
             type="number"
             value={String(config.sub2api.requestTimeout)}
             onChange={(event) =>
@@ -398,7 +374,7 @@ export function IntegrationSection({ config, setSection }: IntegrationSectionPro
                 requestTimeout: Number(event.target.value || 0),
               })
             }
-            className={settingsInputClass}
+           
           />
         </Field>
       </ConfigSection>

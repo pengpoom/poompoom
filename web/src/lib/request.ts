@@ -3,10 +3,14 @@ import axios, { AxiosError, type AxiosRequestConfig } from "axios";
 import webConfig from "@/constants/common-env";
 import { clearStoredAuthKey, isIntentionalLogoutInProgress } from "@/store/auth";
 
-type RequestConfig = AxiosRequestConfig & {
-  redirectOnUnauthorized?: boolean;
-  unauthorizedRetryDone?: boolean;
-};
+declare module "axios" {
+  interface AxiosRequestConfig {
+    redirectOnUnauthorized?: boolean;
+    unauthorizedRetryDone?: boolean;
+  }
+}
+
+type RequestConfig = AxiosRequestConfig;
 
 type ErrorPayload = {
   detail?: { error?: string; code?: string; message?: string };

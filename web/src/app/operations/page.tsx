@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Server,
   Star,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -24,41 +25,79 @@ import {
   AdminHeader,
   AdminPage,
   AdminPanel,
-  AdminToolbar,
   AdminSectionTitle,
   AdminStatCard,
 } from "@/components/admin-layout";
 import {
-  adminInputPillClass,
   adminSubPanelClass,
   adminTableBodyClass,
   adminTableClass,
   adminTableHeadClass,
   adminTableRowClass,
 } from "@/components/admin-styles";
-import { TimeRangeFilter } from "@/components/time-range-filter";
+import { AppSelect, AppTimeSeg } from "@/components/app-controls";
 import { timeRangeQuery, type TimeRangeValue } from "@/components/time-range-utils";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
+  fetchAdminBusinessImageCompareBatch,
   fetchAdminBusinessImageJobs,
   fetchBusinessAPIProviders,
+  fetchBusinessProviderPools,
   fetchBusinessTrackerSummary,
   fetchBusinessUsers,
   fetchMaintenanceStatus,
   fetchRuntimeStatus,
   updateMaintenanceStatus,
   type BusinessAPIProvider,
+  type BusinessCompareBatchStatus,
+  type BusinessProviderPool,
   type BusinessImageJob,
   type BusinessTrackerSummary,
   type BusinessUser,
   type MaintenanceStatus,
   type RuntimeStatusResponse,
 } from "@/lib/api";
+import { providerPlatformLabel, providerPlatformOptions } from "@/lib/provider-platforms";
 import { cn } from "@/lib/utils";
 
 function numberText(value: number | undefined) {
   return Number(value || 0).toLocaleString();
+}
+
+function limitText(value: number | undefined) {
+  const normalized = Number(value || 0);
+  return normalized > 0 ? normalized.toLocaleString() : "不限";
+}
+
+function runtimeCapacity(runtime: RuntimeStatusResponse | null) {
+  return runtime?.capacity ?? {
+    maxUserActiveJobs: 0,
+    maxProviderRunningJobs: 0,
+    maxQueuedJobs: 0,
+    queuedJobs: 0,
+  };
+}
+
+function databaseName(database: NonNullable<RuntimeStatusResponse["system"]>["database"] | undefined) {
+  const driver = (database?.driver || "").toLowerCase();
+  if (driver === "postgres" || driver === "postgresql") {
+    return "PostgreSQL";
+  }
+  return database?.name || driver || "数据库";
+}
+
+function databaseSummary(database: NonNullable<RuntimeStatusResponse["system"]>["database"] | undefined) {
+  const driver = (database?.driver || "").toLowerCase();
+  if (driver === "postgres" || driver === "postgresql") {
+    return `连接 ${numberText(database?.openConns)} / 使用中 ${numberText(database?.inUseConns)}`;
+  }
+  return database?.status || "-";
+}
+
+function databaseDetail(database: NonNullable<RuntimeStatusResponse["system"]>["database"] | undefined) {
+  if (!database) {
+    return undefined;
+  }
+  return database.error || database.path || database.dsn || undefined;
 }
 
 function formatDateTime(value: string | undefined) {
@@ -133,15 +172,141 @@ function defaultProviderNames(items: BusinessAPIProvider[]) {
   return names.length > 0 ? names.join(" / ") : "-";
 }
 
-function platformLabel(value: string) {
-  switch (value) {
-    case "gpt-image":
-      return "gpt-image";
-    case "gemini-banana":
-      return "gemini-banana";
-    default:
-      return value || "-";
+function poolDefaultNames(items: BusinessProviderPool[]) {
+  const names = items
+    .filter((item) => item.enabled && item.isDefault)
+    .map((item) => item.name || item.platform);
+  return names.length > 0 ? names.join(" / ") : "-";
+}
+
+function providerPoolHeaderStatus(
+  runtime: RuntimeStatusResponse | null,
+  pools: BusinessProviderPool[],
+) {
+  const snapshot = runtime?.providerPool;
+  if (snapshot) {
+    const groups = Number(snapshot.groups || 0);
+    const members = Number(snapshot.members || 0);
+    const available = Number(snapshot.availableMembers || 0);
+    const blocked =
+      Number(snapshot.coolingMembers || 0) +
+      Number(snapshot.limitedMembers || 0) +
+      Number(snapshot.concurrencyLimitedMembers || 0) +
+      Number(snapshot.unavailableMembers || 0);
+    if (groups <= 0 || members <= 0) {
+      return { label: "号池未配置", variant: "danger" as const };
+    }
+    if (available <= 0) {
+      return { label: `号池无可用成员 0/${members}`, variant: "danger" as const };
+    }
+    return {
+      label: `号池可用 ${available}/${members}`,
+      variant: blocked > 0 ? "warning" as const : "success" as const,
+    };
   }
+
+  const members = pools.reduce((total, pool) => total + pool.members.length, 0);
+  const enabledMembers = pools.reduce(
+    (total, pool) => total + pool.members.filter((member) => member.enabled).length,
+    0,
+  );
+  if (pools.length === 0 || members <= 0) {
+    return { label: "号池未配置", variant: "danger" as const };
+  }
+  if (enabledMembers <= 0) {
+    return { label: `号池未启用 0/${members}`, variant: "danger" as const };
+  }
+  return { label: `号池已配置 ${enabledMembers}/${members}`, variant: "warning" as const };
+}
+
+function platformLabel(value: string) {
+  return providerPlatformLabel(value) || "-";
+}
+
+function selectedModelLabel(job: BusinessImageJob) {
+  const vendor = (job.vendorLabel || platformLabel(String(job.platform || ""))).trim();
+  const model = (job.modelLabel || job.model || job.upstreamModel || "").trim();
+  if (vendor && model) {
+    return `${vendor} · ${model}`;
+  }
+  return model || vendor || "-";
+}
+
+function upstreamModelLabel(job: BusinessImageJob) {
+  return (job.upstreamModel || job.model || "").trim() || "-";
+}
+
+function providerMemberLabel(job: BusinessImageJob) {
+  if (job.providerSource === "provider_pool") {
+    return job.providerMemberName || job.providerName || job.providerMemberId || job.providerId || "-";
+  }
+  return job.providerName || job.providerId || providerSourceLabel(job);
+}
+
+function creditSummaryLabel(job: BusinessImageJob) {
+  const reserved = Number(job.creditReserved || 0);
+  const refunded = Number(job.creditRefunded || 0);
+  if (reserved <= 0 && refunded <= 0) {
+    return "未扣点";
+  }
+  if (refunded >= reserved && reserved > 0) {
+    return `扣 ${numberText(reserved)} / 已全退`;
+  }
+  if (refunded > 0) {
+    return `扣 ${numberText(reserved)} / 退 ${numberText(refunded)}`;
+  }
+  return `扣 ${numberText(reserved)}`;
+}
+
+function creditStatusLabel(job: BusinessImageJob) {
+  const reserved = Number(job.creditReserved || 0);
+  const refunded = Number(job.creditRefunded || 0);
+  if (reserved <= 0) return "未扣点";
+  if (refunded >= reserved) return "已退款";
+  if (refunded > 0) return "部分退款";
+  return "已扣点";
+}
+
+function compareBatchSummaryTextFromSummary(summary?: BusinessCompareBatchStatus | null) {
+  if (!summary || summary.total <= 0) {
+    return "";
+  }
+  const parts = [`${summary.succeeded}/${summary.total} 完成`];
+  if (summary.failed > 0) parts.push(`${summary.failed} 失败`);
+  if (summary.running > 0) parts.push(`${summary.running} 运行中`);
+  if (summary.queued > 0) parts.push(`${summary.queued} 排队中`);
+  if (summary.cancelled > 0) parts.push(`${summary.cancelled} 已取消`);
+  return parts.join(" · ");
+}
+
+function compareBatchSummaryText(job: BusinessImageJob) {
+  if (!job.compareBatchId) {
+    return "";
+  }
+  return compareBatchSummaryTextFromSummary(job.compareBatchStatus);
+}
+
+function compareBatchLabel(job: BusinessImageJob) {
+  if (!job.compareBatchId) {
+    return "";
+  }
+  const count = job.compareBatchStatus?.total || job.compareModelCount || 0;
+  return count > 0 ? `模型对比 · ${count} 个模型` : "模型对比";
+}
+
+function sortCompareBatchJobs(items: BusinessImageJob[]) {
+  return [...items].sort((a, b) => {
+    const leftIndex = Number.isFinite(Number(a.compareModelIndex))
+      ? Number(a.compareModelIndex)
+      : Number.MAX_SAFE_INTEGER;
+    const rightIndex = Number.isFinite(Number(b.compareModelIndex))
+      ? Number(b.compareModelIndex)
+      : Number.MAX_SAFE_INTEGER;
+    if (leftIndex !== rightIndex) {
+      return leftIndex - rightIndex;
+    }
+    return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
+  });
 }
 
 function jobStatusLabel(status: string) {
@@ -179,12 +344,218 @@ function jobStatusVariant(status: string): "success" | "warning" | "danger" | "i
   }
 }
 
+function userErrorTypeLabel(type?: string) {
+  switch (type) {
+    case "credit":
+      return "点数不足";
+    case "input":
+      return "输入不完整";
+    case "queue":
+      return "队列/并发";
+    case "busy":
+      return "服务繁忙";
+    case "refused":
+      return "内容拒绝";
+    case "overload":
+      return "规格过高";
+    case "timeout":
+      return "生成超时";
+    case "cancelled":
+      return "用户取消";
+    case "unknown":
+      return "未知错误";
+    default:
+      return "";
+  }
+}
+
+function badgeClass(variant: "success" | "warning" | "danger" | "info") {
+  if (variant === "success") return "ok";
+  if (variant === "danger") return "fail";
+  if (variant === "info") return "off";
+  return "warn";
+}
+
 function upstreamJobLabel(job: BusinessImageJob) {
   return job.upstreamSent || job.upstreamStatus === "sent" ? "已发上游" : "未发上游";
 }
 
-function upstreamJobVariant(job: BusinessImageJob): "warning" | "info" {
-  return job.upstreamSent || job.upstreamStatus === "sent" ? "warning" : "info";
+function providerSourceLabel(job: BusinessImageJob) {
+  switch (job.providerSource) {
+    case "provider_pool":
+      return "号池成员";
+    case "legacy_provider":
+    case "api_access":
+      return "API 接入";
+    case "environment":
+      return "环境变量";
+    default:
+      return job.providerId ? "API 接入" : "-";
+  }
+}
+
+function upstreamStatusLabel(job: BusinessImageJob) {
+  const statusCode = Number(job.upstreamStatusCode || 0);
+  if (statusCode > 0) {
+    return `HTTP ${statusCode}`;
+  }
+  return upstreamJobLabel(job);
+}
+
+function failureReasonLabel(job: BusinessImageJob) {
+  return job.failureReasonMessage || job.userErrorMessage || job.errorMessage || job.errorCode || "-";
+}
+
+function failureReasonTypeLabel(code?: string) {
+  switch (code) {
+    case "insufficient_credits":
+      return "点数不足";
+    case "provider_empty_response":
+      return "空结果";
+    case "provider_member_cooling":
+      return "成员冷却";
+    case "no_available_pool":
+      return "无可用号池";
+    case "provider_pool_failed_no_fallback":
+      return "无兜底";
+    case "provider_not_configured":
+      return "接入未配置";
+    case "upstream_unauthorized":
+      return "上游 401";
+    case "upstream_forbidden":
+      return "上游 403";
+    case "upstream_rate_limited":
+      return "上游 429";
+    case "upstream_server_error":
+      return "上游 5xx";
+    case "upstream_client_error":
+      return "上游 4xx";
+    case "provider_request_failed":
+      return "请求失败";
+    case "provider_response_failed":
+      return "响应失败";
+    case "cancelled":
+      return "已取消";
+    default:
+      return code || "";
+  }
+}
+
+function providerSourceVariant(job: BusinessImageJob): "success" | "warning" | "danger" | "info" {
+  if (job.providerSource === "provider_pool") {
+    return "success";
+  }
+  if (job.providerSource === "legacy_provider" || job.providerSource === "api_access") {
+    return "info";
+  }
+  if (job.providerSource === "environment") {
+    return "warning";
+  }
+  return "info";
+}
+
+function dispatchStrategyLabel(value?: string) {
+  switch (value) {
+    case "tagged_pool":
+      return "标签池";
+    case "tagged_pool_fallback":
+      return "标签池回退";
+    case "fallback_pool":
+      return "兜底池";
+    case "api_fallback":
+      return "API 兜底";
+    case "api_access":
+      return "API 策略";
+    default:
+      return "";
+  }
+}
+
+function dispatchStrategyVariant(value?: string): "success" | "warning" | "danger" | "info" {
+  switch (value) {
+    case "tagged_pool":
+      return "success";
+    case "tagged_pool_fallback":
+    case "fallback_pool":
+    case "api_fallback":
+      return "warning";
+    default:
+      return "info";
+  }
+}
+
+function providerMatchModeLabel(value?: string) {
+  switch (value) {
+    case "any":
+      return "任一标签";
+    case "all":
+      return "全部标签";
+    case "fallback":
+      return "fallback";
+    default:
+      return "";
+  }
+}
+
+function fullTagList(tags?: string[]) {
+  const items = (tags || []).map((tag) => tag.trim()).filter(Boolean);
+  return items.length > 0 ? items.join(" · ") : "-";
+}
+
+function prettyPayload(payload?: Record<string, unknown>) {
+  if (!payload || Object.keys(payload).length === 0) {
+    return "{}";
+  }
+  const { sourceImages: _sourceImages, sourceReference: _sourceReference, ...safePayload } = payload;
+  if (Object.keys(safePayload).length === 0) {
+    return "{}";
+  }
+  return JSON.stringify(safePayload, null, 2);
+}
+
+function jobDispatchTrace(job: BusinessImageJob) {
+  if ((job.dispatchTrace || []).length > 0) {
+    return job.dispatchTrace || [];
+  }
+  switch (job.dispatchStrategy) {
+    case "tagged_pool":
+      return [
+        "请求标签命中标签池",
+        `调度到池 ${job.providerGroupName || job.providerGroupId || "-"}`,
+        `调度到成员 ${job.providerMemberName || job.providerName || job.providerMemberId || "-"}`,
+      ];
+    case "tagged_pool_fallback":
+      return [
+        "请求标签命中标签池",
+        "标签池无可用成员",
+        `回退 fallback 池 ${job.providerGroupName || job.providerGroupId || "-"}`,
+        `调度到成员 ${job.providerMemberName || job.providerName || job.providerMemberId || "-"}`,
+      ];
+    case "fallback_pool":
+      return [
+        "没有标签池命中",
+        `调度到 fallback 池 ${job.providerGroupName || job.providerGroupId || "-"}`,
+        `调度到成员 ${job.providerMemberName || job.providerName || job.providerMemberId || "-"}`,
+      ];
+    case "api_fallback":
+      return [
+        "号池无可用成员",
+        `回退 API 接入 ${job.providerName || job.providerId || providerSourceLabel(job)}`,
+      ];
+    case "api_access":
+      return [`使用 API 接入 ${job.providerName || job.providerId || providerSourceLabel(job)}`];
+    default:
+      if (job.providerSource === "provider_pool") {
+        return [
+          `调度到池 ${job.providerGroupName || job.providerGroupId || "-"}`,
+          `调度到成员 ${job.providerMemberName || job.providerName || job.providerMemberId || "-"}`,
+        ];
+      }
+      if (job.providerSource) {
+        return [`使用 ${providerSourceLabel(job)} ${job.providerName || job.providerId || ""}`.trim()];
+      }
+      return ["未记录调度策略"];
+  }
 }
 
 function statusVariant(runtime: RuntimeStatusResponse | null, providers: BusinessAPIProvider[], tracker: BusinessTrackerSummary | null): "success" | "warning" | "danger" {
@@ -265,7 +636,7 @@ function SystemStatusCard({
         </div>
         <div className="flex shrink-0 flex-col items-end gap-2">
           <Icon className={cn("size-5", color)} />
-          <Badge variant={badgeVariant}>{badge}</Badge>
+          <span className={cn("app-badge", badgeClass(badgeVariant))}>{badge}</span>
         </div>
       </div>
       <div className="mt-3 truncate text-xs text-[var(--app-text-muted)]">{sub}</div>
@@ -289,47 +660,442 @@ function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-const jobFilterSelectClass = cn(adminInputPillClass, "w-full px-4 text-sm outline-none");
-const jobTableColumnCount = 10;
+function DetailBlock({
+  title,
+  children,
+  tone = "default",
+}: {
+  title: string;
+  children: ReactNode;
+  tone?: "default" | "danger";
+}) {
+  return (
+    <section className={cn(
+      "rounded-[var(--app-radius-md)] border p-4",
+      tone === "danger"
+        ? "border-rose-400/20 bg-rose-500/10"
+        : "border-[var(--app-border)] bg-[var(--app-bg-surface)]",
+    )}>
+      <h4 className="mb-3 text-sm font-semibold text-[var(--app-text-primary)]">{title}</h4>
+      {children}
+    </section>
+  );
+}
+
+function CompareBatchJobsBlock({
+  currentJobId,
+  jobs,
+  loading,
+  error,
+  onSelectJob,
+}: {
+  currentJobId: string;
+  jobs: BusinessImageJob[];
+  loading: boolean;
+  error: string;
+  onSelectJob: (job: BusinessImageJob) => void;
+}) {
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-black/10 px-3 py-3 text-xs text-[var(--app-text-muted)]">
+        <LoaderCircle className="size-4 animate-spin" />
+        正在读取同批次模型
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-[var(--app-radius-md)] border border-rose-400/20 bg-rose-500/10 px-3 py-3 text-xs leading-5 text-rose-100">
+        {error}
+      </div>
+    );
+  }
+
+  if (jobs.length === 0) {
+    return (
+      <div className="rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-black/10 px-3 py-3 text-xs text-[var(--app-text-muted)]">
+        暂未读取到同批次 Job。
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-[var(--app-radius-md)] border border-[var(--app-border)]">
+      <table className={cn(adminTableClass, "table-fixed text-left text-xs")}>
+        <colgroup>
+          <col className="w-[7%]" />
+          <col className="w-[24%]" />
+          <col className="w-[18%]" />
+          <col className="w-[18%]" />
+          <col className="w-[12%]" />
+          <col className="w-[21%]" />
+        </colgroup>
+        <thead className={adminTableHeadClass}>
+          <tr>
+            <th className="px-3 py-2 font-medium">序号</th>
+            <th className="px-3 py-2 font-medium">用户选择模型</th>
+            <th className="px-3 py-2 font-medium">上游模型</th>
+            <th className="px-3 py-2 font-medium">来源 / 成员</th>
+            <th className="px-3 py-2 font-medium">扣点</th>
+            <th className="px-3 py-2 font-medium">状态 / 错误</th>
+          </tr>
+        </thead>
+        <tbody className={adminTableBodyClass}>
+          {jobs.map((item) => {
+            const active = item.id === currentJobId;
+            return (
+              <tr
+                key={item.id}
+                className={cn(
+                  adminTableRowClass,
+                  "cursor-pointer align-top text-[var(--app-text-secondary)]",
+                  active ? "bg-cyan-400/10" : "",
+                )}
+                onClick={() => onSelectJob(item)}
+              >
+                <td className="px-3 py-2">
+                  <span className={cn("app-badge", active ? "ok" : "off")}>
+                    {Number(item.compareModelIndex ?? -1) >= 0
+                      ? Number(item.compareModelIndex) + 1
+                      : "-"}
+                  </span>
+                </td>
+                <td className="whitespace-normal px-3 py-2">
+                  <div className="truncate font-medium text-[var(--app-text-primary)]" title={selectedModelLabel(item)}>
+                    {selectedModelLabel(item)}
+                  </div>
+                  <div className="mt-0.5 truncate font-mono text-[11px] text-[var(--app-text-muted)]" title={item.modelId || ""}>
+                    {item.modelId || "-"}
+                  </div>
+                </td>
+                <td className="whitespace-normal px-3 py-2">
+                  <div className="truncate font-mono text-[var(--app-text-primary)]" title={upstreamModelLabel(item)}>
+                    {upstreamModelLabel(item)}
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] text-[var(--app-text-muted)]">
+                    {platformLabel(String(item.platform || ""))}
+                  </div>
+                </td>
+                <td className="whitespace-normal px-3 py-2">
+                  <div className="truncate text-[var(--app-text-primary)]" title={providerSourceLabel(item)}>
+                    {providerSourceLabel(item)}
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] text-[var(--app-text-muted)]" title={providerMemberLabel(item)}>
+                    {providerMemberLabel(item)}
+                  </div>
+                </td>
+                <td className="whitespace-normal px-3 py-2">
+                  <div className="truncate text-[var(--app-text-primary)]" title={creditSummaryLabel(item)}>
+                    {creditSummaryLabel(item)}
+                  </div>
+                </td>
+                <td className="whitespace-normal px-3 py-2">
+                  <div className="flex min-w-0 items-center gap-1">
+                    <span className={cn("app-badge shrink-0", badgeClass(jobStatusVariant(item.status)))}>
+                      {jobStatusLabel(item.status)}
+                    </span>
+                    <span className="truncate text-[var(--app-text-muted)]" title={formatDateTime(item.finishedAt || item.updatedAt)}>
+                      {formatDateTime(item.finishedAt || item.updatedAt)}
+                    </span>
+                  </div>
+                  {item.failureReasonCode || item.userErrorType || item.errorCode || item.errorMessage ? (
+                    <div className="mt-1 truncate text-rose-300" title={failureReasonLabel(item)}>
+                      {failureReasonTypeLabel(item.failureReasonCode) || userErrorTypeLabel(item.userErrorType) || "错误"} · {failureReasonLabel(item)}
+                    </div>
+                  ) : (
+                    <div className="mt-1 truncate text-[var(--app-text-muted)]">-</div>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function JobDetailDrawer({
+  job,
+  username,
+  onFilterCompareBatch,
+  onSelectJob,
+  onClose,
+}: {
+  job: BusinessImageJob | null;
+  username: string;
+  onFilterCompareBatch: (batchId: string) => void;
+  onSelectJob: (job: BusinessImageJob) => void;
+  onClose: () => void;
+}) {
+  const compareBatchId = String(job?.compareBatchId || "").trim();
+  const [batchJobs, setBatchJobs] = useState<BusinessImageJob[]>([]);
+  const [batchSummary, setBatchSummary] =
+    useState<BusinessCompareBatchStatus | null>(null);
+  const [batchJobsLoading, setBatchJobsLoading] = useState(false);
+  const [batchJobsError, setBatchJobsError] = useState("");
+  const activeBatchSummary = batchSummary ?? job?.compareBatchStatus ?? null;
+
+  useEffect(() => {
+    if (!compareBatchId) {
+      setBatchJobs([]);
+      setBatchSummary(null);
+      setBatchJobsError("");
+      setBatchJobsLoading(false);
+      return;
+    }
+
+    let disposed = false;
+    setBatchJobsLoading(true);
+    setBatchSummary(null);
+    setBatchJobsError("");
+    fetchAdminBusinessImageCompareBatch(compareBatchId)
+      .then((payload) => {
+        if (disposed) {
+          return;
+        }
+        setBatchSummary(payload.summary);
+        setBatchJobs(sortCompareBatchJobs(payload.items || []));
+      })
+      .catch((error) => {
+        if (disposed) {
+          return;
+        }
+        setBatchJobs([]);
+        setBatchSummary(null);
+        setBatchJobsError(error instanceof Error ? error.message : "读取同批次 Job 失败");
+      })
+      .finally(() => {
+        if (!disposed) {
+          setBatchJobsLoading(false);
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [compareBatchId]);
+
+  if (!job) {
+    return null;
+  }
+  return (
+    <div className="fixed inset-0 z-50">
+      <button
+        type="button"
+        className="absolute inset-0 bg-black/55"
+        aria-label="关闭 Job 详情"
+        onClick={onClose}
+      />
+      <aside className="absolute right-0 top-0 h-full w-full max-w-[760px] overflow-y-auto border-l border-[var(--app-border)] bg-[var(--app-bg-popover-solid)] shadow-2xl">
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-[var(--app-border)] bg-[var(--app-bg-popover-solid)] px-5 py-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={cn("app-badge", badgeClass(jobStatusVariant(job.status)))}>{jobStatusLabel(job.status)}</span>
+              <span className={cn("app-badge", badgeClass(providerSourceVariant(job)))}>{providerSourceLabel(job)}</span>
+              {dispatchStrategyLabel(job.dispatchStrategy) ? (
+                <span className={cn("app-badge", badgeClass(dispatchStrategyVariant(job.dispatchStrategy)))}>
+                  {dispatchStrategyLabel(job.dispatchStrategy)}
+                </span>
+              ) : null}
+            </div>
+            <div className="mt-3 flex min-w-0 items-center gap-2">
+              <h3 className="truncate text-base font-semibold text-[var(--app-text-primary)]">{job.prompt || "无提示词"}</h3>
+              {job.hasAttachment ? <span className="app-badge off shrink-0">含附件</span> : null}
+            </div>
+            <div className="mt-1 truncate text-xs text-[var(--app-text-muted)]">{job.id}</div>
+          </div>
+          <button type="button" className="app-btn" onClick={onClose} aria-label="关闭">
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="grid gap-4 bg-[var(--app-bg-root)]/35 p-5 text-sm text-[var(--app-text-secondary)]">
+          <section className="grid gap-2 sm:grid-cols-2">
+            <DetailRow label="用户" value={username || job.userId} />
+            <DetailRow label="阶段" value={job.stage || "-"} />
+            <DetailRow label="用户选择模型" value={selectedModelLabel(job)} />
+            <DetailRow label="上游请求模型" value={upstreamModelLabel(job)} />
+            <DetailRow label="平台" value={platformLabel(String(job.platform || ""))} />
+            <DetailRow label="来源" value={providerSourceLabel(job)} />
+            <DetailRow label="命中成员" value={providerMemberLabel(job)} />
+            <DetailRow label="规格" value={`${job.size || "-"} / ${job.quality || "-"}`} />
+            <DetailRow label="图片" value={`${numberText(job.actualCount)} / ${numberText(job.requestedCount)} 张`} />
+            <DetailRow label="扣点" value={`${creditSummaryLabel(job)} · ${creditStatusLabel(job)}`} />
+            <DetailRow label="上游状态" value={upstreamStatusLabel(job)} />
+          </section>
+
+          {job.compareBatchId ? (
+            <DetailBlock title="对比批次">
+              <div className="grid gap-3 text-xs leading-5">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div>批次：<span className="font-mono">{job.compareBatchId}</span></div>
+                  <div>当前模型：{Number(job.compareModelIndex || 0) + 1}/{job.compareModelCount || activeBatchSummary?.total || "-"}</div>
+                  <div className="sm:col-span-2">状态：{compareBatchSummaryTextFromSummary(activeBatchSummary) || "-"}</div>
+                  <button
+                    type="button"
+                    className="app-btn w-fit"
+                    onClick={() => {
+                      onFilterCompareBatch(job.compareBatchId || "");
+                    }}
+                  >
+                    按批次过滤列表
+                  </button>
+                </div>
+                <CompareBatchJobsBlock
+                  currentJobId={job.id}
+                  jobs={batchJobs}
+                  loading={batchJobsLoading}
+                  error={batchJobsError}
+                  onSelectJob={onSelectJob}
+                />
+              </div>
+            </DetailBlock>
+          ) : null}
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <DetailBlock title="失败归因" tone={job.failureReasonCode || job.failureReasonMessage ? "danger" : "default"}>
+              <div className="grid gap-2 text-xs leading-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  {job.failureReasonCode ? <span className="app-badge fail">{failureReasonTypeLabel(job.failureReasonCode)}</span> : null}
+                  {job.upstreamStatusCode ? <span className="app-badge warn">HTTP {job.upstreamStatusCode}</span> : null}
+                  <span className="break-words text-[var(--app-text-secondary)]">{failureReasonLabel(job)}</span>
+                </div>
+              </div>
+            </DetailBlock>
+
+            <DetailBlock title="用户看到的错误" tone={job.userErrorType || job.userErrorMessage ? "danger" : "default"}>
+              <div className="grid gap-2 text-xs leading-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  {job.userErrorType ? <span className="app-badge fail">{userErrorTypeLabel(job.userErrorType) || job.userErrorType}</span> : null}
+                  <span className="break-words text-[var(--app-text-secondary)]">{job.userErrorMessage || "-"}</span>
+                </div>
+              </div>
+            </DetailBlock>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <DetailBlock title="真实上游错误" tone={job.errorCode || job.errorMessage ? "danger" : "default"}>
+              <div className="grid gap-2 text-xs leading-5">
+                <div><span className="text-[var(--app-text-muted)]">错误码：</span>{job.errorCode || "-"}</div>
+                <div><span className="text-[var(--app-text-muted)]">上游状态：</span>{upstreamStatusLabel(job)}</div>
+                <div className="break-words text-rose-200">{job.errorMessage || "-"}</div>
+              </div>
+            </DetailBlock>
+
+            <DetailBlock title="模型链路">
+              <div className="grid gap-2 text-xs leading-5">
+                <div>用户选择：{selectedModelLabel(job)}</div>
+                <div>模型 ID：<span className="font-mono">{job.modelId || "-"}</span></div>
+                <div>上游模型：<span className="font-mono">{upstreamModelLabel(job)}</span></div>
+                <div>平台：{platformLabel(String(job.platform || ""))}</div>
+              </div>
+            </DetailBlock>
+          </div>
+
+          <DetailBlock title="调度链路">
+            <div className="grid gap-3 text-xs leading-5">
+              {jobDispatchTrace(job).map((item, index) => (
+                <div key={`${item}-${index}`} className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-3">
+                  <span className="app-badge off">{index + 1}</span>
+                  <span className="min-w-0 break-words">{item}</span>
+                </div>
+              ))}
+            </div>
+          </DetailBlock>
+
+          <DetailBlock title="Provider">
+            <div className="grid gap-2 text-xs leading-5 sm:grid-cols-2">
+              <div>来源：{providerSourceLabel(job)}</div>
+              <div>策略：{dispatchStrategyLabel(job.dispatchStrategy) || "-"}</div>
+              <div>池：{job.providerGroupName || job.providerGroupId || "-"}</div>
+              <div>成员：{job.providerMemberName || job.providerName || job.providerMemberId || job.providerId || "-"}</div>
+              <div>池匹配：{providerMatchModeLabel(job.providerGroupMatchMode) || "-"}</div>
+              <div>池标签：{fullTagList(job.providerGroupTags)}</div>
+            </div>
+          </DetailBlock>
+
+          <DetailBlock title="标签">
+            <div className="grid gap-2 text-xs leading-5">
+              <div>请求：<span className="font-mono">{fullTagList(job.requestDispatchTags)}</span></div>
+              <div>用户：<span className="font-mono">{fullTagList(job.userDispatchTags)}</span></div>
+              <div>最终：<span className="font-mono">{fullTagList(job.dispatchTags)}</span></div>
+            </div>
+          </DetailBlock>
+
+          <DetailBlock title="耗时链路">
+            <div className="grid gap-2 text-xs leading-5 sm:grid-cols-2">
+              <div>排队：{formatDurationMs(job.queueWaitMs)}</div>
+              <div>上游：{formatDurationMs(job.upstreamDurationMs)}</div>
+              <div>落盘：{formatDurationMs(job.persistDurationMs)}</div>
+              <div>总计：{formatDurationMs(job.totalDurationMs)}</div>
+              <div>创建：{formatDateTime(job.createdAt)}</div>
+              <div>开始：{formatDateTime(job.startedAt)}</div>
+              <div>结束：{formatDateTime(job.finishedAt)}</div>
+              <div>更新：{formatDateTime(job.updatedAt)}</div>
+            </div>
+          </DetailBlock>
+
+          <DetailBlock title="Payload">
+            <pre className="max-h-[360px] overflow-auto rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-black/20 p-3 text-xs leading-5 text-[var(--app-text-secondary)]">
+              {prettyPayload(job.payload)}
+            </pre>
+          </DetailBlock>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+const jobTableColumnCount = 6;
+
 
 export default function OperationsPage() {
   const [runtime, setRuntime] = useState<RuntimeStatusResponse | null>(null);
   const [tracker, setTracker] = useState<BusinessTrackerSummary | null>(null);
   const [providers, setProviders] = useState<BusinessAPIProvider[]>([]);
+  const [providerPools, setProviderPools] = useState<BusinessProviderPool[]>([]);
   const [users, setUsers] = useState<BusinessUser[]>([]);
   const [jobs, setJobs] = useState<BusinessImageJob[]>([]);
   const [jobsPage, setJobsPage] = useState({ page: 1, pageSize: 20, total: 0 });
   const [jobStatus, setJobStatus] = useState("");
+  const [jobErrorType, setJobErrorType] = useState("");
   const [jobUserId, setJobUserId] = useState("");
   const [jobPlatform, setJobPlatform] = useState("");
-  const [jobTimeRange, setJobTimeRange] = useState<TimeRangeValue>({ preset: "last24h", from: "", to: "" });
+  const [jobCompareBatchId, setJobCompareBatchId] = useState("");
+  const [jobTimeRange, setJobTimeRange] = useState<TimeRangeValue>({ preset: "last7", from: "", to: "" });
   const [loading, setLoading] = useState(true);
   const [jobsLoading, setJobsLoading] = useState(true);
   const [maintenance, setMaintenance] = useState<MaintenanceStatus | null>(null);
   const [maintenanceSaving, setMaintenanceSaving] = useState(false);
+  const [selectedJob, setSelectedJob] = useState<BusinessImageJob | null>(null);
 
   const jobQuery = useMemo(
     () => ({
       status: jobStatus || undefined,
+      errorType: jobErrorType || undefined,
       userId: jobUserId || undefined,
       platform: jobPlatform || undefined,
+      compareBatchId: jobCompareBatchId.trim() || undefined,
       ...timeRangeQuery(jobTimeRange),
     }),
-    [jobPlatform, jobStatus, jobTimeRange, jobUserId],
+    [jobCompareBatchId, jobErrorType, jobPlatform, jobStatus, jobTimeRange, jobUserId],
   );
 
   const loadStatus = useCallback(async () => {
     setLoading(true);
     try {
-      const [runtimePayload, trackerPayload, providersPayload, maintenancePayload] = await Promise.all([
+      const [runtimePayload, trackerPayload, providersPayload, poolsPayload, maintenancePayload] = await Promise.all([
         fetchRuntimeStatus(),
         fetchBusinessTrackerSummary(600),
         fetchBusinessAPIProviders(),
+        fetchBusinessProviderPools(),
         fetchMaintenanceStatus(),
       ]);
       setRuntime(runtimePayload);
       setTracker(trackerPayload);
       setProviders(providersPayload.items);
+      setProviderPools(poolsPayload.items);
       setMaintenance(maintenancePayload);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "读取运维监控失败");
@@ -394,13 +1160,22 @@ export default function OperationsPage() {
   const pressure = useMemo(() => admissionPressure(runtime), [runtime]);
   const enabledProviders = useMemo(() => enabledProviderCount(providers), [providers]);
   const defaultProviders = useMemo(() => defaultProviderNames(providers), [providers]);
+  const defaultPools = useMemo(() => poolDefaultNames(providerPools), [providerPools]);
+  const providerPool = runtime?.providerPool;
+  const providerPoolIssues = providerPool?.dispatchIssues || [];
+  const poolHeaderStatus = useMemo(
+    () => providerPoolHeaderStatus(runtime, providerPools),
+    [providerPools, runtime],
+  );
   const recentFailure = tracker?.recentFailures[0];
   const system = runtime?.system;
+  const capacity = runtimeCapacity(runtime);
   const usernamesByID = useMemo(() => {
     const next = new Map<string, string>();
     users.forEach((user) => next.set(user.id, user.username));
     return next;
   }, [users]);
+  const selectedJobUsername = selectedJob ? usernamesByID.get(selectedJob.userId) || selectedJob.userId : "";
 
   return (
     <AdminPage>
@@ -409,26 +1184,32 @@ export default function OperationsPage() {
           description="查看准入并发、上游配置健康摘要、tracker 成功率和最近错误。"
           actions={
             <>
-              <Button
+              <button
+                className={maintenance?.enabled ? "app-btn-primary" : "app-btn"}
                 type="button"
-                variant={maintenance?.enabled ? "secondary" : "outline"}
                 onClick={() => void handleToggleMaintenance()}
                 disabled={loading || maintenanceSaving}
+                style={maintenance?.enabled ? { background: "linear-gradient(135deg, #f59e0b, #d97706)" } : undefined}
               >
                 {maintenanceSaving ? <LoaderCircle className="size-4 animate-spin" /> : <AlertTriangle className="size-4" />}
                 {maintenance?.enabled ? "关闭维护模式" : "开启维护模式"}
-              </Button>
-              <Button type="button" variant="outline" onClick={() => void loadStatus()} disabled={loading}>
+              </button>
+              <button className="app-btn" type="button" onClick={() => void loadStatus()} disabled={loading}>
                 {loading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
                 刷新
-              </Button>
+              </button>
             </>
           }
         >
-            <div className="flex items-center gap-2">
-              <Badge variant={statusVariant(runtime, providers, tracker)}>{statusText(runtime, providers, tracker)}</Badge>
-              {maintenance?.enabled ? <Badge variant="warning">维护模式</Badge> : null}
-            </div>
+          <span className={cn("app-badge", badgeClass(poolHeaderStatus.variant))}>
+            {poolHeaderStatus.label}
+          </span>
+          {(() => {
+            const variant = statusVariant(runtime, providers, tracker);
+            const cls = variant === "success" ? "ok" : variant === "danger" ? "fail" : "warn";
+            return <span className={`app-badge ${cls}`}>{statusText(runtime, providers, tracker)}</span>;
+          })()}
+          {maintenance?.enabled ? <span className="app-badge warn">维护模式</span> : null}
         </AdminHeader>
 
         {maintenance?.enabled ? (
@@ -445,7 +1226,7 @@ export default function OperationsPage() {
           </section>
         ) : null}
 
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <MetricCard
             label="并发"
             value={loading ? "-" : `${numberText(runtime?.admission.inflight)}/${numberText(runtime?.admission.maxConcurrency)}`}
@@ -459,6 +1240,13 @@ export default function OperationsPage() {
             sub={`上限 ${numberText(runtime?.admission.queueLimit)} / 超时 ${formatDurationMs(runtime?.admission.queueTimeoutMs)}`}
             icon={Clock3}
             color="text-amber-300"
+          />
+          <MetricCard
+            label="数据库队列"
+            value={loading ? "-" : `${numberText(capacity.queuedJobs)}/${limitText(capacity.maxQueuedJobs)}`}
+            sub={`单用户 ${limitText(capacity.maxUserActiveJobs)} / 接入 ${limitText(capacity.maxProviderRunningJobs)}`}
+            icon={Database}
+            color="text-cyan-300"
           />
           <MetricCard
             label="成功率"
@@ -518,8 +1306,8 @@ export default function OperationsPage() {
             <SystemStatusCard
               label="数据库"
               value={loading ? "-" : system?.database.ok ? "正常" : "异常"}
-              sub={loading ? "读取中" : `SQLite ${formatBytes(system?.database.sizeBytes)}`}
-              detail={system?.database.error || system?.database.path || undefined}
+              sub={loading ? "读取中" : `${databaseName(system?.database)} ${databaseSummary(system?.database)}`}
+              detail={databaseDetail(system?.database)}
               badge={loading ? "读取中" : system?.database.ok ? "正常" : "异常"}
               badgeVariant={loading ? "warning" : system?.database.ok ? "success" : "danger"}
               icon={Database}
@@ -569,9 +1357,9 @@ export default function OperationsPage() {
             <SectionTitle
               title="上游健康摘要"
               action={
-                <Badge variant={enabledProviders > 0 ? "success" : "danger"}>
+                <span className={cn("app-badge", enabledProviders > 0 ? "ok" : "fail")}>
                   启用 {numberText(enabledProviders)}/{numberText(providers.length)}
-                </Badge>
+                </span>
               }
             />
             <div className="space-y-4 p-4">
@@ -585,6 +1373,73 @@ export default function OperationsPage() {
                 <div className="py-8 text-center text-[var(--app-text-muted)]">
                   <LoaderCircle className="mx-auto mb-2 size-5 animate-spin" />
                   读取中
+                </div>
+              ) : providerPool && (providerPool.groups > 0 || providerPool.members > 0) ? (
+                <div className="space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <DetailRow label="默认池" value={defaultPools} />
+                    <DetailRow label="池 / 成员" value={`${numberText(providerPool.groups)} / ${numberText(providerPool.members)}`} />
+                    <DetailRow label="可用成员" value={numberText(providerPool.availableMembers)} />
+                    <DetailRow label="冷却成员" value={numberText(providerPool.coolingMembers)} />
+                    <DetailRow label="限流成员" value={numberText(providerPool.limitedMembers)} />
+                    <DetailRow label="并发已满" value={numberText(providerPool.concurrencyLimitedMembers)} />
+                    <DetailRow label="不可用成员" value={numberText(providerPool.unavailableMembers)} />
+                  </div>
+                  <div className="rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-bg-surface)] p-4">
+                    <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--app-text-primary)]">
+                      <Gauge className="size-4 text-sky-300" />
+                      调度诊断
+                    </div>
+                    {providerPoolIssues.length > 0 ? (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {providerPoolIssues.map((issue) => (
+                          <div
+                            key={issue.code}
+                            className={cn(
+                              "rounded-[var(--app-radius-md)] border px-3 py-2 text-sm",
+                              issue.code === "no_api_fallback" || issue.code === "no_available_member"
+                                ? "border-rose-400/20 bg-rose-400/10 text-rose-100"
+                                : "border-amber-400/20 bg-amber-400/10 text-amber-100",
+                            )}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="font-medium">{issue.label}</span>
+                              <span className="app-badge off">{numberText(issue.count)}</span>
+                            </div>
+                            {issue.detail ? (
+                              <div className="mt-1 text-xs leading-5 opacity-80">{issue.detail}</div>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-[var(--app-radius-md)] border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-100">
+                        当前调度无明显阻塞。
+                      </div>
+                    )}
+                  </div>
+                  {providerPool.lastError ? (
+                    <div className="rounded-[var(--app-radius-md)] border border-amber-400/20 bg-amber-400/10 p-4 text-sm text-amber-100">
+                      <div className="flex items-center gap-2 font-semibold">
+                        <AlertTriangle className="size-4" />
+                        号池最近错误
+                      </div>
+                      <div className="mt-2 text-xs leading-5 text-amber-100/80">
+                        <div>成员：{providerPool.lastErrorMember || "-"}</div>
+                        <div>时间：{formatDateTime(providerPool.lastErrorAt)}</div>
+                        <div className="mt-1 break-words">{providerPool.lastError}</div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-[var(--app-radius-md)] border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-100">
+                      Provider 号池暂无成员错误。
+                    </div>
+                  )}
+                  {providerPool.availableMembers === 0 ? (
+                    <div className="rounded-[var(--app-radius-md)] border border-rose-400/20 bg-rose-400/10 p-4 text-sm text-rose-100">
+                      当前没有可调度号池成员。若未配置 API 接入兜底，生图会直接失败。
+                    </div>
+                  ) : null}
                 </div>
               ) : providers.length === 0 ? (
                 <div className="rounded-[var(--app-radius-md)] border border-amber-400/20 bg-amber-400/10 p-4 text-sm text-amber-100">
@@ -600,12 +1455,12 @@ export default function OperationsPage() {
                       <div className="min-w-0 space-y-2">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-medium text-[var(--app-text-primary)]">{provider.name || provider.platform}</span>
-                          <Badge variant={provider.enabled ? "success" : "warning"}>{provider.enabled ? "已启用" : "已禁用"}</Badge>
+                          <span className={cn("app-badge", provider.enabled ? "ok" : "warn")}>{provider.enabled ? "已启用" : "已禁用"}</span>
                           {provider.isDefault ? (
-                            <Badge variant="info">
+                            <span className="app-badge off">
                               <Star className="size-3" />
                               默认
-                            </Badge>
+                            </span>
                           ) : null}
                         </div>
                         <div className="grid gap-2 text-xs text-[var(--app-text-muted)] sm:grid-cols-2">
@@ -631,9 +1486,9 @@ export default function OperationsPage() {
               title="最近错误"
               action={
                 tracker?.failed ? (
-                  <Badge variant="warning">近 {numberText(tracker.windowSeconds)} 秒 {numberText(tracker.failed)} 次</Badge>
+                  <span className="app-badge warn">近 {numberText(tracker.windowSeconds)} 秒 {numberText(tracker.failed)} 次</span>
                 ) : (
-                  <Badge variant="success">暂无错误</Badge>
+                  <span className="app-badge ok">暂无错误</span>
                 )
               }
             />
@@ -670,61 +1525,95 @@ export default function OperationsPage() {
         </section>
 
         <AdminPanel className="order-3 overflow-visible">
-          <SectionTitle
-            title="Job 明细"
-            action={
-              <Button type="button" variant="outline" size="sm" onClick={() => void loadJobs(jobsPage.page)} disabled={jobsLoading}>
+          <SectionTitle title="Job 明细" />
+          <div className="space-y-4 p-4">
+            <div className="app-toolbar">
+              <AppTimeSeg value={jobTimeRange} onChange={setJobTimeRange} />
+              <AppSelect
+                value={jobStatus}
+                onChange={setJobStatus}
+                options={[
+                  { value: "", label: "全部状态" },
+                  { value: "queued", label: "排队中" },
+                  { value: "running", label: "运行中" },
+                  { value: "cancel_requested", label: "取消中" },
+                  { value: "cancelled", label: "已取消" },
+                  { value: "succeeded", label: "成功" },
+                  { value: "failed", label: "失败" },
+                ]}
+                placeholder="全部状态"
+              />
+              <AppSelect
+                value={jobErrorType}
+                onChange={setJobErrorType}
+                options={[
+                  { value: "", label: "全部错误" },
+                  { value: "credit", label: "点数不足" },
+                  { value: "input", label: "输入不完整" },
+                  { value: "queue", label: "队列/并发" },
+                  { value: "busy", label: "服务繁忙" },
+                  { value: "refused", label: "内容拒绝" },
+                  { value: "overload", label: "规格过高" },
+                  { value: "timeout", label: "生成超时" },
+                  { value: "cancelled", label: "用户取消" },
+                  { value: "unknown", label: "未知错误" },
+                ]}
+                placeholder="全部错误"
+              />
+              <AppSelect
+                value={jobUserId}
+                onChange={setJobUserId}
+                options={[
+                  { value: "", label: "全部用户" },
+                  ...users.map((user) => ({ value: user.id, label: user.username })),
+                ]}
+                placeholder="全部用户"
+              />
+              <AppSelect
+                value={jobPlatform}
+                onChange={setJobPlatform}
+                options={[
+                  { value: "", label: "全部平台" },
+                  ...providerPlatformOptions.map((item) => ({ value: item.value, label: item.label })),
+                ]}
+                placeholder="全部平台"
+              />
+              <input
+                className="app-input h-10 w-[220px]"
+                value={jobCompareBatchId}
+                onChange={(event) => setJobCompareBatchId(event.target.value)}
+                placeholder="compareBatchId"
+              />
+              {jobCompareBatchId ? (
+                <button className="app-btn" type="button" onClick={() => setJobCompareBatchId("")}>
+                  清除批次
+                </button>
+              ) : null}
+              <span className="spacer" />
+              <button className="app-btn" type="button" onClick={() => void loadJobs(jobsPage.page)} disabled={jobsLoading}>
                 {jobsLoading ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
                 刷新
-              </Button>
-            }
-          />
-          <div className="space-y-4 p-4">
-            <AdminToolbar className="grid gap-3 lg:grid-cols-[minmax(160px,1fr)_minmax(160px,1fr)_minmax(160px,1fr)_minmax(220px,1.2fr)]">
-              <select name="job_status" value={jobStatus} onChange={(event) => setJobStatus(event.target.value)} className={jobFilterSelectClass}>
-                <option value="">全部状态</option>
-                <option value="queued">排队中</option>
-                <option value="running">运行中</option>
-                <option value="cancel_requested">取消中</option>
-                <option value="cancelled">已取消</option>
-                <option value="succeeded">成功</option>
-                <option value="failed">失败</option>
-              </select>
-              <select name="job_user_id" value={jobUserId} onChange={(event) => setJobUserId(event.target.value)} className={jobFilterSelectClass}>
-                <option value="">全部用户</option>
-                {users.map((user) => (
-                  <option key={user.id} value={user.id}>
-                    {user.username}
-                  </option>
-                ))}
-              </select>
-              <select name="job_platform" value={jobPlatform} onChange={(event) => setJobPlatform(event.target.value)} className={jobFilterSelectClass}>
-                <option value="">全部平台</option>
-                <option value="gpt-image">gpt-image</option>
-                <option value="gemini-banana">gemini-banana</option>
-              </select>
-              <TimeRangeFilter
-                value={jobTimeRange}
-                onApply={setJobTimeRange}
-                panelAlign="end"
-                panelClassName="w-[min(calc(100vw-2rem),460px)]"
-              />
-            </AdminToolbar>
+              </button>
+            </div>
 
-            <div className="overflow-x-auto rounded-[var(--app-radius-lg)] border border-[var(--app-border)]">
-              <table className={cn(adminTableClass, "min-w-[1480px] text-left")}>
+            <div className="rounded-[var(--app-radius-lg)] border border-[var(--app-border)]">
+              <table className={cn(adminTableClass, "table-fixed text-left")}>
+                <colgroup>
+                  <col className="w-[14%]" />
+                  <col className="w-[18%]" />
+                  <col className="w-[22%]" />
+                  <col className="w-[22%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[12%]" />
+                </colgroup>
                 <thead className={adminTableHeadClass}>
                   <tr>
-                    <th className="px-4 py-3 font-medium">状态</th>
-                    <th className="px-4 py-3 font-medium">用户</th>
-                    <th className="px-4 py-3 font-medium">平台 / 模型</th>
-                    <th className="px-4 py-3 font-medium">提示词</th>
-                    <th className="px-4 py-3 font-medium">上游状态</th>
-                    <th className="px-4 py-3 font-medium">耗时</th>
-                    <th className="px-4 py-3 font-medium">产物</th>
-                    <th className="px-4 py-3 font-medium">扣点 / 退款</th>
-                    <th className="px-4 py-3 font-medium">时间线</th>
-                    <th className="px-4 py-3 font-medium">错误</th>
+                    <th className="px-3 py-3 font-medium">状态 / 用户</th>
+                    <th className="px-3 py-3 font-medium">模型链路</th>
+                    <th className="px-3 py-3 font-medium">上游来源</th>
+                    <th className="px-3 py-3 font-medium">提示词</th>
+                    <th className="px-3 py-3 font-medium">结果</th>
+                    <th className="px-3 py-3 font-medium">错误</th>
                   </tr>
                 </thead>
                 <tbody className={adminTableBodyClass}>
@@ -743,59 +1632,103 @@ export default function OperationsPage() {
                     </tr>
                   ) : (
                     jobs.map((job) => (
-                      <tr key={job.id} className={cn(adminTableRowClass, "align-top text-[var(--app-text-secondary)]")}>
-                        <td className="px-4 py-3">
-                          <div className="space-y-1">
-                            <Badge variant={jobStatusVariant(job.status)}>{jobStatusLabel(job.status)}</Badge>
-                            <div className="font-mono text-[11px] text-[var(--app-text-muted)]">{job.stage || "-"}</div>
+                      <tr
+                        key={job.id}
+                        className={cn(adminTableRowClass, "cursor-pointer align-top text-[var(--app-text-secondary)]")}
+                        onClick={() => setSelectedJob(job)}
+                      >
+                        <td className="whitespace-normal px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className={cn("app-badge w-fit", badgeClass(jobStatusVariant(job.status)))}>{jobStatusLabel(job.status)}</span>
+                              <span className="truncate font-medium text-[var(--app-text-primary)]">
+                                {usernamesByID.get(job.userId) || job.userId}
+                              </span>
+                            </div>
+                            <div className="mt-0.5 truncate text-[11px] text-[var(--app-text-muted)]" title={`${job.userId} · ${job.stage || ""}`}>
+                              {job.userId} · {job.stage || "-"}
+                            </div>
                           </div>
                         </td>
-                        <td className="px-4 py-3">
-                          <div className="font-medium text-[var(--app-text-primary)]">
-                            {usernamesByID.get(job.userId) || job.userId}
+                        <td className="whitespace-normal px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="truncate font-medium text-[var(--app-text-primary)]" title={selectedModelLabel(job)}>
+                              {selectedModelLabel(job)}
+                            </div>
+                            <div className="mt-0.5 truncate font-mono text-[11px] text-[var(--app-text-muted)]" title={upstreamModelLabel(job)}>
+                              上游 {upstreamModelLabel(job)}
+                            </div>
+                            <div className="mt-1 flex items-center gap-1 overflow-hidden">
+                              <span className="app-badge off shrink-0">{platformLabel(String(job.platform || ""))}</span>
+                              <span className={cn("app-badge shrink-0", badgeClass(providerSourceVariant(job)))}>{providerSourceLabel(job)}</span>
+                            </div>
+                            {job.compareBatchId ? (
+                              <div className="mt-1 truncate text-[11px] text-[var(--app-text-muted)]" title={job.compareBatchId}>
+                                {compareBatchLabel(job)} · {compareBatchSummaryText(job) || job.compareBatchId}
+                              </div>
+                            ) : null}
                           </div>
-                          <div className="font-mono text-[11px] text-[var(--app-text-muted)]">{job.userId}</div>
                         </td>
-                        <td className="px-4 py-3">
-                          <div>{platformLabel(String(job.platform || ""))}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">{job.model || "-"}</div>
-                          <div className="mt-1 text-[11px] text-[var(--app-text-muted)]">{job.providerName || job.providerId || "-"}</div>
-                        </td>
-                        <td className="max-w-[260px] px-4 py-3">
-                          <div className="line-clamp-2">{job.prompt || "-"}</div>
-                          <div className="mt-1 space-y-0.5 font-mono text-[11px] text-[var(--app-text-muted)]">
-                            <div>job {job.id}</div>
-                            <div>gen {job.generationId || "-"}</div>
-                            <div>conv {job.conversationId || "-"}</div>
+                        <td className="whitespace-normal px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="truncate font-medium text-[var(--app-text-primary)]" title={job.providerGroupName || job.providerGroupId || job.providerName || job.providerId || ""}>
+                              {job.providerSource === "provider_pool"
+                                ? job.providerGroupName || job.providerGroupId || "-"
+                                : job.providerName || job.providerId || "-"}
+                            </div>
+                            <div className="truncate text-[11px] text-[var(--app-text-muted)]" title={job.providerMemberName || job.providerName || job.providerMemberId || job.providerId || ""}>
+                              {job.providerSource === "provider_pool"
+                                ? `成员 ${providerMemberLabel(job)} · ${providerMatchModeLabel(job.providerGroupMatchMode) || "-"}`
+                                : providerSourceLabel(job)}
+                            </div>
+                            {dispatchStrategyLabel(job.dispatchStrategy) ? (
+                              <div className="mt-1">
+                                <span className={cn("app-badge shrink-0", badgeClass(dispatchStrategyVariant(job.dispatchStrategy)))}>
+                                  {dispatchStrategyLabel(job.dispatchStrategy)}
+                                </span>
+                              </div>
+                            ) : null}
                           </div>
                         </td>
-                        <td className="px-4 py-3">
-                          <Badge variant={upstreamJobVariant(job)}>{upstreamJobLabel(job)}</Badge>
-                          <div className="mt-1 font-mono text-[11px] text-[var(--app-text-muted)]">{job.upstreamStatus || "pending"}</div>
+                        <td className="whitespace-normal px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <div className="truncate text-[var(--app-text-primary)]" title={job.prompt || ""}>{job.prompt || "-"}</div>
+                              {job.hasAttachment ? <span className="app-badge off shrink-0">含附件</span> : null}
+                            </div>
+                          </div>
                         </td>
-                        <td className="px-4 py-3">
-                          <div>总计 {formatDurationMs(job.totalDurationMs)}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">排队 {formatDurationMs(job.queueWaitMs)}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">上游 {formatDurationMs(job.upstreamDurationMs)}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">落盘 {formatDurationMs(job.persistDurationMs)}</div>
+                        <td className="whitespace-normal px-3 py-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-[var(--app-text-primary)]">
+                              {numberText(job.actualCount)}/{numberText(job.requestedCount)} 张
+                            </div>
+                            <div className="mt-0.5 truncate text-xs text-[var(--app-text-muted)]">
+                              {formatBytes(job.storageBytes)} · {formatDurationMs(job.totalDurationMs)}
+                            </div>
+                            <div className="mt-0.5 truncate text-xs text-[var(--app-text-muted)]">
+                              {creditSummaryLabel(job)}
+                            </div>
+                          </div>
                         </td>
-                        <td className="px-4 py-3">
-                          <div>{numberText(job.actualCount)}/{numberText(job.requestedCount)} 张</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">{formatBytes(job.storageBytes)}</div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div>{numberText(job.creditReserved)}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">退 {numberText(job.creditRefunded)}</div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div>创建 {formatDateTime(job.createdAt)}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">开始 {formatDateTime(job.startedAt)}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">结束 {formatDateTime(job.finishedAt)}</div>
-                          <div className="text-xs text-[var(--app-text-muted)]">更新 {formatDateTime(job.updatedAt)}</div>
-                        </td>
-                        <td className="max-w-[220px] px-4 py-3">
-                          <div className="text-xs text-rose-300">{job.errorCode || "-"}</div>
-                          <div className="line-clamp-2 text-xs text-[var(--app-text-muted)]">{job.errorMessage || "-"}</div>
+                        <td className="whitespace-normal px-3 py-2">
+                          <div className="min-w-0">
+                            {job.failureReasonCode || job.userErrorType || job.errorCode || job.errorMessage ? (
+                              <div className="flex min-w-0 items-center gap-1">
+                                {job.failureReasonCode || job.userErrorType ? (
+                                  <span className="app-badge fail shrink-0">{failureReasonTypeLabel(job.failureReasonCode) || userErrorTypeLabel(job.userErrorType) || job.userErrorType}</span>
+                                ) : null}
+                                <span className="truncate text-xs text-rose-300" title={failureReasonLabel(job)}>
+                                  {failureReasonLabel(job)}
+                                </span>
+                              </div>
+                            ) : (
+                              <div className="mt-0.5 text-xs text-[var(--app-text-muted)]">-</div>
+                            )}
+                            <div className="mt-0.5 truncate text-xs text-[var(--app-text-muted)]">
+                              {upstreamStatusLabel(job)} · {formatDateTime(job.finishedAt || job.updatedAt)}
+                            </div>
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -804,29 +1737,11 @@ export default function OperationsPage() {
               </table>
             </div>
 
-            <div className="flex flex-col gap-3 text-sm text-[var(--app-text-muted)] sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                共 {numberText(jobsPage.total)} 条，当前第 {numberText(jobsPage.page)} 页
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={jobsLoading || jobsPage.page <= 1}
-                  onClick={() => void loadJobs(Math.max(1, jobsPage.page - 1))}
-                >
-                  上一页
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={jobsLoading || jobsPage.page * jobsPage.pageSize >= jobsPage.total}
-                  onClick={() => void loadJobs(jobsPage.page + 1)}
-                >
-                  下一页
-                </Button>
+            <div className="app-pager">
+              <span className="info">共 {numberText(jobsPage.total)} 条 · 每页 {jobsPage.pageSize} 条</span>
+              <div className="pages">
+                <button type="button" disabled={jobsLoading || jobsPage.page <= 1} onClick={() => void loadJobs(Math.max(1, jobsPage.page - 1))}>上一页</button>
+                <button type="button" disabled={jobsLoading || jobsPage.page * jobsPage.pageSize >= jobsPage.total} onClick={() => void loadJobs(jobsPage.page + 1)}>下一页</button>
               </div>
             </div>
           </div>
@@ -853,6 +1768,16 @@ export default function OperationsPage() {
             </div>
           </div>
         </AdminPanel>
+        <JobDetailDrawer
+          job={selectedJob}
+          username={selectedJobUsername}
+          onFilterCompareBatch={(batchId) => {
+            setJobCompareBatchId(batchId);
+            setSelectedJob(null);
+          }}
+          onSelectJob={setSelectedJob}
+          onClose={() => setSelectedJob(null)}
+        />
     </AdminPage>
   );
 }

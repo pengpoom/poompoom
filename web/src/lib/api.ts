@@ -17,9 +17,80 @@ export type SyncStatus =
 export type SyncSource = "cpa" | "newapi" | "sub2api";
 export type AccountSourceKind = "auth_file" | "token";
 export type ImageModel = string;
+export type ImageModelId = string;
 export type ImageQuality = "low" | "medium" | "high";
 export type ImageResolutionAccess = "free" | "paid";
-export type APIAccessPlatform = "gpt-image" | "gemini-banana";
+export type APIAccessPlatform =
+  | "gpt-image"
+  | "gemini-banana"
+  | "doubao"
+  | "qwen"
+  | "baidu"
+  | "z-ai"
+  | "tencent"
+  | "kling"
+  | "grok";
+export type ImageModelCapabilities = {
+  generate: boolean;
+  edit: boolean;
+  referenceImage: boolean;
+  mask: boolean;
+  sizes?: string[];
+  qualities?: ImageQuality[];
+  maxImages: number;
+  maxReferenceImages: number;
+};
+export type BusinessImageModel = {
+  id: ImageModelId;
+  vendor: string;
+  vendorLabel: string;
+  displayName: string;
+  adapter: string;
+  platform: APIAccessPlatform | string;
+  upstreamModel: ImageModel;
+  enabled: boolean;
+  preview?: boolean;
+  compareEnabled: boolean;
+  capabilities: ImageModelCapabilities;
+  creditCost: number;
+  isDefault?: boolean;
+  sortOrder: number;
+  availability?: BusinessImageModelAvailability;
+  createdAt?: string;
+  updatedAt?: string;
+};
+export type BusinessImageModelAvailability = {
+  status: string;
+  available: boolean;
+  message: string;
+  issues?: string[];
+  apiProviderAvailable: boolean;
+  apiProviderName?: string;
+  apiProviderDefaultModel?: string;
+  apiProviderModelMismatch?: boolean;
+  poolAvailable: boolean;
+  poolName?: string;
+  poolMemberId?: string;
+  poolMemberName?: string;
+  poolMemberDefaultModel?: string;
+  poolMemberModelMismatch?: boolean;
+};
+export type BusinessImageModelInput = {
+  id?: ImageModelId;
+  vendor: string;
+  vendorLabel: string;
+  displayName: string;
+  adapter: string;
+  platform: APIAccessPlatform;
+  upstreamModel: ImageModel;
+  enabled: boolean;
+  preview: boolean;
+  compareEnabled: boolean;
+  capabilities: ImageModelCapabilities;
+  creditCost: number;
+  isDefault: boolean;
+  sortOrder: number;
+};
 export type BusinessAPIProvider = {
   id: string;
   name: string;
@@ -41,6 +112,192 @@ export type BusinessAPIProviderInput = {
   enabled: boolean;
   isDefault: boolean;
 };
+export type BusinessProviderMemberStatus = "active" | "limited" | "unavailable";
+export type BusinessProviderGroup = {
+  id: string;
+  name: string;
+  platform: APIAccessPlatform;
+  description: string;
+  tags: string;
+  matchMode: "fallback" | "any" | "all";
+  enabled: boolean;
+  isDefault: boolean;
+  priority: number;
+  createdAt: string;
+  updatedAt: string;
+};
+export type BusinessProviderGroupInput = {
+  name: string;
+  platform: APIAccessPlatform;
+  description: string;
+  tags: string;
+  matchMode: "fallback" | "any" | "all";
+  enabled: boolean;
+  isDefault: boolean;
+  priority: number;
+};
+export type BusinessProviderMember = {
+  id: string;
+  groupId: string;
+  name: string;
+  platform: APIAccessPlatform;
+  baseUrl: string;
+  apiKey: string;
+  defaultModel: string;
+  enabled: boolean;
+  priority: number;
+  weight: number;
+  maxConcurrent: number;
+  cooldownSeconds: number;
+  failureThreshold: number;
+  consecutiveFailures: number;
+  status: BusinessProviderMemberStatus;
+  cooldownUntil: string;
+  successCount: number;
+  failCount: number;
+  lastUsedAt: string;
+  lastError: string;
+  lastErrorAt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+export type BusinessProviderMemberInput = {
+  groupId: string;
+  name: string;
+  platform: APIAccessPlatform;
+  baseUrl: string;
+  apiKey: string;
+  defaultModel: string;
+  enabled: boolean;
+  priority: number;
+  weight: number;
+  maxConcurrent: number;
+  cooldownSeconds: number;
+  failureThreshold: number;
+  status: BusinessProviderMemberStatus;
+};
+export type BusinessProviderPool = BusinessProviderGroup & {
+  members: BusinessProviderMember[];
+};
+export type BusinessProviderDispatchPreviewInput = {
+  platform: APIAccessPlatform;
+  role: string;
+  subscriptionTag: string;
+  walletTag: string;
+  mode: string;
+  quality: string;
+  size: string;
+  model: string;
+  extraTags?: string[];
+};
+export type BusinessProviderDispatchPreviewResponse = {
+  ok: boolean;
+  message: string;
+  platform: APIAccessPlatform | string;
+  requestTags: string[];
+  userTags: string[];
+  dispatchTags: string[];
+  strategy?: string;
+  group?: BusinessProviderGroup;
+  member?: BusinessProviderMember;
+  fallbackAvailable?: boolean;
+  fallbackSource?: string;
+  fallbackName?: string;
+  trace?: string[];
+  pools?: BusinessProviderDispatchPreviewPool[];
+  issues?: BusinessProviderDispatchPreviewIssue[];
+};
+export type BusinessProviderDispatchPreviewPool = {
+  id: string;
+  name: string;
+  platform: APIAccessPlatform | string;
+  enabled: boolean;
+  isDefault: boolean;
+  priority: number;
+  matchMode: "fallback" | "any" | "all" | string;
+  tags?: string[];
+  role: "tagged" | "fallback" | "ignored" | string;
+  matched: boolean;
+  considered: boolean;
+  reasonCode: string;
+  reason: string;
+  memberTotal: number;
+  availableMembers: number;
+  disabledMembers: number;
+  unavailableMembers: number;
+  limitedMembers: number;
+  coolingMembers: number;
+  concurrencyFullMembers: number;
+  platformMismatchMembers: number;
+  members?: BusinessProviderDispatchPreviewMember[];
+};
+export type BusinessProviderDispatchPreviewMember = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  status: BusinessProviderMemberStatus | string;
+  priority: number;
+  weight: number;
+  maxConcurrent: number;
+  running: number;
+  cooldownUntil?: string;
+  available: boolean;
+  reasonCode: string;
+  reason: string;
+  lastError?: string;
+  lastErrorAt?: string;
+};
+export type BusinessProviderDispatchPreviewIssue = {
+  code: string;
+  label: string;
+  count: number;
+  detail?: string;
+};
+export type BusinessNotificationLevel = "info" | "warning" | "success";
+export type BusinessNotificationStatus = "draft" | "published" | "archived";
+export type BusinessNotificationNotifyMode = "silent" | "popup";
+export type BusinessNotificationTargeting = {
+  mode: "all" | "balance";
+  balance?: {
+    operator: ">" | ">=" | "<" | "<=" | "=";
+    value: number;
+  };
+};
+export type BusinessNotification = {
+  id: string;
+  title: string;
+  body: string;
+  level: BusinessNotificationLevel;
+  audience: "all";
+  status: BusinessNotificationStatus;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  publishedAt?: string;
+  readAt?: string;
+  readCount?: number;
+  audienceCount?: number;
+  notifyMode: BusinessNotificationNotifyMode;
+  startsAt?: string;
+  endsAt?: string;
+  targeting?: BusinessNotificationTargeting;
+};
+export type BusinessNotificationListResponse = {
+  items: BusinessNotification[];
+  unreadCount?: number;
+};
+export type BusinessNotificationInput = {
+  title: string;
+  body: string;
+  level: BusinessNotificationLevel;
+  publish?: boolean;
+  status?: BusinessNotificationStatus;
+  audience?: "all";
+  notifyMode?: BusinessNotificationNotifyMode;
+  startsAt?: string;
+  endsAt?: string;
+  targeting?: BusinessNotificationTargeting;
+};
 export type BusinessSystemSettings = {
   site: {
     name: string;
@@ -52,6 +309,14 @@ export type BusinessSystemSettings = {
     defaultRole: AuthRole;
     defaultCredits: number;
     registration: boolean;
+    registrationCodeRequired: boolean;
+    turnstileEnabled: boolean;
+    turnstileSiteKey: string;
+    turnstileSecretKey: string;
+    turnstileLogin: boolean;
+    turnstileRegisterCode: boolean;
+    turnstileRegisterSubmit: boolean;
+    turnstilePasswordReset: boolean;
   };
   email: {
     smtpHost: string;
@@ -73,18 +338,35 @@ export type BusinessSystemSettings = {
     geminiBananaCost: number;
     refundOnFailure: boolean;
     refundPartialCount: boolean;
+    subscriptionLevels: BusinessBillingLevel[];
+    walletLevels: BusinessBillingLevel[];
   };
   runtime: {
     maxImageConcurrency: number;
     imageQueueLimit: number;
     imageQueueTimeoutSeconds: number;
+    maxUserActiveJobs: number;
+    maxProviderRunningJobs: number;
+    maxQueuedJobs: number;
   };
   security: {
     imageFileAuthRequired: boolean;
   };
+  affiliate: {
+    enabled: boolean;
+    registrationRewardEnabled: boolean;
+    registrationRewardCredits: number;
+  };
+};
+export type BusinessBillingLevel = {
+  name: string;
+  tag: string;
+  description: string;
+  enabled: boolean;
+  sortOrder: number;
 };
 export type BusinessSystemRuntime = {
-  sqlitePath: string;
+  databaseDriver: string;
   imageDir: string;
   imageFileAuthRequired: boolean;
   legacyConfigWritable: boolean;
@@ -96,6 +378,14 @@ export type BusinessSystemSettingsResponse = {
 };
 export type PublicSiteSettings = {
   site: Pick<BusinessSystemSettings["site"], "name" | "subtitle" | "logoUrl">;
+  turnstile?: {
+    enabled: boolean;
+    siteKey: string;
+    login?: boolean;
+    registerCode?: boolean;
+    registerSubmit?: boolean;
+    passwordReset?: boolean;
+  };
 };
 export type ImageResponseItem = {
   url?: string;
@@ -318,7 +608,6 @@ export type ConfigPayload = {
     imageStorage: "browser" | "server" | string;
     imageConversationStorage: "browser" | "server" | string;
     imageDataStorage: "browser" | "server" | string;
-    sqlitePath: string;
     redisAddr: string;
     redisPassword: string;
     redisDb: number;
@@ -482,6 +771,36 @@ export type RuntimeStatusResponse = {
     inflight: number;
     queued: number;
   };
+  capacity?: {
+    maxUserActiveJobs: number;
+    maxProviderRunningJobs: number;
+    maxQueuedJobs: number;
+    queuedJobs: number;
+    error?: string;
+  };
+  providerPool?: {
+    groups: number;
+    members: number;
+    availableMembers: number;
+    coolingMembers: number;
+    unavailableMembers: number;
+    limitedMembers: number;
+    concurrencyLimitedMembers?: number;
+    disabledGroups?: number;
+    disabledMembers?: number;
+    noFallbackConfigured?: boolean;
+    fallbackMissingPlatforms?: string[];
+    dispatchIssues?: Array<{
+      code: string;
+      label: string;
+      count: number;
+      detail?: string;
+    }>;
+    lastError?: string;
+    lastErrorAt?: string;
+    lastErrorMember?: string;
+    error?: string;
+  };
   recent: {
     windowSeconds: number;
     failureCount: number;
@@ -507,8 +826,17 @@ export type RuntimeStatusResponse = {
     database: {
       ok: boolean;
       status: string;
-      path: string;
+      driver?: string;
+      name?: string;
+      dsn?: string;
+      path?: string;
       sizeBytes?: number;
+      openConns?: number;
+      inUseConns?: number;
+      idleConns?: number;
+      maxOpenConns?: number;
+      maxIdleConns?: number;
+      connLifetimeSeconds?: number;
       error?: string;
     };
     redis: {
@@ -546,12 +874,26 @@ type BusinessAPIProviderMutationResponse = {
   item: BusinessAPIProvider;
 };
 
+type BusinessProviderPoolListResponse = {
+  items: BusinessProviderPool[];
+};
+
+type BusinessProviderGroupMutationResponse = {
+  item: BusinessProviderGroup;
+};
+
+type BusinessProviderMemberMutationResponse = {
+  item: BusinessProviderMember;
+};
+
 export type BusinessAPIProviderTestResponse = {
   ok: boolean;
   message: string;
   code?: string;
   durationMs: number;
   imageCount: number;
+  group?: BusinessProviderGroup;
+  member?: BusinessProviderMember;
 };
 
 let cachedImageAccountPolicy: StoredImageAccountPolicy | null = null;
@@ -598,7 +940,6 @@ function buildDefaultConfig(): ConfigPayload {
       imageStorage: "browser",
       imageConversationStorage: "browser",
       imageDataStorage: "browser",
-      sqlitePath: "data/image-studio.db",
       redisAddr: "127.0.0.1:6379",
       redisPassword: "",
       redisDb: 0,
@@ -781,6 +1122,7 @@ export type LoginResult = {
   ok: boolean;
   token: string;
   role: AuthRole;
+  avatarUrl?: string;
   email?: string;
   username?: string;
   userId?: string;
@@ -791,6 +1133,15 @@ export type LoginResult = {
 export type RegistrationOptions = {
   enabled: boolean;
   registration: boolean;
+  registrationCodeRequired: boolean;
+  turnstile?: {
+    enabled: boolean;
+    siteKey: string;
+    login?: boolean;
+    registerCode?: boolean;
+    registerSubmit?: boolean;
+    passwordReset?: boolean;
+  };
   emailVerificationConfigured: boolean;
   codeTTLSeconds: number;
   codeCooldownSeconds: number;
@@ -806,6 +1157,9 @@ export type BusinessUser = {
   email: string;
   role: BusinessUserRole;
   status: BusinessUserStatus;
+  avatarUrl?: string;
+  subscriptionLevelTag?: string;
+  walletLevelTag?: string;
   deleted_at?: string;
   created_at: string;
   updated_at: string;
@@ -819,11 +1173,19 @@ export type BusinessUser = {
     last_generated_at?: string;
   };
   credit?: BusinessCreditSummary;
+  billing?: {
+    subscriptionLevel?: BusinessBillingLevelView;
+    walletLevel?: BusinessBillingLevelView;
+    subscription?: BusinessSubscription;
+    subscriptionLevelOverride?: boolean;
+    walletLevelOverride?: boolean;
+  };
 };
 
 export type BusinessMe = {
   user: BusinessUser;
   credit: BusinessCreditSummary;
+  apiAccessEnabled?: boolean;
 };
 
 export type BusinessCreditSummary = {
@@ -831,6 +1193,220 @@ export type BusinessCreditSummary = {
   balance: number;
   spent: number;
   updated_at?: string;
+};
+export type BusinessPaymentPackage = {
+  id: string;
+  packageType: "balance" | "subscription" | "monthly";
+  name: string;
+  description: string;
+  amountCents: number;
+  credits: number;
+  durationDays?: number;
+  levelTag?: string;
+  currency: string;
+  enabled: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+};
+export type BusinessPaymentPackageInput = {
+  packageType?: "balance" | "subscription";
+  name: string;
+  description?: string;
+  amountCents: number;
+  credits: number;
+  durationDays?: number;
+  levelTag?: string;
+  currency?: string;
+  enabled: boolean;
+  sortOrder?: number;
+};
+export type BusinessPaymentOrderStatus = "pending" | "paid" | "completed" | "expired" | "cancelled" | "failed" | "refunded";
+export type BusinessPaymentOrder = {
+  id: string;
+  userId: string;
+  userEmail: string;
+  username: string;
+  packageId: string;
+  packageType: "balance" | "subscription" | "monthly";
+  amountCents: number;
+  credits: number;
+  durationDays?: number;
+  currency: string;
+  paymentMethod?: string;
+  providerKey: string;
+  providerInstanceId: string;
+  outTradeNo: string;
+  providerTradeNo: string;
+  status: BusinessPaymentOrderStatus;
+  payUrl: string;
+  qrCode: string;
+  expiresAt?: string;
+  paidAt?: string;
+  completedAt?: string;
+  failedAt?: string;
+  refundedAt?: string;
+  creditLedgerId?: string;
+  billingAction?: "new" | "renewal" | "upgrade" | string;
+  upgradeFromSubscriptionId?: string;
+  upgradeCreditCents?: number;
+  originalAmountCents?: number;
+  createdAt: string;
+  updatedAt: string;
+};
+export type BusinessPaymentCommission = {
+  id: string;
+  orderId: string;
+  referrerUserId: string;
+  referredUserId: string;
+  baseAmountCents: number;
+  rateBps: number;
+  credits: number;
+  ledgerId?: string;
+  status: string;
+  createdAt: string;
+  settledAt?: string;
+  reversedAt?: string;
+};
+export type BusinessSubscription = {
+  id?: string;
+  userId?: string;
+  userEmail?: string;
+  username?: string;
+  orderId?: string;
+  packageId?: string;
+  packageName?: string;
+  durationDays?: number;
+  creditsTotal?: number;
+  creditsUsed?: number;
+  creditsLeft?: number;
+  status?: "active" | "expired" | "cancelled" | "upgraded" | string;
+  active?: boolean;
+  startsAt?: string;
+  expiresAt?: string;
+  coverageExpiresAt?: string;
+  cancelledAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+export type BusinessBillingLevelView = {
+  name: string;
+  tag: string;
+  description?: string;
+};
+export type BusinessBillingLevelsResponse = {
+  subscription: BusinessBillingLevelView;
+  wallet: BusinessBillingLevelView;
+};
+export type BusinessPaymentProvider = {
+  id: string;
+  providerKey: string;
+  name: string;
+  enabled: boolean;
+  supportedMethods: string[];
+  config?: Record<string, string>;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+};
+export type BusinessPaymentProviderInput = {
+  providerKey: string;
+  name: string;
+  enabled: boolean;
+  supportedMethods: string[];
+  config?: Record<string, string>;
+  sortOrder?: number;
+};
+export type BusinessPaymentMethod = {
+  key: string;
+  label: string;
+  providerKey: string;
+};
+export type BusinessPaymentAuditLog = {
+  id: string;
+  orderId: string;
+  action: string;
+  detail?: unknown;
+  operator: string;
+  createdAt: string;
+};
+export type BusinessCodeType = "redeem" | "promo" | "invite";
+export type BusinessCodeStatus = "active" | "disabled" | "expired";
+export type BusinessCode = {
+  id: string;
+  codePreview: string;
+  type: BusinessCodeType;
+  title: string;
+  credits: number;
+  maxUses: number;
+  usedCount: number;
+  status: BusinessCodeStatus;
+  startsAt?: string;
+  expiresAt?: string;
+  createdBy: string;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+};
+export type BusinessCodeInput = {
+  code?: string;
+  type: BusinessCodeType;
+  title: string;
+  credits: number;
+  maxUses: number;
+  status: BusinessCodeStatus;
+  startsAt?: string;
+  expiresAt?: string;
+  note?: string;
+};
+export type BusinessCodeMutationResponse = {
+  item: BusinessCode;
+  code?: string;
+};
+export type BusinessCodeUsage = {
+  id: string;
+  codeId: string;
+  userId: string;
+  uid: number;
+  username: string;
+  email: string;
+  userStatus: string;
+  context: string;
+  creditsGranted: number;
+  ledgerId: string;
+  createdAt: string;
+};
+export type BusinessAffiliateSummary = {
+  enabled: boolean;
+  profile?: {
+    userId: string;
+    codePreview: string;
+    enabled: boolean;
+    createdAt: string;
+    updatedAt: string;
+  };
+  referralCount: number;
+  recentReferrals?: BusinessAffiliateReferral[];
+  registrationRewardEnabled: boolean;
+  registrationRewardCredits: number;
+};
+export type BusinessAffiliateReferral = {
+  id: string;
+  referrerUserId: string;
+  referrerUid: number;
+  referrerUsername: string;
+  referrerEmail: string;
+  referrerStatus: string;
+  referredUserId: string;
+  referredUid: number;
+  referredUsername: string;
+  referredEmail: string;
+  referredStatus: string;
+  affiliateCodePreview: string;
+  status: string;
+  rewardLedgerId?: string;
+  rewardCredits: number;
+  createdAt: string;
 };
 
 export type BusinessStorageReport = {
@@ -945,6 +1521,8 @@ export type BusinessCreditLedgerEntry = {
   balance_after: number;
   reason: string;
   generation_id?: string;
+  source_type?: string;
+  source_id?: string;
   created_at: string;
 };
 
@@ -960,6 +1538,11 @@ export type BusinessImageAsset = {
   size_bytes: number;
   sha256: string;
   created_at: string;
+  conversation_title?: string;
+  prompt?: string;
+  model?: string;
+  size?: string;
+  quality?: string;
 };
 
 export type BusinessUserDetail = {
@@ -1048,7 +1631,30 @@ export type BusinessImageJob = {
   platform?: APIAccessPlatform | string;
   providerId?: string;
   providerName?: string;
+  providerSource?: string;
+  providerGroupId?: string;
+  providerGroupName?: string;
+  providerGroupMatchMode?: string;
+  providerGroupTags?: string[];
+  providerMemberId?: string;
+  providerMemberName?: string;
+  compareBatchStatus?: BusinessCompareBatchStatus;
+  hasAttachment?: boolean;
+  dispatchStrategy?: string;
+  dispatchTrace?: string[];
+  requestDispatchTags?: string[];
+  userDispatchTags?: string[];
+  dispatchTags?: string[];
+  compareBatchId?: string;
+  compareModelIndex?: number;
+  compareModelCount?: number;
+  modelId?: string;
+  modelLabel?: string;
+  vendor?: string;
+  vendorLabel?: string;
   model?: string;
+  upstreamModel?: string;
+  upstreamStatusCode?: number;
   prompt?: string;
   size?: string;
   quality?: string;
@@ -1060,6 +1666,10 @@ export type BusinessImageJob = {
   upstreamStatus: "pending" | "sent" | string;
   errorCode?: string;
   errorMessage?: string;
+  userErrorType?: string;
+  userErrorMessage?: string;
+  failureReasonCode?: string;
+  failureReasonMessage?: string;
   queueWaitMs: number;
   upstreamDurationMs: number;
   persistDurationMs: number;
@@ -1084,12 +1694,27 @@ type BusinessImageJobPageResponse = {
   page: PaginationMeta;
 };
 
+export type BusinessCompareBatchStatus = {
+  id: string;
+  total: number;
+  queued: number;
+  running: number;
+  succeeded: number;
+  failed: number;
+  cancelled: number;
+  reserved: number;
+  refunded: number;
+  status: string;
+};
+
 export type BusinessImageJobQuery = {
   page?: number;
   pageSize?: number;
   userId?: string;
   status?: string;
   platform?: string;
+  errorType?: string;
+  compareBatchId?: string;
   from?: string;
   to?: string;
   timeRange?: string;
@@ -1106,6 +1731,117 @@ export type BusinessDashboardQuery = {
 type BusinessImageJobResponse = {
   item: BusinessImageJob;
   activeCancelled?: boolean;
+};
+
+export type BusinessImageCompareBatchResponse = {
+  summary: BusinessCompareBatchStatus;
+  items: BusinessImageJob[];
+};
+
+type BusinessImageModelListResponse = {
+  items: BusinessImageModel[];
+};
+type BusinessImageModelMutationResponse = {
+  item: BusinessImageModel;
+};
+export type BusinessImageModelTestResponse = {
+  ok: boolean;
+  message: string;
+  code?: string;
+  durationMs?: number;
+  imageCount?: number;
+  model?: BusinessImageModel;
+  availability?: BusinessImageModelAvailability;
+};
+
+export type BusinessRiskControlMode = "observe" | "pre_block";
+export type BusinessRiskControlProvider = "openai";
+export type BusinessRiskControlConfig = {
+  enabled: boolean;
+  mode: BusinessRiskControlMode;
+  provider: BusinessRiskControlProvider;
+  baseUrl: string;
+  model: string;
+  apiKeyConfigured: boolean;
+  apiKeyMasked: string;
+  timeoutMs: number;
+  recordNonHits: boolean;
+  blockMessage: string;
+  thresholds: Record<string, number>;
+};
+export type BusinessRiskControlConfigInput = Partial<{
+  enabled: boolean;
+  mode: BusinessRiskControlMode;
+  provider: BusinessRiskControlProvider;
+  baseUrl: string;
+  apiKey: string;
+  clearApiKey: boolean;
+  model: string;
+  timeoutMs: number;
+  recordNonHits: boolean;
+  blockMessage: string;
+  thresholds: Record<string, number>;
+}>;
+export type BusinessRiskControlStatus = {
+  enabled: boolean;
+  mode: BusinessRiskControlMode;
+  provider: BusinessRiskControlProvider;
+  apiKeyConfigured: boolean;
+  last24hTotal: number;
+  last24hFlagged: number;
+  last24hBlocked: number;
+  last24hErrors: number;
+};
+export type BusinessRiskControlLog = {
+  id: string;
+  userId: string;
+  jobId: string;
+  conversationId: string;
+  turnId: string;
+  platform: string;
+  model: string;
+  mode: BusinessRiskControlMode | string;
+  action: "allow" | "block" | "error" | string;
+  flagged: boolean;
+  highestCategory: string;
+  highestScore: number;
+  categoryScores: Record<string, number>;
+  inputExcerpt: string;
+  error: string;
+  latencyMs: number;
+  createdAt: string;
+};
+export type BusinessRiskControlLogsQuery = {
+  page?: number;
+  pageSize?: number;
+  result?: string;
+  platform?: string;
+  search?: string;
+  from?: string;
+  to?: string;
+};
+export type BusinessRiskControlLogsResponse = {
+  items: BusinessRiskControlLog[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pages: number;
+};
+export type BusinessRiskControlDecision = {
+  allowed: boolean;
+  action: string;
+  flagged: boolean;
+  highestCategory: string;
+  highestScore: number;
+  categoryScores: Record<string, number>;
+  message?: string;
+  error?: string;
+};
+export type BusinessRiskControlTestResponse = {
+  result: {
+    decision: BusinessRiskControlDecision;
+    latencyMs: number;
+  };
 };
 
 export type BusinessTrackerPlatformSummary = {
@@ -1149,16 +1885,21 @@ type BusinessUsageListResponse = {
   page: PaginationMeta;
 };
 
+export type BusinessAssetListResponse = {
+  items: BusinessImageAsset[];
+  page: PaginationMeta;
+};
+
 type BusinessUserMutationResponse = {
   item: BusinessUser;
 };
 
-export async function login(email: string, password: string): Promise<LoginResult> {
+export async function login(email: string, password: string, turnstileToken?: string): Promise<LoginResult> {
   const normalizedEmail = String(email || "").trim();
   try {
     return await httpRequest<LoginResult>("/auth/login", {
       method: "POST",
-      body: { email: normalizedEmail, password },
+      body: { email: normalizedEmail, password, turnstileToken: turnstileToken?.trim() || undefined },
       redirectOnUnauthorized: false,
     });
   } catch (error) {
@@ -1175,10 +1916,18 @@ export async function fetchRegistrationOptions() {
   });
 }
 
-export async function requestRegistrationCode(email: string) {
+export async function requestRegistrationCode(email: string, turnstileToken?: string) {
   return httpRequest<{ ok: boolean; expiresIn: number; cooldownSeconds: number }>("/auth/register/code", {
     method: "POST",
-    body: { email: String(email || "").trim() },
+    body: { email: String(email || "").trim(), turnstileToken: turnstileToken?.trim() || undefined },
+    redirectOnUnauthorized: false,
+  });
+}
+
+export async function requestPasswordResetCode(email: string, turnstileToken?: string) {
+  return httpRequest<{ ok: boolean; expiresIn: number; cooldownSeconds: number }>("/auth/password-reset/code", {
+    method: "POST",
+    body: { email: String(email || "").trim(), turnstileToken: turnstileToken?.trim() || undefined },
     redirectOnUnauthorized: false,
   });
 }
@@ -1188,6 +1937,9 @@ export async function registerBusinessUser(payload: {
   username?: string;
   password: string;
   code: string;
+  registerCode?: string;
+  affiliateCode?: string;
+  turnstileToken?: string;
 }): Promise<LoginResult> {
   return httpRequest<LoginResult>("/auth/register", {
     method: "POST",
@@ -1196,6 +1948,25 @@ export async function registerBusinessUser(payload: {
       username: payload.username?.trim() || undefined,
       password: payload.password,
       code: payload.code.trim(),
+      registerCode: payload.registerCode?.trim() || undefined,
+      affiliateCode: payload.affiliateCode?.trim() || undefined,
+      turnstileToken: payload.turnstileToken?.trim() || undefined,
+    },
+    redirectOnUnauthorized: false,
+  });
+}
+
+export async function resetBusinessUserPasswordByEmail(payload: {
+  email: string;
+  code: string;
+  password: string;
+}) {
+  return httpRequest<{ ok: boolean }>("/auth/password-reset", {
+    method: "POST",
+    body: {
+      email: payload.email.trim(),
+      code: payload.code.trim(),
+      password: payload.password,
     },
     redirectOnUnauthorized: false,
   });
@@ -1242,10 +2013,59 @@ export async function fetchBusinessTrackerSummary(windowSeconds = 600) {
   );
 }
 
+export async function fetchAdminBusinessNotifications(query: {
+  status?: string;
+  search?: string;
+  limit?: number;
+} = {}) {
+  return httpRequest<BusinessNotificationListResponse>(
+    `/api/business/admin/notifications${buildQuery({
+      status: query.status && query.status !== "all" ? query.status : undefined,
+      search: query.search,
+      limit: query.limit,
+    })}`,
+  );
+}
+
+export async function createBusinessNotification(payload: BusinessNotificationInput) {
+  return httpRequest<{ item: BusinessNotification }>("/api/business/admin/notifications", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateBusinessNotification(id: string, payload: BusinessNotificationInput) {
+  return httpRequest<{ item: BusinessNotification }>(
+    `/api/business/admin/notifications/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      body: payload,
+    },
+  );
+}
+
+export async function deleteBusinessNotification(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/admin/notifications/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function fetchBusinessNotifications() {
+  return httpRequest<BusinessNotificationListResponse>("/api/business/notifications");
+}
+
+export async function markBusinessNotificationsRead(ids: string[]) {
+  return httpRequest<{ ok: boolean }>("/api/business/notifications/read", {
+    method: "POST",
+    body: { ids },
+  });
+}
+
 function buildQuery(params: Record<string, string | number | undefined>) {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
-    if (value === undefined || value === "") {
+    if (value === undefined || value === "" || value === "all") {
       return;
     }
     search.set(key, String(value));
@@ -1277,6 +2097,15 @@ export async function fetchBusinessMe() {
   return httpRequest<BusinessMe>("/api/business/me");
 }
 
+export async function uploadBusinessMeAvatar(file: File) {
+  const body = new FormData();
+  body.append("avatar", file);
+  return httpRequest<{ user: BusinessUser }>("/api/business/me/avatar", {
+    method: "POST",
+    body,
+  });
+}
+
 export async function changeBusinessMePassword(payload: {
   currentPassword: string;
   newPassword: string;
@@ -1291,8 +2120,87 @@ export async function fetchBusinessCredit() {
   return httpRequest<BusinessCreditSummary>("/api/business/credit");
 }
 
+export async function fetchBusinessCreditLedger(query: {
+  page?: number;
+  pageSize?: number;
+} = {}) {
+  return httpRequest<{ items: BusinessCreditLedgerEntry[]; page: PaginationMeta }>(
+    `/api/business/credit/ledger${buildQuery(query)}`,
+  );
+}
+
+export async function redeemBusinessCode(code: string) {
+  return httpRequest<{
+    ok: boolean;
+    result: {
+      creditsGranted: number;
+      ledgerId?: string;
+      code: BusinessCode;
+    };
+    credit: BusinessCreditSummary;
+  }>("/api/business/credit/redeem", {
+    method: "POST",
+    body: { code: String(code || "").trim() },
+  });
+}
+
+export async function fetchBusinessPaymentPackages() {
+  return httpRequest<{ items: BusinessPaymentPackage[] }>("/api/business/payment/packages");
+}
+
+export async function fetchBusinessPaymentMethods() {
+  return httpRequest<{ items: BusinessPaymentMethod[] }>("/api/business/payment/methods");
+}
+
+export async function fetchBusinessPaymentOrders(query: {
+  status?: BusinessPaymentOrderStatus | "all";
+  kind?: "all" | "balance" | "subscription" | "renewal" | "upgrade";
+  search?: string;
+  page?: number;
+  pageSize?: number;
+  limit?: number;
+} = {}) {
+  return httpRequest<{ items: BusinessPaymentOrder[]; page?: PaginationMeta }>(
+    `/api/business/payment/orders${buildQuery(query)}`,
+  );
+}
+
+export async function createBusinessPaymentOrder(packageId: string, paymentMethod?: string) {
+  return httpRequest<{ order: BusinessPaymentOrder }>("/api/business/payment/orders", {
+    method: "POST",
+    body: { packageId, paymentMethod },
+  });
+}
+
+export async function fetchBusinessSubscription() {
+  return httpRequest<{ subscription: BusinessSubscription }>("/api/business/subscription");
+}
+
+export async function fetchBusinessBillingLevels() {
+  return httpRequest<BusinessBillingLevelsResponse>("/api/business/billing-levels");
+}
+
+export async function fetchBusinessAffiliateSummary() {
+  return httpRequest<BusinessAffiliateSummary>("/api/business/affiliate");
+}
+
+export async function fetchAdminBusinessAffiliateReferrals(limit = 100) {
+  return httpRequest<{ items: BusinessAffiliateReferral[] }>(
+    `/api/business/admin/affiliate/referrals${buildQuery({ limit })}`,
+  );
+}
+
 export async function fetchBusinessUsage(query: BusinessUsageQuery = {}) {
   return httpRequest<BusinessUsageListResponse>(`/api/business/usage${buildQuery(query)}`);
+}
+
+export async function fetchBusinessAssets(query: {
+  page?: number;
+  pageSize?: number;
+} = {}) {
+  return httpRequest<BusinessAssetListResponse>(
+    `/api/business/assets${buildQuery(query)}`,
+  );
 }
 
 export async function fetchBusinessImageJobs(query: {
@@ -1310,9 +2218,103 @@ export async function fetchBusinessImageJob(id: string) {
   );
 }
 
+export async function fetchBusinessImageModels() {
+  return httpRequest<BusinessImageModelListResponse>("/api/business/image-models");
+}
+
+export async function fetchAdminBusinessImageModels() {
+  return httpRequest<BusinessImageModelListResponse>("/api/business/admin/image-models");
+}
+
+export async function createBusinessImageModel(payload: BusinessImageModelInput) {
+  return httpRequest<BusinessImageModelMutationResponse>("/api/business/admin/image-models", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateBusinessImageModel(id: string, payload: BusinessImageModelInput) {
+  return httpRequest<BusinessImageModelMutationResponse>(
+    `/api/business/admin/image-models/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      body: payload,
+    },
+  );
+}
+
+export async function setDefaultBusinessImageModel(id: string) {
+  return httpRequest<BusinessImageModelMutationResponse>(
+    `/api/business/admin/image-models/${encodeURIComponent(id)}/default`,
+    { method: "POST" },
+  );
+}
+
+export async function testBusinessImageModel(id: string) {
+  return httpRequest<BusinessImageModelTestResponse>(
+    `/api/business/admin/image-models/${encodeURIComponent(id)}/test`,
+    { method: "POST" },
+  );
+}
+
+export async function deleteBusinessImageModel(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/admin/image-models/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
 export async function fetchAdminBusinessImageJobs(query: BusinessImageJobQuery = {}) {
   return httpRequest<BusinessImageJobPageResponse>(
     `/api/business/admin/jobs${buildQuery(query)}`,
+  );
+}
+
+export async function fetchAdminBusinessImageCompareBatch(id: string) {
+  return httpRequest<BusinessImageCompareBatchResponse>(
+    `/api/business/admin/compare-batches/${encodeURIComponent(id)}`,
+  );
+}
+
+export async function fetchBusinessRiskControlConfig() {
+  return httpRequest<{ config: BusinessRiskControlConfig }>(
+    "/api/business/admin/risk-control/config",
+  );
+}
+
+export async function updateBusinessRiskControlConfig(payload: BusinessRiskControlConfigInput) {
+  return httpRequest<{ config: BusinessRiskControlConfig }>(
+    "/api/business/admin/risk-control/config",
+    { method: "PUT", body: payload },
+  );
+}
+
+export async function fetchBusinessRiskControlStatus() {
+  return httpRequest<{ status: BusinessRiskControlStatus }>(
+    "/api/business/admin/risk-control/status",
+  );
+}
+
+export async function fetchBusinessRiskControlLogs(query: BusinessRiskControlLogsQuery = {}) {
+  return httpRequest<BusinessRiskControlLogsResponse>(
+    `/api/business/admin/risk-control/logs${buildQuery(query)}`,
+  );
+}
+
+export async function testBusinessRiskControl(payload: {
+  prompt: string;
+  mode?: BusinessRiskControlMode;
+  baseUrl?: string;
+  apiKey?: string;
+  clearApiKey?: boolean;
+  model?: string;
+  timeoutMs?: number;
+  blockMessage?: string;
+  thresholds?: Record<string, number>;
+}) {
+  return httpRequest<BusinessRiskControlTestResponse>(
+    "/api/business/admin/risk-control/test",
+    { method: "POST", body: payload },
   );
 }
 
@@ -1380,6 +2382,93 @@ export async function testBusinessAPIProvider(id: string) {
   );
 }
 
+export async function fetchBusinessProviderPools() {
+  return httpRequest<BusinessProviderPoolListResponse>("/api/business/provider-pools");
+}
+
+export async function createBusinessProviderGroup(payload: BusinessProviderGroupInput) {
+  return httpRequest<BusinessProviderGroupMutationResponse>("/api/business/provider-pools", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateBusinessProviderGroup(id: string, payload: BusinessProviderGroupInput) {
+  return httpRequest<BusinessProviderGroupMutationResponse>(
+    `/api/business/provider-pools/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      body: payload,
+    },
+  );
+}
+
+export async function setDefaultBusinessProviderGroup(id: string) {
+  return httpRequest<BusinessProviderGroupMutationResponse>(
+    `/api/business/provider-pools/${encodeURIComponent(id)}/default`,
+    { method: "POST" },
+  );
+}
+
+export async function deleteBusinessProviderGroup(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/provider-pools/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function testBusinessProviderGroup(id: string) {
+  return httpRequest<BusinessAPIProviderTestResponse>(
+    `/api/business/provider-pools/${encodeURIComponent(id)}/test`,
+    { method: "POST" },
+  );
+}
+
+export async function previewBusinessProviderDispatch(payload: BusinessProviderDispatchPreviewInput) {
+  return httpRequest<BusinessProviderDispatchPreviewResponse>("/api/business/provider-pools/preview", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function createBusinessProviderMember(payload: BusinessProviderMemberInput) {
+  return httpRequest<BusinessProviderMemberMutationResponse>("/api/business/provider-pool-members", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateBusinessProviderMember(id: string, payload: BusinessProviderMemberInput) {
+  return httpRequest<BusinessProviderMemberMutationResponse>(
+    `/api/business/provider-pool-members/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      body: payload,
+    },
+  );
+}
+
+export async function deleteBusinessProviderMember(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/provider-pool-members/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function testBusinessProviderMember(id: string) {
+  return httpRequest<BusinessAPIProviderTestResponse>(
+    `/api/business/provider-pool-members/${encodeURIComponent(id)}/test`,
+    { method: "POST" },
+  );
+}
+
+export async function recoverBusinessProviderMember(id: string) {
+  return httpRequest<BusinessProviderMemberMutationResponse>(
+    `/api/business/provider-pool-members/${encodeURIComponent(id)}/recover`,
+    { method: "POST" },
+  );
+}
+
 export async function fetchBusinessSystemSettings() {
   return httpRequest<BusinessSystemSettingsResponse>("/api/business/system-settings");
 }
@@ -1393,6 +2482,173 @@ export async function updateBusinessSystemSettings(settings: BusinessSystemSetti
     method: "PUT",
     body: { settings },
   });
+}
+
+export async function updateBusinessAffiliateSettings(affiliate: BusinessSystemSettings["affiliate"]) {
+  const current = await fetchBusinessSystemSettings();
+  return updateBusinessSystemSettings({
+    ...current.settings,
+    affiliate: {
+      ...current.settings.affiliate,
+      ...affiliate,
+    },
+  });
+}
+
+export async function fetchBusinessCodes(query: {
+  type?: BusinessCodeType | "registration" | "all";
+  status?: BusinessCodeStatus | "all";
+  search?: string;
+} = {}) {
+  return httpRequest<{ items: BusinessCode[] }>(
+    `/api/business/admin/codes${buildQuery(query)}`,
+  );
+}
+
+export async function createBusinessCode(payload: BusinessCodeInput) {
+  return httpRequest<BusinessCodeMutationResponse>("/api/business/admin/codes", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateBusinessCode(id: string, payload: Omit<BusinessCodeInput, "code" | "type">) {
+  return httpRequest<BusinessCodeMutationResponse>(
+    `/api/business/admin/codes/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      body: payload,
+    },
+  );
+}
+
+export async function updateBusinessCodeStatusBatch(ids: string[], status: BusinessCodeStatus) {
+  return httpRequest<{ ok: boolean; updated: number }>("/api/business/admin/codes/batch-status", {
+    method: "POST",
+    body: { ids, status },
+  });
+}
+
+export async function fetchBusinessCodeUsages(id: string) {
+  return httpRequest<{ items: BusinessCodeUsage[] }>(
+    `/api/business/admin/codes/${encodeURIComponent(id)}/usages`,
+  );
+}
+
+export async function deleteBusinessCode(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/admin/codes/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function fetchAdminBusinessPaymentPackages() {
+  return httpRequest<{ items: BusinessPaymentPackage[] }>("/api/business/admin/payment/packages");
+}
+
+export async function createAdminBusinessPaymentPackage(payload: BusinessPaymentPackageInput) {
+  return httpRequest<{ item: BusinessPaymentPackage }>("/api/business/admin/payment/packages", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateAdminBusinessPaymentPackage(id: string, payload: BusinessPaymentPackageInput) {
+  return httpRequest<{ item: BusinessPaymentPackage }>(
+    `/api/business/admin/payment/packages/${encodeURIComponent(id)}`,
+    { method: "PUT", body: payload },
+  );
+}
+
+export async function deleteAdminBusinessPaymentPackage(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/admin/payment/packages/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function fetchAdminBusinessPaymentProviders() {
+  return httpRequest<{ items: BusinessPaymentProvider[] }>("/api/business/admin/payment/providers");
+}
+
+export async function createAdminBusinessPaymentProvider(payload: BusinessPaymentProviderInput) {
+  return httpRequest<{ item: BusinessPaymentProvider }>("/api/business/admin/payment/providers", {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export async function updateAdminBusinessPaymentProvider(id: string, payload: BusinessPaymentProviderInput) {
+  return httpRequest<{ item: BusinessPaymentProvider }>(
+    `/api/business/admin/payment/providers/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      body: payload,
+    },
+  );
+}
+
+export async function deleteAdminBusinessPaymentProvider(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/admin/payment/providers/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function fetchAdminBusinessPaymentOrders(query: {
+  status?: BusinessPaymentOrderStatus | "all";
+  kind?: "all" | "balance" | "subscription" | "renewal" | "upgrade";
+  search?: string;
+  page?: number;
+  pageSize?: number;
+  limit?: number;
+} = {}) {
+  return httpRequest<{ items: BusinessPaymentOrder[]; page?: PaginationMeta }>(
+    `/api/business/admin/payment/orders${buildQuery(query)}`,
+  );
+}
+
+export async function fetchAdminBusinessSubscriptions(query: {
+  status?: "active" | "expired" | "cancelled" | "upgraded" | "all";
+  activeWindow?: "current" | "future" | "history" | "all";
+  search?: string;
+  page?: number;
+  pageSize?: number;
+  limit?: number;
+} = {}) {
+  return httpRequest<{ items: BusinessSubscription[]; page?: PaginationMeta }>(
+    `/api/business/admin/payment/subscriptions${buildQuery(query)}`,
+  );
+}
+
+export async function completeAdminBusinessPaymentOrder(id: string, payload: {
+  providerTradeNo?: string;
+  commissionRateBps?: number;
+} = {}) {
+  return httpRequest<{ order: BusinessPaymentOrder; commission?: BusinessPaymentCommission }>(
+    `/api/business/admin/payment/orders/${encodeURIComponent(id)}/complete`,
+    { method: "POST", body: payload },
+  );
+}
+
+export async function cancelAdminBusinessPaymentOrder(id: string) {
+  return httpRequest<{ order: BusinessPaymentOrder }>(
+    `/api/business/admin/payment/orders/${encodeURIComponent(id)}/cancel`,
+    { method: "POST" },
+  );
+}
+
+export async function refundAdminBusinessPaymentOrder(id: string) {
+  return httpRequest<{ order: BusinessPaymentOrder; commission?: BusinessPaymentCommission }>(
+    `/api/business/admin/payment/orders/${encodeURIComponent(id)}/refund`,
+    { method: "POST" },
+  );
+}
+
+export async function fetchAdminBusinessPaymentOrderAuditLogs(id: string) {
+  return httpRequest<{ items: BusinessPaymentAuditLog[] }>(
+    `/api/business/admin/payment/orders/${encodeURIComponent(id)}/audit`,
+  );
 }
 
 export async function createBusinessUser(payload: {
@@ -1413,6 +2669,19 @@ export async function updateBusinessUser(id: string, payload: {
 }) {
   return httpRequest<BusinessUserMutationResponse>(
     `/api/business/users/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      body: payload,
+    },
+  );
+}
+
+export async function updateBusinessUserBillingLevels(id: string, payload: {
+  subscriptionLevelTag?: string;
+  walletLevelTag?: string;
+}) {
+  return httpRequest<BusinessUserMutationResponse>(
+    `/api/business/users/${encodeURIComponent(id)}/billing-levels`,
     {
       method: "PATCH",
       body: payload,
@@ -1760,11 +3029,44 @@ export async function generateImage(
   return generateImageWithOptions(prompt, { model, count });
 }
 
+function buildImageDispatchTags(options: {
+  mode?: "generate" | "edit";
+  modelId?: ImageModelId;
+  model?: ImageModel;
+  size?: string;
+  quality?: ImageQuality;
+  vendor?: string;
+  adapter?: string;
+  dispatchTags?: string[];
+}) {
+  const tags = new Set<string>();
+  const add = (value: string | undefined) => {
+    const normalized = value?.trim().toLowerCase();
+    if (normalized) {
+      tags.add(normalized);
+    }
+  };
+  options.dispatchTags?.forEach(add);
+  add(`mode:${options.mode || "generate"}`);
+  add(options.quality ? `quality:${options.quality}` : undefined);
+  add(options.size ? `size:${options.size}` : undefined);
+  add(options.modelId ? `modelId:${options.modelId}` : undefined);
+  add(options.model ? `model:${options.model}` : undefined);
+  add(options.vendor ? `vendor:${options.vendor}` : undefined);
+  add(options.adapter ? `adapter:${options.adapter}` : undefined);
+  return Array.from(tags);
+}
+
 export async function generateImageWithOptions(
   prompt: string,
   options: {
     mode?: "generate" | "edit";
+    modelId?: ImageModelId;
     model?: ImageModel;
+    modelLabel?: string;
+    vendor?: string;
+    vendorLabel?: string;
+    adapter?: string;
     count?: number;
     size?: string;
     quality?: ImageQuality;
@@ -1773,8 +3075,15 @@ export async function generateImageWithOptions(
     conversationId?: string;
     turnId?: string;
     title?: string;
+    compareBatchId?: string;
+    compareGroupId?: string;
+    compareModelLabel?: string;
+    compareModelIndex?: number;
+    compareModelCount?: number;
     sourceImages?: ImageSourcePayload[];
+    hasAttachment?: boolean;
     sourceReference?: InpaintSourceReference;
+    dispatchTags?: string[];
   } = {},
 ) {
   const { model = "gpt-image-2", count = 1, size, quality = "high" } = options;
@@ -1784,33 +3093,41 @@ export async function generateImageWithOptions(
   ]);
   const policyHeader = buildImageAccountPolicyHeader(policy);
   const normalizedCount = Math.max(1, count);
-  const businessProxyMode = isBusinessProxyMode();
-  const endpoint = businessProxyMode
-    ? "/api/image/generate"
-    : "/v1/images/generations";
   const body: Record<string, unknown> = {
     prompt,
+    modelId: options.modelId?.trim() || undefined,
     model,
+    modelLabel: options.modelLabel?.trim() || undefined,
+    vendor: options.vendor?.trim() || undefined,
+    vendorLabel: options.vendorLabel?.trim() || undefined,
+    adapter: options.adapter?.trim() || undefined,
     n: normalizedCount,
     size: size?.trim() || undefined,
     quality,
     response_format: responseFormat,
+    mode: options.mode || "generate",
+    platform: options.platform?.trim() || undefined,
+    jobId: options.jobId?.trim() || undefined,
+    conversationId: options.conversationId?.trim() || undefined,
+    turnId: options.turnId?.trim() || undefined,
+    title: options.title?.trim() || undefined,
+    compareBatchId: options.compareBatchId?.trim() || options.compareGroupId?.trim() || undefined,
+    compareGroupId: options.compareGroupId?.trim() || undefined,
+    compareModelLabel: options.compareModelLabel?.trim() || undefined,
+    compareModelIndex: options.compareModelIndex,
+    compareModelCount: options.compareModelCount,
+    dispatchTags: buildImageDispatchTags(options),
   };
-  if (businessProxyMode) {
-    body.mode = options.mode || "generate";
-    body.platform = options.platform?.trim() || undefined;
-    body.jobId = options.jobId?.trim() || undefined;
-    body.conversationId = options.conversationId?.trim() || undefined;
-    body.turnId = options.turnId?.trim() || undefined;
-    body.title = options.title?.trim() || undefined;
-    if (options.sourceImages?.length) {
-      body.sourceImages = options.sourceImages;
-    }
-    if (options.sourceReference) {
-      body.sourceReference = options.sourceReference;
-    }
+  if (options.sourceImages?.length) {
+    body.sourceImages = options.sourceImages;
   }
-  return httpRequest<ImageResponse>(endpoint, {
+  if (options.hasAttachment) {
+    body.hasAttachment = true;
+  }
+  if (options.sourceReference) {
+    body.sourceReference = options.sourceReference;
+  }
+  return httpRequest<ImageResponse>("/api/image/generate", {
     method: "POST",
     headers: policyHeader
       ? { "X-Studio-Account-Policy": policyHeader }
@@ -1819,58 +3136,103 @@ export async function generateImageWithOptions(
   });
 }
 
-export async function editImage({
-  prompt,
-  images,
-  mask,
-  sourceReference,
-  size,
-  quality,
-  model = "gpt-image-2",
-}: {
-  prompt: string;
-  images: File[];
-  mask?: File | null;
-  sourceReference?: InpaintSourceReference;
-  size?: string;
-  quality?: ImageQuality;
-  model?: ImageModel;
-}) {
-  const formData = new FormData();
-  const [policy, responseFormat] = await Promise.all([
-    getImageAccountPolicyForRequest(),
-    getImageResponseFormatForRequest(),
-  ]);
-  const policyHeader = buildImageAccountPolicyHeader(policy);
-  formData.append("prompt", prompt);
-  formData.append("model", model);
-  formData.append("response_format", responseFormat);
-  if (size?.trim()) {
-    formData.append("size", size.trim());
-  }
-  if (quality) {
-    formData.append("quality", quality);
-  }
-  images.forEach((file) => formData.append("image", file));
-  if (mask) {
-    formData.append("mask", mask);
-  }
-  if (sourceReference) {
-    formData.append("original_file_id", sourceReference.original_file_id);
-    formData.append("original_gen_id", sourceReference.original_gen_id);
-    formData.append("source_account_id", sourceReference.source_account_id);
-    if (sourceReference.conversation_id) {
-      formData.append("conversation_id", sourceReference.conversation_id);
-    }
-    if (sourceReference.parent_message_id) {
-      formData.append("parent_message_id", sourceReference.parent_message_id);
-    }
-  }
-  return httpRequest<ImageResponse>("/v1/images/edits", {
+export type BusinessAPIKeyStatus = "active" | "disabled" | "revoked";
+
+export type BusinessAPIKey = {
+  id: string;
+  userId: string;
+  name: string;
+  keyPrefix: string;
+  keyLast4: string;
+  status: BusinessAPIKeyStatus;
+  creditLimit: number;
+  usedCredits: number;
+  rateLimitPerMinute: number;
+  concurrencyLimit: number;
+  allowedModels: string[];
+  lastUsedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  revokedAt?: string;
+};
+
+export type AdminCreateAPIKeyInput = {
+  userId: string;
+  name: string;
+  env: "live" | "test";
+  creditLimit?: number;
+  rateLimitPerMinute?: number;
+  concurrencyLimit?: number;
+  allowedModels?: string[];
+};
+
+export type AdminUpdateAPIKeyInput = {
+  name?: string;
+  status?: BusinessAPIKeyStatus;
+  creditLimit?: number;
+  rateLimitPerMinute?: number;
+  concurrencyLimit?: number;
+  allowedModels?: string[];
+};
+
+export type BusinessAPIKeyCreateResult = {
+  item: BusinessAPIKey;
+  secret: string;
+};
+
+// 管理员侧（requireAdminAuth）
+export async function fetchAdminAPIKeys(userId?: string) {
+  const suffix = userId ? `?userId=${encodeURIComponent(userId)}` : "";
+  return httpRequest<{ items: BusinessAPIKey[] }>(`/api/business/admin/api-keys${suffix}`);
+}
+
+export async function createAdminAPIKey(payload: AdminCreateAPIKeyInput) {
+  return httpRequest<BusinessAPIKeyCreateResult>("/api/business/admin/api-keys", {
     method: "POST",
-    headers: policyHeader
-      ? { "X-Studio-Account-Policy": policyHeader }
-      : undefined,
-    body: formData,
+    body: payload,
   });
+}
+
+export async function updateAdminAPIKey(id: string, payload: AdminUpdateAPIKeyInput) {
+  return httpRequest<{ item: BusinessAPIKey }>(
+    `/api/business/admin/api-keys/${encodeURIComponent(id)}`,
+    { method: "PATCH", body: payload },
+  );
+}
+
+export async function revokeAdminAPIKey(id: string) {
+  return httpRequest<{ item: BusinessAPIKey }>(
+    `/api/business/admin/api-keys/${encodeURIComponent(id)}/revoke`,
+    { method: "POST" },
+  );
+}
+
+export async function fetchAdminUsersAPIAccess() {
+  return httpRequest<{ enabledUserIds: string[] }>("/api/business/admin/users-api-access");
+}
+
+export async function updateBusinessUserAPIAccess(userId: string, enabled: boolean) {
+  return httpRequest<{ ok: boolean; apiAccessEnabled: boolean }>(
+    `/api/business/users/${encodeURIComponent(userId)}/api-access`,
+    { method: "PATCH", body: { enabled } },
+  );
+}
+
+// 用户自助侧（requireUIAuth + 本人已开通）
+export async function fetchMyAPIKeys() {
+  return httpRequest<{ items: BusinessAPIKey[] }>("/api/business/api-keys");
+}
+
+export async function createMyAPIKey(name: string) {
+  return httpRequest<BusinessAPIKeyCreateResult>("/api/business/api-keys", {
+    method: "POST",
+    body: { name },
+  });
+}
+
+export async function revokeMyAPIKey(id: string) {
+  return httpRequest<{ item: BusinessAPIKey }>(
+    `/api/business/api-keys/${encodeURIComponent(id)}/revoke`,
+    { method: "POST" },
+  );
 }

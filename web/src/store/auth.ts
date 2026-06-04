@@ -5,6 +5,7 @@ import localforage from "localforage";
 const LEGACY_AUTH_KEY_STORAGE_KEY = "imagestudio_auth_key";
 export const AUTH_ROLE_STORAGE_KEY = "imagestudio_auth_role";
 export const AUTH_USERNAME_STORAGE_KEY = "imagestudio_auth_username";
+export const AUTH_AVATAR_URL_STORAGE_KEY = "imagestudio_auth_avatar_url";
 export const AUTH_STATE_CHANGED_EVENT = "image-studio:auth-state-changed";
 
 export type AuthRole = "user" | "admin";
@@ -68,6 +69,28 @@ export async function setStoredAuthUsername(username: string | null) {
   await authStorage.setItem(AUTH_USERNAME_STORAGE_KEY, normalizedUsername);
 }
 
+export async function getStoredAuthAvatarUrl() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  const value = await authStorage.getItem<string>(AUTH_AVATAR_URL_STORAGE_KEY);
+  return String(value || "").trim();
+}
+
+export async function setStoredAuthAvatarUrl(avatarUrl: string | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const normalizedAvatarUrl = String(avatarUrl || "").trim();
+  if (!normalizedAvatarUrl) {
+    await authStorage.removeItem(AUTH_AVATAR_URL_STORAGE_KEY);
+    notifyAuthStateChanged();
+    return;
+  }
+  await authStorage.setItem(AUTH_AVATAR_URL_STORAGE_KEY, normalizedAvatarUrl);
+  notifyAuthStateChanged();
+}
+
 export async function clearStoredAuthKey() {
   if (typeof window === "undefined") {
     return;
@@ -75,6 +98,7 @@ export async function clearStoredAuthKey() {
   await authStorage.removeItem(LEGACY_AUTH_KEY_STORAGE_KEY);
   await authStorage.removeItem(AUTH_ROLE_STORAGE_KEY);
   await authStorage.removeItem(AUTH_USERNAME_STORAGE_KEY);
+  await authStorage.removeItem(AUTH_AVATAR_URL_STORAGE_KEY);
   notifyAuthStateChanged();
 }
 

@@ -30,8 +30,6 @@ type accountStorageBackend interface {
 
 func newAccountStorageBackend(cfg *config.Config, authDir, stateFile, syncStateDir, providerType string) (accountStorageBackend, error) {
 	switch cfg.Storage.Backend {
-	case "sqlite":
-		return newSQLiteAccountStorage(cfg.ResolvePath(cfg.Storage.SQLitePath))
 	case "redis":
 		return newRedisAccountStorage(cfg.Storage.RedisAddr, cfg.Storage.RedisPassword, cfg.Storage.RedisDB, cfg.Storage.RedisPrefix)
 	default:
@@ -39,74 +37,7 @@ func newAccountStorageBackend(cfg *config.Config, authDir, stateFile, syncStateD
 	}
 }
 
-func migrateFileStorageIfNeeded(target accountStorageBackend, backendName, authDir, stateFile, syncStateDir string) error {
-	if strings.EqualFold(strings.TrimSpace(backendName), "current") || strings.EqualFold(strings.TrimSpace(backendName), "local") || target == nil {
-		return nil
-	}
-
-	targetAuths, err := target.LoadAuths()
-	if err != nil {
-		return err
-	}
-	targetStates, err := target.LoadRuntimeStates()
-	if err != nil {
-		return err
-	}
-	targetSyncStates, err := target.LoadSyncStates()
-	if err != nil {
-		return err
-	}
-	if len(targetAuths) > 0 || len(targetStates) > 0 || len(targetSyncStates) > 0 {
-		return nil
-	}
-
-	source := &fileAccountStorage{
-		authDir:      authDir,
-		stateFile:    stateFile,
-		syncStateDir: syncStateDir,
-	}
-	if err := source.Init(); err != nil {
-		return err
-	}
-
-	sourceAuths, err := source.LoadAuths()
-	if err != nil {
-		return err
-	}
-	for _, auth := range sourceAuths {
-		raw, err := source.ReadAuthRaw(auth.Name)
-		if err != nil {
-			return err
-		}
-		if err := target.SaveAuthRaw(auth.Name, raw); err != nil {
-			return err
-		}
-	}
-
-	sourceStates, err := source.LoadRuntimeStates()
-	if err != nil {
-		return err
-	}
-	if len(sourceStates) > 0 {
-		if err := target.SaveRuntimeStates(sourceStates); err != nil {
-			return err
-		}
-	}
-
-	sourceSyncStates, err := source.LoadSyncStates()
-	if err != nil {
-		return err
-	}
-	for _, state := range sourceSyncStates {
-		if err := target.SaveSyncState(state); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func migrateIntoEmptyBackendIfNeeded(target accountStorageBackend, targetBackendName, authDir, stateFile, syncStateDir, sqlitePath, redisAddr, redisPassword, redisPrefix string, redisDB int) error {
+func migrateIntoEmptyBackendIfNeeded(target accountStorageBackend, targetBackendName, authDir, stateFile, syncStateDir, redisAddr, redisPassword, redisPrefix string, redisDB int) error {
 	if target == nil {
 		return nil
 	}
@@ -129,24 +60,11 @@ func migrateIntoEmptyBackendIfNeeded(target accountStorageBackend, targetBackend
 
 	sources := make([]accountStorageBackend, 0, 3)
 	switch strings.ToLower(strings.TrimSpace(targetBackendName)) {
-	case "sqlite":
-		sources = append(sources,
-			newFileAccountStorage(authDir, stateFile, syncStateDir),
-		)
-		if backend, err := newRedisAccountStorage(redisAddr, redisPassword, redisDB, redisPrefix); err == nil {
-			sources = append(sources, backend)
-		}
 	case "redis":
 		sources = append(sources,
 			newFileAccountStorage(authDir, stateFile, syncStateDir),
 		)
-		if backend, err := newSQLiteAccountStorage(sqlitePath); err == nil {
-			sources = append(sources, backend)
-		}
 	default:
-		if backend, err := newSQLiteAccountStorage(sqlitePath); err == nil {
-			sources = append(sources, backend)
-		}
 		if backend, err := newRedisAccountStorage(redisAddr, redisPassword, redisDB, redisPrefix); err == nil {
 			sources = append(sources, backend)
 		}
