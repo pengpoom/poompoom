@@ -1833,6 +1833,16 @@ func (s *Server) recordProviderImageGeneration(ctx context.Context, userID strin
 	return result
 }
 
+func base64ImageFromProviderItem(item map[string]any) string {
+	if b64 := strings.TrimSpace(stringValue(item["b64_json"])); b64 != "" {
+		return b64
+	}
+	if u := strings.TrimSpace(stringValue(item["url"])); strings.HasPrefix(strings.ToLower(u), "data:") {
+		return u
+	}
+	return ""
+}
+
 func (s *Server) persistProviderImageResponse(ctx context.Context, responseBody []byte, userID, conversationID, generationID string) ([]byte, providerImagePersistenceStats) {
 	stats := providerImagePersistenceStats{}
 	if len(responseBody) == 0 {
@@ -1852,7 +1862,7 @@ func (s *Server) persistProviderImageResponse(ctx context.Context, responseBody 
 		if !ok {
 			continue
 		}
-		b64 := strings.TrimSpace(stringValue(item["b64_json"]))
+		b64 := base64ImageFromProviderItem(item)
 		if b64 == "" {
 			continue
 		}
