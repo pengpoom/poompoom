@@ -38,6 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/pengpoom/poomimage/main/deploy/dock
 - `IMAGE_STUDIO_DEPLOY_DIR`
 - `DOCKER_CONFIG_DIR`
 - `IMAGE_STUDIO_GITHUB_TOKEN`，私有仓库检测 tag / release 时需要
+- （可选）启用对外图片 API 时需配 `EXTERNAL_API_ENABLED` / `EXTERNAL_API_BASE_URL` / `EXTERNAL_API_SIGNING_SECRET`，详见第 8 节
 
 启动：
 
@@ -183,7 +184,58 @@ npm run dev
 http://localhost:5270/
 ```
 
-## 8. 常见问题
+## 8. 对外图片 API（/v1/images）配置
+
+对外开发者分发 API（`/v1/images/*`，OpenAI 兼容）默认关闭。开启后，外部用户可以用业务 API Key + 你的域名作为 `base_url` 直接调用生图，无需登录 Web。
+
+> 前提：运行的镜像需包含 `/v1` facade 代码。如果调用 `/v1/images/generations` 返回 404，说明镜像不含该功能，需要先用包含 facade 的版本重新构建/发布镜像。
+
+### 8.1 开启与配置
+
+在 `.env` 设置以下变量（或直接编辑挂载的 `backend/data/config.toml` 的 `[external_api]` 段），然后 `docker compose up -d studio` 重启：
+
+```env
+EXTERNAL_API_ENABLED=true
+# 对外访问域名，终端用户会把它填进客户端的 base_url
+EXTERNAL_API_BASE_URL=https://your-domain.com
+# key 的 HMAC 根密钥，用 openssl rand -hex 32 生成
+EXTERNAL_API_SIGNING_SECRET=<强随机值>
+```
+
+`enabled=false` 时整条对外 API 关闭，所有 `/v1/images/*` 请求返回 `503`。
+
+### 8.2 signing_secret 是所有 key 的根，签发后不可更改
+
+API Key 入库只保存 `HMAC-SHA256(signing_secret, key)`，不存明文。因此：
+
+- **一旦签发过任何 key，`EXTERNAL_API_SIGNING_SECRET` 就不能再改**——改了之后所有已签发的 key 立即失效，调用返回 `401 invalid_api_key`，必须全部重新签发。
+- 迁移服务器时，把同一个 `signing_secret` 一起带到新机器，老 key 才能继续用。
+- 部署脚本 `deploy/docker-deploy.sh` 首次生成 `.env` 时会自动写入一个随机 `EXTERNAL_API_SIGNING_SECRET`；不要在已签发 key 之后再去改它。
+
+### 8.3 签发 API Key
+
+开启并重启后，管理员登录 Web 后台，在「API Keys」页为指定用户签发 `poom_live_…` key。明文只在创建时返回一次，请当场复制保存。
+
+### 8.4 反向代理超时（nginx 等）
+
+`POST /v1/images/generations` 默认是**同步**模式：服务端会把请求一直挂起，直到图片生成完成（最多 120 秒）才返回整图。如果服务前面挂了 nginx 之类的反向代理，它默认的 `proxy_read_timeout` 通常只有 60 秒，会在图片生成较慢时提前掐断连接，客户端收到 `504`（但图片其实可能已生成成功）。把对应 location 的超时调到比 120 秒更长：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:7000;
+    proxy_connect_timeout 75s;
+    proxy_send_timeout    130s;
+    proxy_read_timeout    130s;
+}
+```
+
+```bash
+nginx -t && systemctl reload nginx
+```
+
+如果客户端不希望长时间挂起，可在请求体加 `"async": true` 改用异步模式：立即返回 `202` + `status_url`，再用 `GET /v1/images/jobs/{id}` 轮询取图。CherryStudio、OpenAI SDK 这类标准客户端走默认同步即可，只要把反代超时调够。
+
+## 9. 常见问题
 
 ### 8.1 `go: cannot find main module`
 
@@ -224,7 +276,7 @@ docker compose logs postgres
 docker compose logs studio
 ```
 
-## 9. 当前上线边界
+## 10. 当前上线边界
 
 当前版本适合：
 
@@ -233,6 +285,7 @@ docker compose logs studio
 - Redis 队列唤醒 + 数据库 job 兜底
 - 本地图片目录持久化
 - 管理员后台配置 API 接入
+- 对外开发者分发 API（/v1/images，OpenAI 兼容，默认关闭）
 
 后续正式化方向：
 
