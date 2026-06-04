@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -334,6 +335,14 @@ func (s *Server) businessImageModelAvailability(ctx context.Context, store *busi
 	return availability
 }
 
+func stripModelVendorPrefix(model string) string {
+	model = strings.TrimSpace(model)
+	if i := strings.Index(model, "/"); i >= 0 {
+		return strings.TrimSpace(model[i+1:])
+	}
+	return model
+}
+
 func (s *Server) resolveBusinessImageModel(ctx context.Context, payload map[string]any) (businessmodels.Model, bool) {
 	if payload == nil {
 		return businessmodels.Model{}, false
@@ -348,8 +357,17 @@ func (s *Server) resolveBusinessImageModel(ctx context.Context, payload map[stri
 	}
 	platform := businessproviders.NormalizePlatform(stringValue(payload["platform"]))
 	model := strings.TrimSpace(stringValue(payload["model"]))
+	if item, ok, err := store.Get(ctx, businessmodels.NormalizeModelID(model)); err == nil && ok {
+		return item, true
+	}
 	if item, ok, err := store.FindByPlatformModel(ctx, platform, model); err == nil && ok {
 		return item, true
+	}
+	if stripped := stripModelVendorPrefix(model); stripped != "" && stripped != model {
+		if item, ok, err := store.FindByPlatformModel(ctx, platform, stripped); err == nil && ok {
+			slog.Warn("image model matched after stripping vendor prefix", "requested", model, "resolved", stripped, "platform", item.Platform, "modelId", item.ID)
+			return item, true
+		}
 	}
 	return fallbackBusinessImageModel(payload)
 }
