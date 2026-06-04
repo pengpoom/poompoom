@@ -176,29 +176,14 @@ func facadeServe(t *testing.T, handler http.Handler, method, target, bearer, bod
 	return rec
 }
 
-func TestV1FacadeEndToEnd(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))
-	if dsn == "" {
-		t.Skip("POSTGRES_TEST_DSN is not set")
-	}
-	imageB64 := base64.StdEncoding.EncodeToString([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3})
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"created": 1,
-			"data":    []map[string]any{{"b64_json": imageB64}},
-		})
-	}))
-	defer upstream.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
+func provisionFacadeServer(t *testing.T, ctx context.Context, upstreamURL string) (*Server, http.Handler, string, string) {
+	t.Helper()
 	cfg := config.New(t.TempDir())
 	if err := cfg.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	cfg.Database.Driver = "postgres"
-	cfg.Database.DSN = dsn
+	cfg.Database.DSN = strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))
 	cfg.Database.MaxOpenConns = 5
 	cfg.Database.MaxIdleConns = 2
 	cfg.Storage.ImageDir = t.TempDir()
@@ -230,7 +215,7 @@ func TestV1FacadeEndToEnd(t *testing.T) {
 	if _, err := providerStore.Create(ctx, businessproviders.MutationInput{
 		Name:         "Facade Test Provider",
 		Platform:     businessproviders.PlatformGPTImage,
-		BaseURL:      upstream.URL,
+		BaseURL:      upstreamURL,
 		APIKey:       "provider-key",
 		DefaultModel: "gpt-image-test",
 		Enabled:      true,
@@ -251,13 +236,34 @@ func TestV1FacadeEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("key store: %v", err)
 	}
-	defer keyStore.Close()
+	t.Cleanup(func() { _ = keyStore.Close() })
 	_, plaintext, err := keyStore.Create(ctx, businessapikeys.CreateInput{UserID: userID, Name: "facade key"})
 	if err != nil {
 		t.Fatalf("create key: %v", err)
 	}
 
-	rec := facadeServe(t, handler, http.MethodPost, "/v1/images/generations", plaintext, `{"prompt":"facade smoke","metadata":{"scene":"demo"}}`)
+	return server, handler, plaintext, userID
+}
+
+func TestV1FacadeEndToEnd(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN")) == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	imageB64 := base64.StdEncoding.EncodeToString([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 1,
+			"data":    []map[string]any{{"b64_json": imageB64}},
+		})
+	}))
+	defer upstream.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	server, handler, plaintext, userID := provisionFacadeServer(t, ctx, upstream.URL)
+
+	rec := facadeServe(t, handler, http.MethodPost, "/v1/images/generations", plaintext, `{"prompt":"facade smoke","async":true,"metadata":{"scene":"demo"}}`)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("submit: want 202 got %d body=%s", rec.Code, rec.Body.String())
 	}
@@ -299,12 +305,60 @@ func TestV1FacadeEndToEnd(t *testing.T) {
 		t.Fatalf("signed image fetch: want 200 got %d body=%s", ir.Code, ir.Body.String())
 	}
 
-	_, plaintext2, err := keyStore.Create(ctx, businessapikeys.CreateInput{UserID: userID, Name: "other key"})
+	keyStore2, err := server.newBusinessAPIKeyStore()
+	if err != nil {
+		t.Fatalf("key store2: %v", err)
+	}
+	defer keyStore2.Close()
+	_, plaintext2, err := keyStore2.Create(ctx, businessapikeys.CreateInput{UserID: userID, Name: "other key"})
 	if err != nil {
 		t.Fatalf("create key2: %v", err)
 	}
 	cr := facadeServe(t, handler, http.MethodGet, "/v1/images/jobs/"+created.ID, plaintext2, "")
 	if cr.Code != http.StatusNotFound {
 		t.Fatalf("cross-key isolation: want 404 got %d", cr.Code)
+	}
+}
+
+func TestV1FacadeSyncGeneration(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN")) == "" {
+		t.Skip("POSTGRES_TEST_DSN is not set")
+	}
+	imageB64 := base64.StdEncoding.EncodeToString([]byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 8, 7})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"created": 1,
+			"data":    []map[string]any{{"b64_json": imageB64}},
+		})
+	}))
+	defer upstream.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, handler, plaintext, _ := provisionFacadeServer(t, ctx, upstream.URL)
+
+	rec := facadeServe(t, handler, http.MethodPost, "/v1/images/generations", plaintext, `{"prompt":"sync smoke"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sync: want 200 got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Created int64 `json:"created"`
+		Data    []struct {
+			URL     string `json:"url"`
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode sync resp: %v body=%s", err, rec.Body.String())
+	}
+	if resp.Created == 0 {
+		t.Fatalf("sync resp missing created: %s", rec.Body.String())
+	}
+	if len(resp.Data) == 0 {
+		t.Fatalf("sync resp has no data: %s", rec.Body.String())
+	}
+	if resp.Data[0].B64JSON == "" {
+		t.Fatalf("sync default should be b64_json, got %#v", resp.Data[0])
 	}
 }

@@ -141,6 +141,7 @@ type v1ImageGenerationRequest struct {
 	Quality        string          `json:"quality"`
 	ResponseFormat string          `json:"response_format"`
 	Metadata       json.RawMessage `json:"metadata"`
+	Async          bool            `json:"async"`
 }
 
 type v1ImageOut struct {
@@ -226,14 +227,87 @@ func (s *Server) handleV1CreateImageGeneration(w http.ResponseWriter, r *http.Re
 		return
 	}
 	s.notifyBusinessImageJob(job)
-	writeJSON(w, http.StatusAccepted, v1ImageJobResponse{
-		ID:        job.ID,
-		Object:    "image.generation.job",
-		Status:    toPublicStatus(job.Status),
-		Model:     job.Model,
-		Created:   startedAt.Unix(),
-		StatusURL: s.v1StatusURL(job.ID),
-	})
+	if req.Async {
+		writeJSON(w, http.StatusAccepted, v1ImageJobResponse{
+			ID:        job.ID,
+			Object:    "image.generation.job",
+			Status:    toPublicStatus(job.Status),
+			Model:     job.Model,
+			Created:   startedAt.Unix(),
+			StatusURL: s.v1StatusURL(job.ID),
+		})
+		return
+	}
+	s.writeV1SyncImageResult(w, r, job, key, startedAt, !strings.EqualFold(strings.TrimSpace(req.ResponseFormat), "url"))
+}
+
+const v1SyncImageWaitTimeout = 120 * time.Second
+const v1SyncImagePollInterval = 250 * time.Millisecond
+
+var errSyncImageTimeout = errors.New("sync image wait timed out")
+
+type v1SyncImageResponse struct {
+	Created int64        `json:"created"`
+	Data    []v1ImageOut `json:"data"`
+}
+
+func (s *Server) writeV1SyncImageResult(w http.ResponseWriter, r *http.Request, job businessjobs.Job, key businessapikeys.APIKey, startedAt time.Time, asB64 bool) {
+	final, err := s.waitForBusinessImageJob(r.Context(), job.ID, key.UserID, v1SyncImageWaitTimeout)
+	if err != nil {
+		writeJSON(w, http.StatusAccepted, v1ImageJobResponse{
+			ID:        job.ID,
+			Object:    "image.generation.job",
+			Status:    "running",
+			Model:     job.Model,
+			Created:   startedAt.Unix(),
+			StatusURL: s.v1StatusURL(job.ID),
+		})
+		return
+	}
+	switch toPublicStatus(final.Status) {
+	case "succeeded":
+		images, ierr := s.v1JobImages(r.Context(), final, key.UserID, asB64)
+		if ierr != nil {
+			writeV1Error(w, http.StatusInternalServerError, "asset_lookup_failed", ierr.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, v1SyncImageResponse{Created: startedAt.Unix(), Data: images})
+	case "cancelled":
+		writeV1Error(w, http.StatusConflict, "job_cancelled", "image job was cancelled")
+	default:
+		writeV1Error(w, http.StatusBadGateway, firstNonEmpty(final.ErrorCode, "image_job_failed"), firstNonEmpty(final.ErrorMessage, "image generation failed"))
+	}
+}
+
+func (s *Server) waitForBusinessImageJob(ctx context.Context, jobID, userID string, timeout time.Duration) (businessjobs.Job, error) {
+	store, err := s.newBusinessJobStore()
+	if err != nil {
+		return businessjobs.Job{}, err
+	}
+	defer store.Close()
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(v1SyncImagePollInterval)
+	defer ticker.Stop()
+	for {
+		job, found, err := store.Get(ctx, jobID, userID)
+		if err != nil {
+			return businessjobs.Job{}, err
+		}
+		if found {
+			switch job.Status {
+			case businessjobs.StatusSucceeded, businessjobs.StatusFailed, businessjobs.StatusCancelled:
+				return job, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return businessjobs.Job{}, errSyncImageTimeout
+		}
+		select {
+		case <-ctx.Done():
+			return businessjobs.Job{}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func translateProviderSubmitError(w http.ResponseWriter, err error) bool {
