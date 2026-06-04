@@ -16,10 +16,14 @@ export REDIS_PASSWORD="${REDIS_PASSWORD:-}"
 export REDIS_DB="${REDIS_DB:-0}"
 export REDIS_PREFIX="${REDIS_PREFIX:-imagestudio:studio}"
 export GOCACHE="${GOCACHE:-/tmp/poomimage-renew-go-cache}"
+export EXTERNAL_API_ENABLED="${EXTERNAL_API_ENABLED:-true}"
+export EXTERNAL_API_SIGNING_SECRET="${EXTERNAL_API_SIGNING_SECRET:-dev-external-api-signing-secret-change-me}"
+export EXTERNAL_API_BASE_URL="${EXTERNAL_API_BASE_URL:-http://127.0.0.1:7070}"
 
 echo "Starting backend API on ${SERVER_HOST}:${SERVER_PORT}"
 echo "Database: ${DATABASE_DRIVER}"
 echo "Queue: ${JOB_QUEUE_BACKEND}"
+echo "External API: ${EXTERNAL_API_ENABLED} (base ${EXTERNAL_API_BASE_URL})"
 
 cd "$BACKEND_DIR"
 exec go run .
