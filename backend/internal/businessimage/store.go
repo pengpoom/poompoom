@@ -1187,6 +1187,40 @@ func (s *Store) AssetsByUser(ctx context.Context, userID string, limit int) ([]A
 	return items, err
 }
 
+func (s *Store) AssetsByGeneration(ctx context.Context, generationID string, userID string) ([]Asset, error) {
+	generationID = cleanID(generationID)
+	if generationID == "" {
+		return nil, fmt.Errorf("generation id is required")
+	}
+	where := "generation_id = ?"
+	args := []any{generationID}
+	if uid := strings.TrimSpace(userID); uid != "" {
+		where += " AND user_id = ?"
+		args = append(args, uid)
+	}
+	rows, err := s.db.QueryContext(ctx, s.rebind(
+		`SELECT id, user_id, conversation_id, generation_id, file_name, file_path,
+		        url, mime_type, size_bytes, sha256, created_at
+		 FROM business_image_assets
+		 WHERE `+where+`
+		 ORDER BY created_at ASC, file_name ASC`), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Asset{}
+	for rows.Next() {
+		var item Asset
+		if err := rows.Scan(&item.ID, &item.UserID, &item.ConversationID, &item.GenerationID,
+			&item.FileName, &item.FilePath, &item.URL, &item.MimeType, &item.SizeBytes,
+			&item.SHA256, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *Store) AssetsByUserPage(ctx context.Context, userID string, limit int, offset int) ([]Asset, int64, error) {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {

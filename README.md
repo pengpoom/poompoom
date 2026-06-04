@@ -34,6 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/pengpoom/poomimage/main/deploy/dock
 - `IMAGE_STUDIO_DEPLOY_DIR`
 - `DOCKER_CONFIG_DIR`
 - `IMAGE_STUDIO_GITHUB_TOKEN`，私有仓库检测 tag / release 时需要
+- （可选）启用对外图片 API 时需配 `EXTERNAL_API_ENABLED` / `EXTERNAL_API_BASE_URL` / `EXTERNAL_API_SIGNING_SECRET`，详见 [Deploy.md](Deploy.md) 第 8 节
 
 启动：
 

@@ -461,6 +461,35 @@ func capacityErrorCodeIs(err error, code string) bool {
 	return ok && capacityErr.Code == code
 }
 
+func TestSaveAndGetJobWithAPIKeyAttribution(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	saved, err := store.SaveQueuedWithCapacity(ctx, Job{
+		ID:             "job_apikey_attr",
+		UserID:         "user_apikey_attr",
+		ConversationID: "conv_apikey_attr",
+		GenerationID:   "gen_apikey_attr",
+		Status:         StatusQueued,
+		Stage:          "queued",
+		RequestedCount: 1,
+		APIKeyID:       "apikey_test_1",
+		APIMetadata:    []byte(`{"scene":"demo"}`),
+	}, CapacityLimits{})
+	if err != nil {
+		t.Fatalf("SaveQueuedWithCapacity() error: %v", err)
+	}
+	got, ok, err := store.Get(ctx, saved.ID, "user_apikey_attr")
+	if err != nil || !ok {
+		t.Fatalf("Get() err=%v ok=%v", err, ok)
+	}
+	if got.APIKeyID != "apikey_test_1" {
+		t.Fatalf("APIKeyID = %q, want apikey_test_1", got.APIKeyID)
+	}
+	if string(got.APIMetadata) != `{"scene":"demo"}` {
+		t.Fatalf("APIMetadata = %q, want {\"scene\":\"demo\"}", string(got.APIMetadata))
+	}
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))

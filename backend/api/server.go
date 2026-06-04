@@ -659,6 +659,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /v1/responses", s.requireImageAuth(http.HandlerFunc(s.handleImageResponses)))
 	mux.Handle("GET /v1/models", s.requireImageAuth(http.HandlerFunc(s.handleModels)))
 	mux.Handle("GET /v1/files/image/", http.HandlerFunc(s.handleImageFile))
+	mux.Handle("POST /v1/images/generations", s.requireExternalAPIKey(http.HandlerFunc(s.handleV1CreateImageGeneration)))
+	mux.Handle("GET /v1/images/jobs/{id}", s.requireExternalAPIKey(http.HandlerFunc(s.handleV1GetImageJob)))
+	mux.Handle("DELETE /v1/images/jobs/{id}", s.requireExternalAPIKey(http.HandlerFunc(s.handleV1CancelImageJob)))
+	mux.Handle("GET /v1/images/models", s.requireExternalAPIKey(http.HandlerFunc(s.handleV1ListModels)))
+	mux.Handle("GET /v1/images/credits", s.requireExternalAPIKey(http.HandlerFunc(s.handleV1Credits)))
 
 	mux.Handle("/", http.HandlerFunc(s.handleWebApp))
 
