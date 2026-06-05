@@ -535,7 +535,7 @@ export function PromptComposer({
                 value={mode}
                 options={modeOptions.map((item) => ({ value: item.value, label: item.label, description: item.description }))}
                 onChange={(value) => onModeChange(value)}
-                triggerClassName={cn(controlButtonClass, "w-[96px] shrink-0 justify-center px-2")}
+                triggerClassName={cn(controlButtonClass, "w-[112px] shrink-0 justify-center px-2")}
                 triggerIcon={<SparkModeIcon mode={mode} />}
                 triggerLabel={modeLabel}
               />
@@ -550,7 +550,7 @@ export function PromptComposer({
                 onChange={(value) => onModelChange(value)}
                 triggerClassName={cn(
                   controlButtonClass,
-                  "w-[clamp(160px,20vw,260px)] shrink",
+                  "w-[clamp(148px,18vw,240px)] shrink",
                   compareEnabled && mode === "generate" && "is-disabled",
                 )}
                 triggerIcon={<Cpu className="size-4" />}

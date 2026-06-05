@@ -1483,6 +1483,7 @@ export type BusinessUsageRecord = {
   duration_ms: number;
   credit_delta: number;
   credits_used: number;
+  api_key_id?: string;
 };
 
 export type BusinessModelUsage = {
@@ -1509,6 +1510,7 @@ export type BusinessUsageQuery = {
   userId?: string;
   userQuery?: string;
   model?: string;
+  source?: string;
   from?: string;
   to?: string;
   timeRange?: string;
@@ -1626,6 +1628,7 @@ export type BusinessTrackerRecord = {
 export type BusinessImageJob = {
   id: string;
   userId: string;
+  apiKeyId?: string;
   conversationId?: string;
   generationId?: string;
   turnId?: string;
@@ -1716,6 +1719,7 @@ export type BusinessImageJobQuery = {
   platform?: string;
   errorType?: string;
   compareBatchId?: string;
+  source?: string;
   from?: string;
   to?: string;
   timeRange?: string;
@@ -3248,6 +3252,7 @@ export type BusinessAPIKey = {
   createdAt: string;
   updatedAt: string;
   revokedAt?: string;
+  plaintext?: string;
 };
 
 export type AdminCreateAPIKeyInput = {

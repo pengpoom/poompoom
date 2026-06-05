@@ -376,6 +376,14 @@ function badgeClass(variant: "success" | "warning" | "danger" | "info") {
   return "warn";
 }
 
+function jobEntryLabel(job: BusinessImageJob) {
+  return job.apiKeyId ? "API" : "网页";
+}
+
+function jobEntryBadgeClass(job: BusinessImageJob) {
+  return job.apiKeyId ? "run" : "off";
+}
+
 function upstreamJobLabel(job: BusinessImageJob) {
   return job.upstreamSent || job.upstreamStatus === "sent" ? "已发上游" : "未发上游";
 }
@@ -1047,7 +1055,7 @@ function JobDetailDrawer({
   );
 }
 
-const jobTableColumnCount = 6;
+const jobTableColumnCount = 7;
 
 
 export default function OperationsPage() {
@@ -1062,6 +1070,7 @@ export default function OperationsPage() {
   const [jobErrorType, setJobErrorType] = useState("");
   const [jobUserId, setJobUserId] = useState("");
   const [jobPlatform, setJobPlatform] = useState("");
+  const [jobSource, setJobSource] = useState("");
   const [jobCompareBatchId, setJobCompareBatchId] = useState("");
   const [jobTimeRange, setJobTimeRange] = useState<TimeRangeValue>({ preset: "last7", from: "", to: "" });
   const [loading, setLoading] = useState(true);
@@ -1076,10 +1085,11 @@ export default function OperationsPage() {
       errorType: jobErrorType || undefined,
       userId: jobUserId || undefined,
       platform: jobPlatform || undefined,
+      source: jobSource || undefined,
       compareBatchId: jobCompareBatchId.trim() || undefined,
       ...timeRangeQuery(jobTimeRange),
     }),
-    [jobCompareBatchId, jobErrorType, jobPlatform, jobStatus, jobTimeRange, jobUserId],
+    [jobCompareBatchId, jobErrorType, jobPlatform, jobSource, jobStatus, jobTimeRange, jobUserId],
   );
 
   const loadStatus = useCallback(async () => {
@@ -1578,6 +1588,16 @@ export default function OperationsPage() {
                 ]}
                 placeholder="全部平台"
               />
+              <AppSelect
+                value={jobSource}
+                onChange={setJobSource}
+                options={[
+                  { value: "", label: "全部入口" },
+                  { value: "api", label: "API" },
+                  { value: "web", label: "网页" },
+                ]}
+                placeholder="全部入口"
+              />
               <input
                 className="app-input h-10 w-[220px]"
                 value={jobCompareBatchId}
@@ -1609,6 +1629,7 @@ export default function OperationsPage() {
                 <thead className={adminTableHeadClass}>
                   <tr>
                     <th className="px-3 py-3 font-medium">状态 / 用户</th>
+                    <th className="px-3 py-3 font-medium">入口</th>
                     <th className="px-3 py-3 font-medium">模型链路</th>
                     <th className="px-3 py-3 font-medium">上游来源</th>
                     <th className="px-3 py-3 font-medium">提示词</th>
@@ -1649,6 +1670,9 @@ export default function OperationsPage() {
                               {job.userId} · {job.stage || "-"}
                             </div>
                           </div>
+                        </td>
+                        <td className="whitespace-normal px-3 py-2">
+                          <span className={cn("app-badge w-fit", jobEntryBadgeClass(job))}>{jobEntryLabel(job)}</span>
                         </td>
                         <td className="whitespace-normal px-3 py-2">
                           <div className="min-w-0">

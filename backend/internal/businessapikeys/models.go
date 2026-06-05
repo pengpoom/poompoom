@@ -22,4 +22,6 @@ type APIKey struct {
 	CreatedAt          string   `json:"createdAt"`
 	UpdatedAt          string   `json:"updatedAt"`
 	RevokedAt          string   `json:"revokedAt,omitempty"`
+	KeyCipher          string   `json:"-"`
+	Plaintext          string   `json:"plaintext,omitempty"`
 }

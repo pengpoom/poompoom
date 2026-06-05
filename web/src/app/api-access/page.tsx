@@ -221,15 +221,28 @@ export default function APIAccessPage() {
                       <tr key={item.id}>
                         <td>{item.name}</td>
                         <td>
-                          <code style={{
-                            padding: "3px 8px",
-                            borderRadius: 6,
-                            border: "1px solid var(--app-border)",
-                            background: "var(--app-bg-surface)",
-                            fontSize: 12,
-                          }}>
-                            {maskedKey(item)}
-                          </code>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <code style={{
+                              padding: "3px 8px",
+                              borderRadius: 6,
+                              border: "1px solid var(--app-border)",
+                              background: "var(--app-bg-surface)",
+                              fontSize: 12,
+                            }}>
+                              {maskedKey(item)}
+                            </code>
+                            <div className="app-act">
+                              <button
+                                type="button"
+                                onClick={() => item.plaintext && void copyText(item.plaintext)}
+                                disabled={!item.plaintext}
+                                aria-label="复制完整 key"
+                                title={item.plaintext ? "复制完整 key" : "无法获取明文"}
+                              >
+                                <Copy className="size-3.5" />
+                              </button>
+                            </div>
+                          </div>
                         </td>
                         <td><span className={`app-badge ${statusBadgeClass(item.status)}`}>{statusLabel(item.status)}</span></td>
                         <td>{Number(item.usedCredits || 0).toLocaleString()} / {item.creditLimit > 0 ? Number(item.creditLimit).toLocaleString() : "∞"}</td>

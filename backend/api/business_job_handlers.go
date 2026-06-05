@@ -390,6 +390,7 @@ func (s *Server) handleAdminListBusinessImageJobs(w http.ResponseWriter, r *http
 		Platform:       r.URL.Query().Get("platform"),
 		ErrorType:      r.URL.Query().Get("errorType"),
 		CompareBatchID: r.URL.Query().Get("compareBatchId"),
+		Source:         r.URL.Query().Get("source"),
 		From:           from,
 		To:             to,
 		Limit:          pageSize,

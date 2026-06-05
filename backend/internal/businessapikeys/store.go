@@ -50,6 +50,11 @@ func (s *Store) rebind(query string) string {
 	return database.Rebind(s.driver, query)
 }
 
+// DecryptCipher 用 store 自身的 signing_secret 解密 key_cipher 还原明文。
+func (s *Store) DecryptCipher(cipher string) (string, error) {
+	return DecryptKey(s.secret, cipher)
+}
+
 func (s *Store) Close() error {
 	if s == nil || s.db == nil || !s.ownDB {
 		return nil
@@ -59,7 +64,7 @@ func (s *Store) Close() error {
 
 const apiKeyColumns = `id, user_id, name, key_prefix, key_last4, status,
 	credit_limit, used_credits, rate_limit_per_minute, concurrency_limit,
-	allowed_models, last_used_at, created_at, updated_at, revoked_at`
+	allowed_models, last_used_at, created_at, updated_at, revoked_at, key_cipher`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -73,7 +78,7 @@ func scanAPIKey(sc rowScanner) (APIKey, error) {
 	if err := sc.Scan(
 		&key.ID, &key.UserID, &key.Name, &key.KeyPrefix, &key.KeyLast4, &key.Status,
 		&key.CreditLimit, &key.UsedCredits, &key.RateLimitPerMinute, &key.ConcurrencyLimit,
-		&allowedModels, &key.LastUsedAt, &key.CreatedAt, &key.UpdatedAt, &key.RevokedAt,
+		&allowedModels, &key.LastUsedAt, &key.CreatedAt, &key.UpdatedAt, &key.RevokedAt, &key.KeyCipher,
 	); err != nil {
 		return APIKey{}, err
 	}
@@ -134,19 +139,24 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (APIKey, string, err
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
+	cipher, err := EncryptKey(s.secret, gen.Plaintext)
+	if err != nil {
+		return APIKey{}, "", err
+	}
 	_, err = s.db.ExecContext(ctx, s.rebind(`INSERT INTO business_api_keys(
 		id, user_id, name, key_prefix, key_last4, key_hash, status,
 		credit_limit, used_credits, rate_limit_per_minute, concurrency_limit,
-		allowed_models, metadata_json, last_used_at, created_at, updated_at, revoked_at
-	) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+		allowed_models, metadata_json, last_used_at, created_at, updated_at, revoked_at, key_cipher
+	) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 		key.ID, key.UserID, key.Name, key.KeyPrefix, key.KeyLast4,
 		KeyHash(s.secret, gen.Plaintext), key.Status,
 		key.CreditLimit, key.UsedCredits, key.RateLimitPerMinute, key.ConcurrencyLimit,
-		string(modelsJSON), "{}", "", key.CreatedAt, key.UpdatedAt, "",
+		string(modelsJSON), "{}", "", key.CreatedAt, key.UpdatedAt, "", cipher,
 	)
 	if err != nil {
 		return APIKey{}, "", err
 	}
+	key.KeyCipher = cipher
 	return key, gen.Plaintext, nil
 }
 

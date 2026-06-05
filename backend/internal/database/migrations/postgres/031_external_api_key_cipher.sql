@@ -1,0 +1,2 @@
+ALTER TABLE business_api_keys
+	ADD COLUMN IF NOT EXISTS key_cipher TEXT NOT NULL DEFAULT '';

@@ -130,6 +130,7 @@ type AdminListFilter struct {
 	Platform       string
 	ErrorType      string
 	CompareBatchID string
+	Source         string
 	From           string
 	To             string
 	Limit          int
@@ -804,6 +805,7 @@ func (s *Store) AdminList(ctx context.Context, filter AdminListFilter) ([]Job, i
 	filter.Platform = strings.TrimSpace(filter.Platform)
 	filter.ErrorType = normalizeAdminErrorType(filter.ErrorType)
 	filter.CompareBatchID = clean(filter.CompareBatchID)
+	filter.Source = normalizeSourceFilter(filter.Source)
 	filter.From = strings.TrimSpace(filter.From)
 	filter.To = strings.TrimSpace(filter.To)
 	if filter.Limit <= 0 || filter.Limit > 200 {
@@ -1303,6 +1305,11 @@ func adminListWhere(filter AdminListFilter) (string, []any) {
 		clauses = append(clauses, errorSQL)
 		args = append(args, errorArgs...)
 	}
+	if filter.Source == "api" {
+		clauses = append(clauses, "api_key_id <> ''")
+	} else if filter.Source == "web" {
+		clauses = append(clauses, "api_key_id = ''")
+	}
 	if filter.From != "" {
 		clauses = append(clauses, "created_at >= ?")
 		args = append(args, filter.From)
@@ -1315,6 +1322,17 @@ func adminListWhere(filter AdminListFilter) (string, []any) {
 		return "", args
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+func normalizeSourceFilter(source string) string {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "api":
+		return "api"
+	case "web":
+		return "web"
+	default:
+		return ""
+	}
 }
 
 func adminErrorTypeWhere(errorType string) (string, []any) {

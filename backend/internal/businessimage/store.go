@@ -103,6 +103,7 @@ type UsageRecord struct {
 	DurationMs     int64  `json:"duration_ms"`
 	CreditDelta    int64  `json:"credit_delta"`
 	CreditsUsed    int64  `json:"credits_used"`
+	APIKeyID       string `json:"api_key_id,omitempty"`
 }
 
 type UsageRecordFilter struct {
@@ -110,8 +111,20 @@ type UsageRecordFilter struct {
 	UserIDs []string
 	Status  string
 	Model   string
+	Source  string
 	From    string
 	To      string
+}
+
+func normalizeUsageSource(source string) string {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "api":
+		return "api"
+	case "web":
+		return "web"
+	default:
+		return ""
+	}
 }
 
 type UsageSummaryFilter struct {
@@ -1052,6 +1065,7 @@ func (s *Store) UsageRecordsPage(ctx context.Context, filter UsageRecordFilter, 
 	filter.UserIDs = compactStrings(filter.UserIDs)
 	filter.Status = strings.TrimSpace(filter.Status)
 	filter.Model = strings.TrimSpace(filter.Model)
+	filter.Source = normalizeUsageSource(filter.Source)
 	filter.From = strings.TrimSpace(filter.From)
 	filter.To = strings.TrimSpace(filter.To)
 	if limit <= 0 || limit > 500 {
@@ -1080,6 +1094,13 @@ func (s *Store) UsageRecordsPage(ctx context.Context, filter UsageRecordFilter, 
 		filters = append(filters, "generation.model = ?")
 		filterArgs = append(filterArgs, filter.Model)
 	}
+	if filter.Source == "api" {
+		filters = append(filters, `EXISTS (SELECT 1 FROM business_image_jobs AS job
+			WHERE job.generation_id = generation.id AND job.api_key_id <> '')`)
+	} else if filter.Source == "web" {
+		filters = append(filters, `NOT EXISTS (SELECT 1 FROM business_image_jobs AS job
+			WHERE job.generation_id = generation.id AND job.api_key_id <> '')`)
+	}
 	if filter.From != "" {
 		filters = append(filters, "generation.created_at >= ?")
 		filterArgs = append(filterArgs, filter.From)
@@ -1107,7 +1128,9 @@ func (s *Store) UsageRecordsPage(ctx context.Context, filter UsageRecordFilter, 
 		        generation.prompt, generation.model, generation.size, generation.quality,
 		        generation.count, generation.status, generation.error, generation.created_at,
 		        generation.finished_at,
-		        COALESCE(SUM(ledger.delta), 0) AS credit_delta
+		        COALESCE(SUM(ledger.delta), 0) AS credit_delta,
+		        COALESCE((SELECT MAX(job.api_key_id) FROM business_image_jobs AS job
+		                  WHERE job.generation_id = generation.id), '') AS api_key_id
 		 FROM business_image_generations AS generation
 		 LEFT JOIN business_credit_ledger AS ledger
 		   ON ledger.generation_id = generation.id
@@ -1148,6 +1171,7 @@ func (s *Store) UsageRecordsPage(ctx context.Context, filter UsageRecordFilter, 
 			&item.CreatedAt,
 			&item.FinishedAt,
 			&item.CreditDelta,
+			&item.APIKeyID,
 		); err != nil {
 			return nil, 0, err
 		}

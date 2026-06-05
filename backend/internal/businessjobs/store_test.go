@@ -490,6 +490,47 @@ func TestSaveAndGetJobWithAPIKeyAttribution(t *testing.T) {
 	}
 }
 
+func TestAdminListFilterBySource(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	if _, err := store.Save(ctx, Job{
+		ID: "job_src_web", UserID: "u_src", GenerationID: "gen_src_web",
+		Status: StatusQueued, Stage: "queued", RequestedCount: 1,
+	}); err != nil {
+		t.Fatalf("Save(web) error: %v", err)
+	}
+	if _, err := store.Save(ctx, Job{
+		ID: "job_src_api", UserID: "u_src", GenerationID: "gen_src_api",
+		Status: StatusQueued, Stage: "queued", RequestedCount: 1, APIKeyID: "apikey_src",
+	}); err != nil {
+		t.Fatalf("Save(api) error: %v", err)
+	}
+
+	apiItems, apiTotal, err := store.AdminList(ctx, AdminListFilter{Source: "api"})
+	if err != nil {
+		t.Fatalf("AdminList(api) error: %v", err)
+	}
+	if apiTotal != 1 || len(apiItems) != 1 || apiItems[0].ID != "job_src_api" {
+		t.Fatalf("AdminList(api) = %d items (total %d), want only job_src_api", len(apiItems), apiTotal)
+	}
+
+	webItems, webTotal, err := store.AdminList(ctx, AdminListFilter{Source: "web"})
+	if err != nil {
+		t.Fatalf("AdminList(web) error: %v", err)
+	}
+	if webTotal != 1 || len(webItems) != 1 || webItems[0].ID != "job_src_web" {
+		t.Fatalf("AdminList(web) = %d items (total %d), want only job_src_web", len(webItems), webTotal)
+	}
+
+	_, allTotal, err := store.AdminList(ctx, AdminListFilter{})
+	if err != nil {
+		t.Fatalf("AdminList(all) error: %v", err)
+	}
+	if allTotal != 2 {
+		t.Fatalf("AdminList(all) total = %d, want 2", allTotal)
+	}
+}
+
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv("POSTGRES_TEST_DSN"))

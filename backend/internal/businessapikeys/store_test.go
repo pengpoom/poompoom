@@ -80,6 +80,41 @@ func TestCreateAndAuthenticate(t *testing.T) {
 	}
 }
 
+func TestCreateStoresDecryptableCipher(t *testing.T) {
+	store, _, userID := newAPIKeyTestStore(t)
+	ctx := context.Background()
+
+	key, plaintext, err := store.Create(ctx, CreateInput{UserID: userID, Name: "viewable", Env: "live"})
+	if err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+	if key.KeyCipher == "" {
+		t.Fatalf("Create() returned empty KeyCipher")
+	}
+	got, err := DecryptKey(store.secret, key.KeyCipher)
+	if err != nil {
+		t.Fatalf("DecryptKey(create cipher) error: %v", err)
+	}
+	if got != plaintext {
+		t.Fatalf("decrypted create cipher = %q, want %q", got, plaintext)
+	}
+
+	reloaded, err := store.GetByID(ctx, key.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error: %v", err)
+	}
+	if reloaded.KeyCipher == "" {
+		t.Fatalf("GetByID() returned empty KeyCipher")
+	}
+	got, err = DecryptKey(store.secret, reloaded.KeyCipher)
+	if err != nil {
+		t.Fatalf("DecryptKey(reloaded cipher) error: %v", err)
+	}
+	if got != plaintext {
+		t.Fatalf("decrypted reloaded cipher = %q, want %q", got, plaintext)
+	}
+}
+
 func TestAuthenticateWrongKeyRejected(t *testing.T) {
 	store, _, _ := newAPIKeyTestStore(t)
 	if _, err := store.Authenticate(context.Background(), "poom_live_doesnotexist"); err != sql.ErrNoRows {

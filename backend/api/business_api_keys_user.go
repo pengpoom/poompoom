@@ -62,6 +62,14 @@ func (s *Server) handleListMyAPIKeys(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "list_failed", err.Error())
 		return
 	}
+	for i := range keys {
+		if keys[i].KeyCipher == "" {
+			continue
+		}
+		if plaintext, derr := store.DecryptCipher(keys[i].KeyCipher); derr == nil {
+			keys[i].Plaintext = plaintext
+		}
+	}
 	baseURL := s.resolveFacadeBaseURL(withRequestOrigin(r.Context(), r))
 	writeJSON(w, http.StatusOK, map[string]any{"items": keys, "baseUrl": baseURL})
 }

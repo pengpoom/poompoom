@@ -61,6 +61,14 @@ function statusText(status: string) {
   return status || "-";
 }
 
+function sourceBadgeClass(record: BusinessUsageRecord) {
+  return record.api_key_id ? "app-badge run" : "app-badge";
+}
+
+function sourceText(record: BusinessUsageRecord) {
+  return record.api_key_id ? "API" : "网页";
+}
+
 function promptPreview(value: string) {
   const raw = String(value || "").trim();
   if (!raw) {
@@ -92,6 +100,7 @@ export default function UsagePage({ scope }: UsagePageProps) {
   const [items, setItems] = useState<BusinessUsageRecord[]>([]);
   const [page, setPage] = useState<PaginationMeta>({ page: 1, pageSize: 20, total: 0 });
   const [status, setStatus] = useState("all");
+  const [source, setSource] = useState("all");
   const [model, setModel] = useState("");
   const [timeRange, setTimeRange] = useState<TimeRangeValue>({ preset: "last7", from: "", to: "" });
   const [userId, setUserId] = useState("all");
@@ -114,6 +123,7 @@ export default function UsagePage({ scope }: UsagePageProps) {
         page: targetPage,
         pageSize: currentPage.pageSize,
         status: status === "all" ? undefined : status,
+        source: source === "all" ? undefined : source,
         model: model.trim() || undefined,
         ...timeRangeQuery(timeRange),
         userId: isAdminScope && userId !== "all" ? userId : undefined,
@@ -127,7 +137,7 @@ export default function UsagePage({ scope }: UsagePageProps) {
     } finally {
       setLoading(false);
     }
-  }, [isAdminScope, model, status, timeRange, userId, userSearch]);
+  }, [isAdminScope, model, status, source, timeRange, userId, userSearch]);
 
   const loadUsers = useCallback(async () => {
     if (!isAdminScope) {
@@ -222,6 +232,15 @@ export default function UsagePage({ scope }: UsagePageProps) {
             { value: "failed", label: "失败" },
           ]}
         />
+        <AppSelect
+          value={source}
+          onChange={setSource}
+          options={[
+            { value: "all", label: "全部来源" },
+            { value: "api", label: "API" },
+            { value: "web", label: "网页" },
+          ]}
+        />
         <input className="app-input" type="text" value={model} onChange={(e) => setModel(e.target.value)} placeholder="全部模型" />
         {isAdminScope ? (
           <>
@@ -255,19 +274,20 @@ export default function UsagePage({ scope }: UsagePageProps) {
                 <th>图片</th>
                 <th>耗时</th>
                 <th>扣点</th>
+                <th>来源</th>
                 <th>状态</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={isAdminScope ? 8 : 7} style={{ padding: "48px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
+                  <td colSpan={isAdminScope ? 9 : 8} style={{ padding: "48px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
                     <LoaderCircle className="mx-auto mb-2 size-5 animate-spin" /> 读取中
                   </td>
                 </tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={isAdminScope ? 8 : 7} style={{ padding: "48px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
+                  <td colSpan={isAdminScope ? 9 : 8} style={{ padding: "48px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
                     暂无使用记录
                   </td>
                 </tr>
@@ -295,6 +315,7 @@ export default function UsagePage({ scope }: UsagePageProps) {
                       <td>{numberText(item.count)}{item.size ? ` · ${item.size}` : ""}</td>
                       <td>{formatDuration(item.duration_ms)}</td>
                       <td className="strong">{numberText(item.credits_used)}</td>
+                      <td><span className={sourceBadgeClass(item)}>{sourceText(item)}</span></td>
                       <td><span className={statusBadgeClass(item.status)}>{statusText(item.status)}</span></td>
                     </tr>
                   );

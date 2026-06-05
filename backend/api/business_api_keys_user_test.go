@@ -173,6 +173,9 @@ func TestUserSelfServeAPIKeys(t *testing.T) {
 	if len(listed.Items) != 1 {
 		t.Fatalf("list len = %d, want 1", len(listed.Items))
 	}
+	if listed.Items[0].Plaintext != created.Secret {
+		t.Fatalf("list item plaintext = %q, want %q", listed.Items[0].Plaintext, created.Secret)
+	}
 
 	// revoke 自己的 key 成功
 	rec = postgresAPIServeJSON(t, handler, http.MethodPost, "/api/business/api-keys/"+created.Item.ID+"/revoke", token, nil)

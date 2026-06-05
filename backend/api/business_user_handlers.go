@@ -65,6 +65,7 @@ func usageRecordFilterFromQuery(r *http.Request, userID string) businessimage.Us
 		UserID: strings.TrimSpace(firstNonEmpty(userID, r.URL.Query().Get("userId"))),
 		Status: strings.TrimSpace(r.URL.Query().Get("status")),
 		Model:  strings.TrimSpace(r.URL.Query().Get("model")),
+		Source: strings.TrimSpace(r.URL.Query().Get("source")),
 		From:   from,
 		To:     to,
 	}
