@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"imagestudio/internal/businessapikeys"
+	"imagestudio/internal/businesssettings"
 )
 
 const maxSelfServeAPIKeys = 5
@@ -62,7 +63,8 @@ func (s *Server) handleListMyAPIKeys(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "list_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": keys})
+	baseURL := businesssettings.ResolveAPIBaseURL(s.businessSystemSettings(r), s.cfg.ExternalAPI.BaseURL)
+	writeJSON(w, http.StatusOK, map[string]any{"items": keys, "baseUrl": baseURL})
 }
 
 func (s *Server) handleCreateMyAPIKey(w http.ResponseWriter, r *http.Request) {
@@ -112,6 +114,71 @@ func (s *Server) handleCreateMyAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"item": key, "secret": plaintext})
+}
+
+func (s *Server) handleUpdateMyAPIKeyStatus(w http.ResponseWriter, r *http.Request) {
+	userID, ok := s.guardSelfServe(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+	status := strings.TrimSpace(body.Status)
+	if status != businessapikeys.StatusActive && status != businessapikeys.StatusDisabled {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "status must be active or disabled")
+		return
+	}
+	id := r.PathValue("id")
+	store, err := s.newBusinessAPIKeyStore()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "store_unavailable", "api key store failed")
+		return
+	}
+	defer store.Close()
+	existing, err := store.GetByID(r.Context(), id)
+	if err != nil || existing.UserID != userID {
+		writeAPIError(w, http.StatusNotFound, "not_found", "api key not found")
+		return
+	}
+	if existing.Status == businessapikeys.StatusRevoked {
+		writeAPIError(w, http.StatusBadRequest, "invalid_state", "revoked key cannot be toggled")
+		return
+	}
+	key, err := store.Update(r.Context(), id, businessapikeys.UpdateInput{Status: &status})
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "update_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"item": key})
+}
+
+func (s *Server) handleDeleteMyAPIKey(w http.ResponseWriter, r *http.Request) {
+	userID, ok := s.guardSelfServe(w, r)
+	if !ok {
+		return
+	}
+	id := r.PathValue("id")
+	store, err := s.newBusinessAPIKeyStore()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "store_unavailable", "api key store failed")
+		return
+	}
+	defer store.Close()
+	existing, err := store.GetByID(r.Context(), id)
+	if err != nil || existing.UserID != userID {
+		writeAPIError(w, http.StatusNotFound, "not_found", "api key not found")
+		return
+	}
+	if err := store.Delete(r.Context(), id); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "delete_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) handleRevokeMyAPIKey(w http.ResponseWriter, r *http.Request) {

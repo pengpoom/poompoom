@@ -7,8 +7,8 @@ func TestExternalAPIConfigDefaults(t *testing.T) {
 	if err := cfg.Load(); err != nil {
 		t.Fatalf("Load() returned error: %v", err)
 	}
-	if cfg.ExternalAPI.Enabled {
-		t.Fatalf("ExternalAPI.Enabled = true, want false (must default OFF)")
+	if !cfg.ExternalAPI.Enabled {
+		t.Fatalf("ExternalAPI.Enabled = false, want true (must default ON)")
 	}
 	if cfg.ExternalAPI.SignedURLTTLSeconds != 3600 {
 		t.Fatalf("ExternalAPI.SignedURLTTLSeconds = %d, want 3600", cfg.ExternalAPI.SignedURLTTLSeconds)

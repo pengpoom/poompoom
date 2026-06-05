@@ -621,6 +621,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/business/api-keys", s.requireUIAuth(http.HandlerFunc(s.handleListMyAPIKeys)))
 	mux.Handle("POST /api/business/api-keys", s.requireUIAuth(http.HandlerFunc(s.handleCreateMyAPIKey)))
 	mux.Handle("POST /api/business/api-keys/{id}/revoke", s.requireUIAuth(http.HandlerFunc(s.handleRevokeMyAPIKey)))
+	mux.Handle("PATCH /api/business/api-keys/{id}", s.requireUIAuth(http.HandlerFunc(s.handleUpdateMyAPIKeyStatus)))
+	mux.Handle("DELETE /api/business/api-keys/{id}", s.requireUIAuth(http.HandlerFunc(s.handleDeleteMyAPIKey)))
 	mux.Handle("GET /api/business/avatars/{name}", s.requireUIAuth(http.HandlerFunc(s.handleBusinessAvatarFile)))
 	mux.Handle("GET /api/business/credit", s.requireUIAuth(http.HandlerFunc(s.handleGetBusinessCredit)))
 	mux.Handle("GET /api/business/credit/ledger", s.requireUIAuth(http.HandlerFunc(s.handleListBusinessCreditLedger)))

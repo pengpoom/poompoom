@@ -119,6 +119,28 @@ func TestUpdateDisabledRejectsAuthenticate(t *testing.T) {
 	}
 }
 
+func TestDeleteRemovesKey(t *testing.T) {
+	store, _, userID := newAPIKeyTestStore(t)
+	ctx := context.Background()
+	key, _, err := store.Create(ctx, CreateInput{UserID: userID, Name: "to-delete", Env: "live"})
+	if err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+	if err := store.Delete(ctx, key.ID); err != nil {
+		t.Fatalf("Delete() error: %v", err)
+	}
+	if _, err := store.GetByID(ctx, key.ID); err != sql.ErrNoRows {
+		t.Fatalf("GetByID(after delete) error = %v, want sql.ErrNoRows", err)
+	}
+	list, err := store.ListByUser(ctx, userID)
+	if err != nil {
+		t.Fatalf("ListByUser() error: %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("ListByUser len = %d, want 0", len(list))
+	}
+}
+
 func TestListByUserAndUpdateLimits(t *testing.T) {
 	store, _, userID := newAPIKeyTestStore(t)
 	ctx := context.Background()

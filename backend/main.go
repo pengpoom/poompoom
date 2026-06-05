@@ -66,6 +66,12 @@ func main() {
 	}
 	cfg.App.Version = buildinfo.ResolveVersion(cfg.App.Version)
 
+	if generated, err := cfg.EnsureExternalAPISigningSecret(); err != nil {
+		fatalStartup(logger, paths, "生成对外 API 签名密钥失败", err)
+	} else if generated {
+		logger.Info("generated external api signing secret")
+	}
+
 	if !envBool("API_ONLY", false) {
 		if err := ensureStaticAssets(cfg.ResolvePath(cfg.Server.StaticDir)); err != nil {
 			fatalStartup(logger, paths, "静态资源缺失", err,

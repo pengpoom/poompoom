@@ -1,16 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Coins, Copy, KeyRound, LoaderCircle, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
+import { Coins, Copy, KeyRound, LoaderCircle, Power, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { AdminHeader, AdminPage, AdminPanel, AdminStatCard } from "@/components/admin-layout";
 import { AppModal } from "@/components/app-controls";
 import {
   createMyAPIKey,
+  deleteMyAPIKey,
   fetchBusinessMe,
   fetchMyAPIKeys,
-  revokeMyAPIKey,
+  updateMyAPIKeyStatus,
   type BusinessAPIKey,
   type BusinessMe,
 } from "@/lib/api";
@@ -41,13 +42,14 @@ function maskedKey(item: BusinessAPIKey) {
 export default function APIAccessPage() {
   const [me, setMe] = useState<BusinessMe | null>(null);
   const [keys, setKeys] = useState<BusinessAPIKey[]>([]);
+  const [baseUrl, setBaseUrl] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [keyName, setKeyName] = useState("");
   const [createdSecret, setCreatedSecret] = useState("");
-  const [revokeTarget, setRevokeTarget] = useState<BusinessAPIKey | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<BusinessAPIKey | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -57,8 +59,10 @@ export default function APIAccessPage() {
       if (meData.apiAccessEnabled) {
         const keysData = await fetchMyAPIKeys();
         setKeys(keysData.items || []);
+        setBaseUrl(keysData.baseUrl || "");
       } else {
         setKeys([]);
+        setBaseUrl("");
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "读取数据失败");
@@ -95,16 +99,30 @@ export default function APIAccessPage() {
     }
   };
 
-  const handleRevoke = async () => {
-    if (!revokeTarget) return;
+  const toggleStatus = async (item: BusinessAPIKey) => {
+    const next = item.status === "active" ? "disabled" : "active";
     setSaving(true);
     try {
-      const response = await revokeMyAPIKey(revokeTarget.id);
-      setKeys((current) => current.map((it) => (it.id === revokeTarget.id ? response.item : it)));
-      toast.success("已撤销");
-      setRevokeTarget(null);
+      const response = await updateMyAPIKeyStatus(item.id, next);
+      setKeys((current) => current.map((it) => (it.id === item.id ? response.item : it)));
+      toast.success(next === "active" ? "已启用" : "已停用");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "撤销失败");
+      toast.error(error instanceof Error ? error.message : "操作失败");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setSaving(true);
+    try {
+      await deleteMyAPIKey(deleteTarget.id);
+      setKeys((current) => current.filter((it) => it.id !== deleteTarget.id));
+      toast.success("已删除");
+      setDeleteTarget(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "删除失败");
     } finally {
       setSaving(false);
     }
@@ -160,6 +178,24 @@ export default function APIAccessPage() {
               <h3>我的 API Key</h3>
               <button className="app-btn-primary" type="button" onClick={openCreateDialog}>+ 新建</button>
             </div>
+            {baseUrl ? (
+              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, padding: "0 0 16px", fontSize: 13, color: "var(--app-text-secondary)" }}>
+                <span style={{ flexShrink: 0 }}>API 端点：</span>
+                <code style={{ padding: "3px 8px", borderRadius: 6, border: "1px solid var(--app-border)", background: "var(--app-bg-surface)", fontSize: 12, wordBreak: "break-all" }}>
+                  {baseUrl}
+                </code>
+                <button
+                  type="button"
+                  className="app-btn"
+                  style={{ padding: "2px 8px", height: 26, fontSize: 12, flexShrink: 0 }}
+                  onClick={() => void copyText(baseUrl)}
+                  title="复制"
+                >
+                  <Copy className="size-3.5" />
+                  复制
+                </button>
+              </div>
+            ) : null}
             {keys.length === 0 ? (
               <div style={{ padding: "40px 16px", textAlign: "center", color: "var(--app-text-muted)" }}>
                 还没有 API Key，点击右上角「新建」创建第一个。
@@ -202,11 +238,20 @@ export default function APIAccessPage() {
                             <div className="app-act">
                               <button
                                 type="button"
-                                className="danger"
-                                onClick={() => setRevokeTarget(item)}
+                                onClick={() => void toggleStatus(item)}
                                 disabled={saving || item.status === "revoked"}
-                                aria-label="撤销"
-                                title="撤销"
+                                aria-label={item.status === "active" ? "停用" : "启用"}
+                                title={item.status === "active" ? "停用" : "启用"}
+                              >
+                                <Power className="size-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                className="danger"
+                                onClick={() => setDeleteTarget(item)}
+                                disabled={saving}
+                                aria-label="删除"
+                                title="删除"
                               >
                                 <Trash2 className="size-3.5" />
                               </button>
@@ -267,26 +312,26 @@ export default function APIAccessPage() {
       </AppModal>
 
       <AppModal
-        open={!!revokeTarget}
-        onClose={() => setRevokeTarget(null)}
-        title="撤销 API Key"
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="删除 API Key"
         footer={
           <>
-            <button className="app-btn" type="button" onClick={() => setRevokeTarget(null)}>取消</button>
+            <button className="app-btn" type="button" onClick={() => setDeleteTarget(null)}>取消</button>
             <button
               className="app-btn-primary"
               type="button"
-              onClick={() => void handleRevoke()}
+              onClick={() => void handleDelete()}
               style={{ background: "linear-gradient(135deg, #ef4444, #dc2626)" }}
               disabled={saving}
             >
-              确认撤销
+              确认删除
             </button>
           </>
         }
       >
         <div style={{ padding: "16px 18px", fontSize: 13.5, color: "var(--app-text-secondary)", lineHeight: 1.7 }}>
-          确认撤销 <b style={{ color: "var(--app-text-primary)" }}>「{revokeTarget?.name}」</b>（{revokeTarget ? maskedKey(revokeTarget) : ""}）吗？使用该 key 的请求将立即被拒绝。
+          确认删除 <b style={{ color: "var(--app-text-primary)" }}>「{deleteTarget?.name}」</b>（{deleteTarget ? maskedKey(deleteTarget) : ""}）吗？此操作不可恢复，删除后使用该 key 的请求将立即失效。
         </div>
       </AppModal>
     </AdminPage>

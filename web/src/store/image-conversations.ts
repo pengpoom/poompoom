@@ -107,6 +107,11 @@ export type ImageConversation = {
   vendorLabel?: string;
   adapter?: string;
   scale?: string;
+  compareBatchId?: string;
+  compareGroupId?: string;
+  compareModelLabel?: string;
+  compareModelIndex?: number;
+  compareModelCount?: number;
   sourceImages?: StoredSourceImage[];
   images: StoredImage[];
   createdAt: string;

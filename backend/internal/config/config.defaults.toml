@@ -100,7 +100,7 @@ request_timeout = 20
 log_all_requests = false
 
 [external_api]
-enabled = false
+enabled = true
 base_url = "https://api.example.com"
 default_rate_limit_per_minute = 60
 default_concurrency_limit = 2

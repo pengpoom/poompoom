@@ -187,6 +187,96 @@ func TestUserSelfServeAPIKeys(t *testing.T) {
 	}
 }
 
+func TestUserSelfServeToggleAndDelete(t *testing.T) {
+	server, handler := apiAccessTestServer(t)
+	ctx := context.Background()
+	suffix := time.Now().UTC().Format("20060102150405.000000")
+	userID := "apiaccess_td_" + suffix
+	authStore, err := server.newBusinessAuthStore()
+	if err != nil {
+		t.Fatalf("newBusinessAuthStore: %v", err)
+	}
+	defer authStore.Close()
+	if err := authStore.EnsureBootstrapUser(ctx, businessauth.BootstrapUser{
+		ID: userID, Username: userID, Email: userID + "@example.com", Password: "p", Role: businessauth.RoleUser,
+	}); err != nil {
+		t.Fatalf("EnsureBootstrapUser: %v", err)
+	}
+	if _, err := authStore.SetUserAPIAccessEnabled(ctx, userID, true); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = serverDB(server).Exec("DELETE FROM business_api_keys WHERE user_id = $1", userID)
+		_, _ = serverDB(server).Exec("DELETE FROM business_users WHERE id = $1", userID)
+	})
+	token := postgresAPICreateSession(t, ctx, server, loginAccount{
+		Username: userID, Email: userID + "@example.com", Role: businessauth.RoleUser, UserID: userID,
+	})
+
+	rec := postgresAPIServeJSON(t, handler, http.MethodPost, "/api/business/api-keys", token, map[string]any{"name": "k1"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		Item businessapikeys.APIKey `json:"item"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	id := created.Item.ID
+
+	// 停用
+	rec = postgresAPIServeJSON(t, handler, http.MethodPatch, "/api/business/api-keys/"+id, token, map[string]any{"status": "disabled"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disable = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var patched struct {
+		Item businessapikeys.APIKey `json:"item"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &patched)
+	if patched.Item.Status != businessapikeys.StatusDisabled {
+		t.Fatalf("status after disable = %q, want disabled", patched.Item.Status)
+	}
+
+	// 重新启用
+	rec = postgresAPIServeJSON(t, handler, http.MethodPatch, "/api/business/api-keys/"+id, token, map[string]any{"status": "active"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("enable = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	// 非法状态：400
+	rec = postgresAPIServeJSON(t, handler, http.MethodPatch, "/api/business/api-keys/"+id, token, map[string]any{"status": "revoked"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("patch revoked = %d, want 400", rec.Code)
+	}
+
+	// 改别人的 key：404
+	rec = postgresAPIServeJSON(t, handler, http.MethodPatch, "/api/business/api-keys/apikey_not_mine", token, map[string]any{"status": "disabled"})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("patch other = %d, want 404", rec.Code)
+	}
+
+	// 删除别人的 key：404
+	rec = postgresAPIServeJSON(t, handler, http.MethodDelete, "/api/business/api-keys/apikey_not_mine", token, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("delete other = %d, want 404", rec.Code)
+	}
+
+	// 删除自己的 key：200，列表清空
+	rec = postgresAPIServeJSON(t, handler, http.MethodDelete, "/api/business/api-keys/"+id, token, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete own = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	rec = postgresAPIServeJSON(t, handler, http.MethodGet, "/api/business/api-keys", token, nil)
+	var listed struct {
+		Items []businessapikeys.APIKey `json:"items"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &listed)
+	if len(listed.Items) != 0 {
+		t.Fatalf("list after delete len = %d, want 0", len(listed.Items))
+	}
+}
+
 func serverDB(s *Server) *sql.DB { return s.db }
 
 func TestAdminListUsersAPIAccess(t *testing.T) {

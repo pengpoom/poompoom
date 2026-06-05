@@ -31,6 +31,7 @@ type SiteSettings struct {
 	Subtitle    string `json:"subtitle"`
 	LogoURL     string `json:"logoUrl"`
 	ContactInfo string `json:"contactInfo"`
+	ApiBaseURL  string `json:"apiBaseUrl"`
 }
 
 type UserSettings struct {
@@ -297,6 +298,7 @@ func Normalize(settings Settings) Settings {
 	}
 	settings.Site.LogoURL = strings.TrimSpace(settings.Site.LogoURL)
 	settings.Site.ContactInfo = strings.TrimSpace(settings.Site.ContactInfo)
+	settings.Site.ApiBaseURL = strings.TrimSpace(settings.Site.ApiBaseURL)
 
 	settings.User.DefaultRole = normalizeRole(settings.User.DefaultRole)
 	if settings.User.DefaultCredits < 0 {

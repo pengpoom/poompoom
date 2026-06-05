@@ -83,6 +83,7 @@ function defaultSystemSettings(): BusinessSystemSettings {
       subtitle: "图片生成工作台",
       logoUrl: "",
       contactInfo: "",
+      apiBaseUrl: "",
     },
     user: {
       defaultRole: "user",
@@ -195,6 +196,7 @@ function normalizeSettings(settings: BusinessSystemSettings): BusinessSystemSett
       subtitle: next.site.subtitle.trim() || "图片生成工作台",
       logoUrl: next.site.logoUrl.trim(),
       contactInfo: next.site.contactInfo.trim(),
+      apiBaseUrl: next.site.apiBaseUrl.trim(),
     },
     user: {
       ...next.user,
@@ -753,6 +755,18 @@ export default function SettingsPage() {
                     }))
                   }
                   placeholder="support@example.com"
+                />
+              </Field>
+              <Field label="对外 API 地址" hint="对外分发 API 的公开访问地址，终端用户填入客户端 base_url；留空则使用部署默认值。">
+                <input className="app-input"
+                  value={settings.site.apiBaseUrl}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      site: { ...current.site, apiBaseUrl: event.target.value },
+                    }))
+                  }
+                  placeholder="https://your-domain.com"
                 />
               </Field>
             </SettingSection>

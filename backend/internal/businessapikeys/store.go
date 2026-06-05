@@ -274,6 +274,11 @@ func (s *Store) Update(ctx context.Context, id string, in UpdateInput) (APIKey, 
 	return current, nil
 }
 
+func (s *Store) Delete(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, s.rebind(`DELETE FROM business_api_keys WHERE id = ?`), strings.TrimSpace(id))
+	return err
+}
+
 func (s *Store) Revoke(ctx context.Context, id string) (APIKey, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := s.db.ExecContext(ctx, s.rebind(`UPDATE business_api_keys

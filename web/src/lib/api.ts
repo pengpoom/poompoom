@@ -304,6 +304,7 @@ export type BusinessSystemSettings = {
     subtitle: string;
     logoUrl: string;
     contactInfo: string;
+    apiBaseUrl: string;
   };
   user: {
     defaultRole: AuthRole;
@@ -3220,7 +3221,7 @@ export async function updateBusinessUserAPIAccess(userId: string, enabled: boole
 
 // 用户自助侧（requireUIAuth + 本人已开通）
 export async function fetchMyAPIKeys() {
-  return httpRequest<{ items: BusinessAPIKey[] }>("/api/business/api-keys");
+  return httpRequest<{ items: BusinessAPIKey[]; baseUrl: string }>("/api/business/api-keys");
 }
 
 export async function createMyAPIKey(name: string) {
@@ -3234,5 +3235,19 @@ export async function revokeMyAPIKey(id: string) {
   return httpRequest<{ item: BusinessAPIKey }>(
     `/api/business/api-keys/${encodeURIComponent(id)}/revoke`,
     { method: "POST" },
+  );
+}
+
+export async function updateMyAPIKeyStatus(id: string, status: "active" | "disabled") {
+  return httpRequest<{ item: BusinessAPIKey }>(
+    `/api/business/api-keys/${encodeURIComponent(id)}`,
+    { method: "PATCH", body: { status } },
+  );
+}
+
+export async function deleteMyAPIKey(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/api-keys/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
   );
 }
