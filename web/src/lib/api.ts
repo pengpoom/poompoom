@@ -1756,15 +1756,31 @@ export type BusinessImageModelTestResponse = {
 };
 
 export type BusinessRiskControlMode = "observe" | "pre_block";
-export type BusinessRiskControlProvider = "openai";
+export type BusinessRiskControlProvider = "openai" | "aliyun";
+export type BusinessRiskControlFailMode = "fail_closed" | "fail_open";
+export type BusinessRiskControlPolicyScope = "global" | "plan" | "user" | "api_key";
+export type BusinessRiskControlRiskLevel = "" | "low" | "medium" | "high";
 export type BusinessRiskControlConfig = {
   enabled: boolean;
   mode: BusinessRiskControlMode;
   provider: BusinessRiskControlProvider;
+  providerChain: BusinessRiskControlProvider[];
+  failMode: BusinessRiskControlFailMode;
   baseUrl: string;
   model: string;
   apiKeyConfigured: boolean;
   apiKeyMasked: string;
+  openaiBaseUrl: string;
+  openaiModel: string;
+  openaiApiKeyConfigured: boolean;
+  openaiApiKeyMasked: string;
+  aliyunAccessKeyId: string;
+  aliyunAccessKeySecretConfigured: boolean;
+  aliyunAccessKeySecretMasked: string;
+  aliyunRegionId: string;
+  aliyunEndpoint: string;
+  aliyunTextService: string;
+  aliyunBlockRiskLevel: Exclude<BusinessRiskControlRiskLevel, "">;
   timeoutMs: number;
   recordNonHits: boolean;
   blockMessage: string;
@@ -1774,19 +1790,54 @@ export type BusinessRiskControlConfigInput = Partial<{
   enabled: boolean;
   mode: BusinessRiskControlMode;
   provider: BusinessRiskControlProvider;
+  providerChain: BusinessRiskControlProvider[];
+  failMode: BusinessRiskControlFailMode;
   baseUrl: string;
   apiKey: string;
   clearApiKey: boolean;
   model: string;
+  openaiBaseUrl: string;
+  openaiApiKey: string;
+  clearOpenaiApiKey: boolean;
+  openaiModel: string;
+  aliyunAccessKeyId: string;
+  aliyunAccessKeySecret: string;
+  clearAliyunAccessKeySecret: boolean;
+  aliyunRegionId: string;
+  aliyunEndpoint: string;
+  aliyunTextService: string;
+  aliyunBlockRiskLevel: Exclude<BusinessRiskControlRiskLevel, "">;
   timeoutMs: number;
   recordNonHits: boolean;
   blockMessage: string;
   thresholds: Record<string, number>;
 }>;
+export type BusinessRiskControlPolicy = {
+  id: string;
+  scope: BusinessRiskControlPolicyScope;
+  targetId: string;
+  enabled: boolean;
+  mode?: "" | BusinessRiskControlMode;
+  riskLevel?: BusinessRiskControlRiskLevel;
+  blockMessage?: string;
+  thresholds?: Record<string, number>;
+  createdAt: string;
+  updatedAt: string;
+};
+export type BusinessRiskControlPolicyInput = {
+  scope: BusinessRiskControlPolicyScope;
+  targetId?: string;
+  enabled?: boolean;
+  mode?: "" | BusinessRiskControlMode;
+  riskLevel?: BusinessRiskControlRiskLevel;
+  blockMessage?: string;
+  thresholds?: Record<string, number>;
+};
 export type BusinessRiskControlStatus = {
   enabled: boolean;
   mode: BusinessRiskControlMode;
   provider: BusinessRiskControlProvider;
+  providerChain: BusinessRiskControlProvider[];
   apiKeyConfigured: boolean;
   last24hTotal: number;
   last24hFlagged: number;
@@ -1802,6 +1853,10 @@ export type BusinessRiskControlLog = {
   platform: string;
   model: string;
   mode: BusinessRiskControlMode | string;
+  provider: BusinessRiskControlProvider | string;
+  riskLevel: string;
+  providerReason: string;
+  providerLatencyMs: number;
   action: "allow" | "block" | "error" | string;
   flagged: boolean;
   highestCategory: string;
@@ -1835,6 +1890,9 @@ export type BusinessRiskControlDecision = {
   highestCategory: string;
   highestScore: number;
   categoryScores: Record<string, number>;
+  provider?: BusinessRiskControlProvider | string;
+  riskLevel?: string;
+  providerReason?: string;
   message?: string;
   error?: string;
 };
@@ -1842,6 +1900,8 @@ export type BusinessRiskControlTestResponse = {
   result: {
     decision: BusinessRiskControlDecision;
     latencyMs: number;
+    provider: BusinessRiskControlProvider | string;
+    providerLatencyMs: number;
   };
 };
 
@@ -2305,10 +2365,23 @@ export async function fetchBusinessRiskControlLogs(query: BusinessRiskControlLog
 export async function testBusinessRiskControl(payload: {
   prompt: string;
   mode?: BusinessRiskControlMode;
+  providerChain?: BusinessRiskControlProvider[];
+  failMode?: BusinessRiskControlFailMode;
   baseUrl?: string;
   apiKey?: string;
   clearApiKey?: boolean;
   model?: string;
+  openaiBaseUrl?: string;
+  openaiApiKey?: string;
+  clearOpenaiApiKey?: boolean;
+  openaiModel?: string;
+  aliyunAccessKeyId?: string;
+  aliyunAccessKeySecret?: string;
+  clearAliyunAccessKeySecret?: boolean;
+  aliyunRegionId?: string;
+  aliyunEndpoint?: string;
+  aliyunTextService?: string;
+  aliyunBlockRiskLevel?: Exclude<BusinessRiskControlRiskLevel, "">;
   timeoutMs?: number;
   blockMessage?: string;
   thresholds?: Record<string, number>;
@@ -2316,6 +2389,26 @@ export async function testBusinessRiskControl(payload: {
   return httpRequest<BusinessRiskControlTestResponse>(
     "/api/business/admin/risk-control/test",
     { method: "POST", body: payload },
+  );
+}
+
+export async function fetchBusinessRiskControlPolicies(query: { scope?: string; targetId?: string } = {}) {
+  return httpRequest<{ items: BusinessRiskControlPolicy[] }>(
+    `/api/business/admin/risk-control/policies${buildQuery(query)}`,
+  );
+}
+
+export async function upsertBusinessRiskControlPolicy(payload: BusinessRiskControlPolicyInput) {
+  return httpRequest<{ item: BusinessRiskControlPolicy }>(
+    "/api/business/admin/risk-control/policies",
+    { method: "PUT", body: payload },
+  );
+}
+
+export async function deleteBusinessRiskControlPolicy(id: string) {
+  return httpRequest<{ ok: boolean }>(
+    `/api/business/admin/risk-control/policies/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
   );
 }
 

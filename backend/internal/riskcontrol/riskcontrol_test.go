@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	green "github.com/alibabacloud-go/green-20220302/v3/client"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -18,13 +20,18 @@ func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func TestNormalizeConfigAppliesDefaultsAndBounds(t *testing.T) {
 	cfg := NormalizeConfig(Config{
-		Mode:         "PRE_BLOCK",
-		Provider:     "unknown",
-		BaseURL:      " https://moderation.example/v1/ ",
-		APIKey:       " secret ",
-		Model:        " ",
-		TimeoutMS:    60000,
-		BlockMessage: " ",
+		Mode:              "PRE_BLOCK",
+		Provider:          "unknown",
+		ProviderChain:     []string{"ALIYUN", "openai", "aliyun", "bad"},
+		FailMode:          "bad",
+		BaseURL:           " https://moderation.example/v1/ ",
+		APIKey:            " secret ",
+		Model:             " ",
+		AliyunRegionID:    " ",
+		AliyunEndpoint:    " ",
+		AliyunTextService: " ",
+		TimeoutMS:         60000,
+		BlockMessage:      " ",
 		Thresholds: map[string]float64{
 			" Violence ": 1.2,
 			"custom":     -0.2,
@@ -35,8 +42,14 @@ func TestNormalizeConfigAppliesDefaultsAndBounds(t *testing.T) {
 	if cfg.Mode != ModePreBlock {
 		t.Fatalf("Mode = %q, want %q", cfg.Mode, ModePreBlock)
 	}
-	if cfg.Provider != ProviderOpenAI {
-		t.Fatalf("Provider = %q, want %q", cfg.Provider, ProviderOpenAI)
+	if cfg.Provider != ProviderAliyun {
+		t.Fatalf("Provider = %q, want %q", cfg.Provider, ProviderAliyun)
+	}
+	if got := strings.Join(cfg.ProviderChain, ","); got != "aliyun,openai" {
+		t.Fatalf("ProviderChain = %q, want aliyun,openai", got)
+	}
+	if cfg.FailMode != FailModeClosed {
+		t.Fatalf("FailMode = %q, want %q", cfg.FailMode, FailModeClosed)
 	}
 	if cfg.BaseURL != "https://moderation.example/v1" {
 		t.Fatalf("BaseURL = %q", cfg.BaseURL)
@@ -46,6 +59,12 @@ func TestNormalizeConfigAppliesDefaultsAndBounds(t *testing.T) {
 	}
 	if cfg.Model != DefaultConfig().Model {
 		t.Fatalf("Model = %q, want default", cfg.Model)
+	}
+	if cfg.OpenAIBaseURL != "https://moderation.example/v1" || cfg.OpenAIAPIKey != "secret" {
+		t.Fatalf("OpenAI config = %q/%q", cfg.OpenAIBaseURL, cfg.OpenAIAPIKey)
+	}
+	if cfg.AliyunRegionID != DefaultConfig().AliyunRegionID {
+		t.Fatalf("AliyunRegionID = %q, want default", cfg.AliyunRegionID)
 	}
 	if cfg.TimeoutMS != 30000 {
 		t.Fatalf("TimeoutMS = %d, want 30000", cfg.TimeoutMS)
@@ -80,6 +99,55 @@ func TestDecisionFromScoresUsesThresholdsAndHighestScore(t *testing.T) {
 	}
 	if !decision.Allowed || decision.Action != ActionAllow {
 		t.Fatalf("decision allowed/action = %v/%q", decision.Allowed, decision.Action)
+	}
+}
+
+func TestApplyPolicyToConfigOverridesModeLevelAndThresholds(t *testing.T) {
+	cfg := NormalizeConfig(Config{
+		Enabled: true,
+		Mode:    ModeObserve,
+		Thresholds: map[string]float64{
+			"sexual":   0.65,
+			"violence": 0.95,
+		},
+	})
+
+	cfg = applyPolicyToConfig(cfg, Policy{
+		Enabled:      true,
+		Mode:         ModePreBlock,
+		RiskLevel:    RiskLevelMedium,
+		BlockMessage: "custom block",
+		Thresholds: map[string]float64{
+			"violence": 0.5,
+		},
+	})
+
+	if cfg.Mode != ModePreBlock {
+		t.Fatalf("Mode = %q, want %q", cfg.Mode, ModePreBlock)
+	}
+	if cfg.BlockMessage != "custom block" {
+		t.Fatalf("BlockMessage = %q, want custom block", cfg.BlockMessage)
+	}
+	if cfg.Thresholds["sexual"] != 0.85 {
+		t.Fatalf("sexual threshold = %v, want medium level override", cfg.Thresholds["sexual"])
+	}
+	if cfg.Thresholds["violence"] != 0.5 {
+		t.Fatalf("violence threshold = %v, want explicit policy override", cfg.Thresholds["violence"])
+	}
+}
+
+func TestNormalizePolicyScopeAndTarget(t *testing.T) {
+	if got := normalizePolicyTargetID(ScopeGlobal, "ignored"); got != "" {
+		t.Fatalf("global target = %q, want empty", got)
+	}
+	if got := normalizePolicyTargetID(ScopePlan, " Pro "); got != "pro" {
+		t.Fatalf("plan target = %q, want pro", got)
+	}
+	if got := normalizeScope("API_KEY"); got != ScopeAPIKey {
+		t.Fatalf("scope = %q, want %q", got, ScopeAPIKey)
+	}
+	if got := normalizeScope("bad"); got != "" {
+		t.Fatalf("bad scope = %q, want empty", got)
 	}
 }
 
@@ -172,6 +240,95 @@ func TestModerateOpenAIMissingAPIKeyIsConfigError(t *testing.T) {
 	decision := ErrorDecision(err)
 	if decision.InternalErrorCode != DecisionErrorConfig {
 		t.Fatalf("InternalErrorCode = %q, want %q", decision.InternalErrorCode, DecisionErrorConfig)
+	}
+}
+
+func TestModerateFallsBackToOpenAIWhenAliyunCannotHandleImages(t *testing.T) {
+	service := &Service{
+		httpClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body: io.NopCloser(strings.NewReader(`{
+						"results": [{
+							"flagged": false,
+							"category_scores": {}
+						}]
+					}`)),
+				}, nil
+			}),
+		},
+	}
+
+	result, err := service.moderate(context.Background(), Config{
+		ProviderChain:         []string{ProviderAliyun, ProviderOpenAI},
+		AliyunAccessKeyID:     "aliyun-key",
+		AliyunAccessKeySecret: "aliyun-secret",
+		OpenAIBaseURL:         "https://moderation.example",
+		OpenAIAPIKey:          "openai-key",
+		OpenAIModel:           "omni-moderation-test",
+		TimeoutMS:             1000,
+	}, "prompt", []ModerationImage{{MimeType: "image/png", Data: []byte("image")}})
+	if err != nil {
+		t.Fatalf("moderate error: %v", err)
+	}
+	if result.Provider != ProviderOpenAI {
+		t.Fatalf("Provider = %q, want %q", result.Provider, ProviderOpenAI)
+	}
+}
+
+func TestModerateFailOpenAllowsWhenAllProvidersFail(t *testing.T) {
+	service := &Service{}
+
+	result, err := service.moderate(context.Background(), Config{
+		ProviderChain: []string{ProviderOpenAI},
+		FailMode:      FailModeOpen,
+		TimeoutMS:     1000,
+	}, "prompt", nil)
+	if err != nil {
+		t.Fatalf("moderate error: %v", err)
+	}
+	if result.Decision.Flagged || !result.Decision.Allowed {
+		t.Fatalf("decision = %#v, want fail-open allow", result.Decision)
+	}
+	if !strings.Contains(result.ProviderReason, "openai") {
+		t.Fatalf("ProviderReason = %q, want provider error summary", result.ProviderReason)
+	}
+}
+
+func TestDecisionFromAliyunTextResponseUsesRiskLevel(t *testing.T) {
+	code := int32(200)
+	riskLevel := RiskLevelMedium
+	score := float32(91)
+	label := "politics"
+
+	decision, err := decisionFromAliyunTextResponse(&green.TextModerationPlusResponse{
+		Body: &green.TextModerationPlusResponseBody{
+			Code: &code,
+			Data: &green.TextModerationPlusResponseBodyData{
+				RiskLevel: &riskLevel,
+				Score:     &score,
+				Result: []*green.TextModerationPlusResponseBodyDataResult{
+					{Label: &label},
+				},
+			},
+		},
+	}, RiskLevelMedium)
+	if err != nil {
+		t.Fatalf("decisionFromAliyunTextResponse error: %v", err)
+	}
+	if !decision.Flagged {
+		t.Fatal("Flagged = false, want true")
+	}
+	if decision.RiskLevel != RiskLevelMedium {
+		t.Fatalf("RiskLevel = %q, want %q", decision.RiskLevel, RiskLevelMedium)
+	}
+	if decision.HighestCategory != "aliyun:politics" || decision.HighestScore != 0.91 {
+		t.Fatalf("highest = %q/%v", decision.HighestCategory, decision.HighestScore)
+	}
+	if !strings.Contains(decision.ProviderReason, "politics") {
+		t.Fatalf("ProviderReason = %q, want label", decision.ProviderReason)
 	}
 }
 

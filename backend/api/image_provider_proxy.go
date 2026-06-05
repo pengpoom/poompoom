@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"imagestudio/internal/businessauth"
 	"imagestudio/internal/businesscredits"
 	"imagestudio/internal/businessimage"
 	"imagestudio/internal/businessjobs"
@@ -69,6 +70,7 @@ type providerImageGenerateMetadata struct {
 	ConversationID    string
 	TurnID            string
 	JobID             string
+	APIKeyID          string
 	Title             string
 	Platform          string
 	ModelID           string
@@ -215,8 +217,20 @@ func (s *Server) checkProviderImageRiskControl(ctx context.Context, userID strin
 	}
 	defer store.Close()
 	service := riskcontrol.NewService(store)
+	planTag, err := s.riskControlPlanTag(ctx, userID)
+	if err != nil {
+		return riskcontrol.ErrorDecision(err)
+	}
+	apiKeyID := strings.TrimSpace(metadata.APIKeyID)
+	if apiKeyID == "" {
+		if keyID, _, ok := externalAttributionFromContext(ctx); ok {
+			apiKeyID = keyID
+		}
+	}
 	decision, err := service.Check(ctx, riskcontrol.CheckInput{
 		UserID:         userID,
+		APIKeyID:       apiKeyID,
+		PlanTag:        planTag,
 		JobID:          metadata.JobID,
 		ConversationID: metadata.ConversationID,
 		TurnID:         metadata.TurnID,
@@ -229,6 +243,26 @@ func (s *Server) checkProviderImageRiskControl(ctx context.Context, userID strin
 		return riskcontrol.ErrorDecision(err)
 	}
 	return decision
+}
+
+func (s *Server) riskControlPlanTag(ctx context.Context, userID string) (string, error) {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return "", nil
+	}
+	store, err := s.newBusinessAuthStore()
+	if err != nil {
+		return "", err
+	}
+	defer store.Close()
+	user, ok, err := store.GetUserByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if !ok || user.Status == businessauth.StatusDeleted {
+		return "", nil
+	}
+	return strings.ToLower(firstNonEmpty(user.SubscriptionLevelTag, user.WalletLevelTag)), nil
 }
 
 func riskControlJobErrorCode(decision riskcontrol.Decision) string {
@@ -600,6 +634,9 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 	if _, _, ok := externalAttributionFromContext(ctx); ok {
 		payload["origin"] = originExternalAPI
 	}
+	if keyID, _, ok := externalAttributionFromContext(ctx); ok && strings.TrimSpace(keyID) != "" {
+		payload["apiKeyId"] = strings.TrimSpace(keyID)
+	}
 	metadata := s.prepareProviderImageModelPayload(ctx, payload)
 	if startedAt.IsZero() {
 		startedAt = time.Now().UTC()
@@ -692,6 +729,8 @@ func (s *Server) createQueuedProviderImageJob(ctx context.Context, userID string
 	if keyID, md, ok := externalAttributionFromContext(ctx); ok {
 		job.APIKeyID = keyID
 		job.APIMetadata = md
+	} else if keyID := strings.TrimSpace(metadata.APIKeyID); keyID != "" {
+		job.APIKeyID = keyID
 	}
 	store, err := s.newBusinessJobStore()
 	if err != nil {
@@ -1583,6 +1622,7 @@ func extractProviderImageGenerateMetadata(payload map[string]any) providerImageG
 		ConversationID:    strings.TrimSpace(stringValue(payload["conversationId"])),
 		TurnID:            strings.TrimSpace(stringValue(payload["turnId"])),
 		JobID:             strings.TrimSpace(stringValue(payload["jobId"])),
+		APIKeyID:          strings.TrimSpace(stringValue(payload["apiKeyId"])),
 		Title:             strings.TrimSpace(stringValue(payload["title"])),
 		Platform:          strings.TrimSpace(stringValue(payload["platform"])),
 		ModelID:           strings.TrimSpace(stringValue(payload["modelId"])),

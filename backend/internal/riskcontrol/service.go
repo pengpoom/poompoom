@@ -16,6 +16,8 @@ const (
 
 type CheckInput struct {
 	UserID         string
+	APIKeyID       string
+	PlanTag        string
 	JobID          string
 	ConversationID string
 	TurnID         string
@@ -37,25 +39,53 @@ type Decision struct {
 	HighestCategory   string             `json:"highestCategory"`
 	HighestScore      float64            `json:"highestScore"`
 	CategoryScores    map[string]float64 `json:"categoryScores"`
+	Provider          string             `json:"provider,omitempty"`
+	RiskLevel         string             `json:"riskLevel,omitempty"`
+	ProviderReason    string             `json:"providerReason,omitempty"`
 	Message           string             `json:"message,omitempty"`
 	Error             string             `json:"error,omitempty"`
 	InternalErrorCode string             `json:"-"`
 }
 
+type ModerateResult struct {
+	Decision          Decision
+	LatencyMS         int64
+	Provider          string
+	RiskLevel         string
+	ProviderReason    string
+	ProviderLatencyMS int64
+	ForceLog          bool
+}
+
 type TestResult struct {
-	Decision  Decision `json:"decision"`
-	LatencyMS int64    `json:"latencyMs"`
+	Decision          Decision `json:"decision"`
+	LatencyMS         int64    `json:"latencyMs"`
+	Provider          string   `json:"provider"`
+	ProviderLatencyMS int64    `json:"providerLatencyMs"`
 }
 
 type TestConfigOverride struct {
-	Mode         *string
-	BaseURL      *string
-	APIKey       *string
-	ClearAPIKey  bool
-	Model        *string
-	TimeoutMS    *int
-	BlockMessage *string
-	Thresholds   *map[string]float64
+	Mode                       *string
+	ProviderChain              *[]string
+	FailMode                   *string
+	BaseURL                    *string
+	APIKey                     *string
+	ClearAPIKey                bool
+	Model                      *string
+	OpenAIBaseURL              *string
+	OpenAIAPIKey               *string
+	ClearOpenAIAPIKey          bool
+	OpenAIModel                *string
+	AliyunAccessKeyID          *string
+	AliyunAccessKeySecret      *string
+	ClearAliyunAccessKeySecret bool
+	AliyunRegionID             *string
+	AliyunEndpoint             *string
+	AliyunTextService          *string
+	AliyunBlockRiskLevel       *string
+	TimeoutMS                  *int
+	BlockMessage               *string
+	Thresholds                 *map[string]float64
 }
 
 type Service struct {
@@ -111,7 +141,11 @@ func (s *Service) Check(ctx context.Context, input CheckInput) (Decision, error)
 	if prompt == "" && len(images) == 0 {
 		return allow, nil
 	}
-	cfg, err := s.store.GetConfig(ctx)
+	resolution, err := s.store.ResolvePolicy(ctx, PolicyResolutionInput{
+		UserID:   input.UserID,
+		PlanTag:  input.PlanTag,
+		APIKeyID: input.APIKeyID,
+	})
 	if err != nil {
 		decision := ErrorDecision(err)
 		_, _ = s.store.InsertLog(context.Background(), LogInput{
@@ -128,33 +162,38 @@ func (s *Service) Check(ctx context.Context, input CheckInput) (Decision, error)
 		})
 		return decision, nil
 	}
-	cfg = NormalizeConfig(cfg)
+	cfg := NormalizeConfig(resolution.Config)
 	if !cfg.Enabled {
 		return allow, nil
 	}
 	startedAt := time.Now()
-	decision, latencyMS, err := s.moderate(ctx, cfg, prompt, images)
+	result, err := s.moderate(ctx, cfg, prompt, images)
 	logInput := LogInput{
-		UserID:         input.UserID,
-		JobID:          input.JobID,
-		ConversationID: input.ConversationID,
-		TurnID:         input.TurnID,
-		Platform:       input.Platform,
-		Model:          input.Model,
-		Mode:           cfg.Mode,
-		InputExcerpt:   inputExcerpt(prompt, len(images)),
-		LatencyMS:      latencyMS,
+		UserID:            input.UserID,
+		JobID:             input.JobID,
+		ConversationID:    input.ConversationID,
+		TurnID:            input.TurnID,
+		Platform:          input.Platform,
+		Model:             input.Model,
+		Mode:              cfg.Mode,
+		Provider:          result.Provider,
+		RiskLevel:         result.RiskLevel,
+		ProviderReason:    result.ProviderReason,
+		ProviderLatencyMS: result.ProviderLatencyMS,
+		InputExcerpt:      inputExcerpt(prompt, len(images)),
+		LatencyMS:         result.LatencyMS,
 	}
-	if latencyMS == 0 {
+	if result.LatencyMS == 0 {
 		logInput.LatencyMS = time.Since(startedAt).Milliseconds()
 	}
 	if err != nil {
-		decision = ErrorDecision(err)
+		decision := ErrorDecision(err)
 		logInput.Action = ActionError
 		logInput.Error = err.Error()
 		_, _ = s.store.InsertLog(context.Background(), logInput)
 		return decision, nil
 	}
+	decision := result.Decision
 	decision.Allowed = true
 	decision.Action = ActionAllow
 	if decision.Flagged && cfg.Mode == ModePreBlock {
@@ -167,7 +206,7 @@ func (s *Service) Check(ctx context.Context, input CheckInput) (Decision, error)
 	logInput.HighestCategory = decision.HighestCategory
 	logInput.HighestScore = decision.HighestScore
 	logInput.CategoryScores = decision.CategoryScores
-	if decision.Flagged || cfg.RecordNonHits {
+	if decision.Flagged || cfg.RecordNonHits || result.ForceLog {
 		_, _ = s.store.InsertLog(context.Background(), logInput)
 	}
 	return decision, nil
@@ -186,10 +225,11 @@ func (s *Service) Test(ctx context.Context, input string, override TestConfigOve
 	if prompt == "" {
 		return TestResult{}, errors.New("prompt is required")
 	}
-	decision, latencyMS, err := s.moderate(ctx, cfg, prompt, nil)
+	result, err := s.moderate(ctx, cfg, prompt, nil)
 	if err != nil {
 		return TestResult{}, err
 	}
+	decision := result.Decision
 	decision.Allowed = true
 	decision.Action = ActionAllow
 	if decision.Flagged && cfg.Mode == ModePreBlock {
@@ -197,10 +237,21 @@ func (s *Service) Test(ctx context.Context, input string, override TestConfigOve
 		decision.Action = ActionBlock
 		decision.Message = cfg.BlockMessage
 	}
-	return TestResult{Decision: decision, LatencyMS: latencyMS}, nil
+	return TestResult{
+		Decision:          decision,
+		LatencyMS:         result.LatencyMS,
+		Provider:          result.Provider,
+		ProviderLatencyMS: result.ProviderLatencyMS,
+	}, nil
 }
 
 func applyTestOverride(cfg Config, override TestConfigOverride) Config {
+	if override.ProviderChain != nil {
+		cfg.ProviderChain = *override.ProviderChain
+	}
+	if override.FailMode != nil {
+		cfg.FailMode = *override.FailMode
+	}
 	if override.BaseURL != nil {
 		cfg.BaseURL = *override.BaseURL
 	}
@@ -211,6 +262,39 @@ func applyTestOverride(cfg Config, override TestConfigOverride) Config {
 		cfg.APIKey = ""
 	} else if override.APIKey != nil && strings.TrimSpace(*override.APIKey) != "" {
 		cfg.APIKey = *override.APIKey
+	}
+	if override.OpenAIBaseURL != nil {
+		cfg.OpenAIBaseURL = *override.OpenAIBaseURL
+	}
+	if override.ClearOpenAIAPIKey {
+		cfg.OpenAIAPIKey = ""
+		cfg.APIKey = ""
+	} else if override.OpenAIAPIKey != nil && strings.TrimSpace(*override.OpenAIAPIKey) != "" {
+		cfg.OpenAIAPIKey = *override.OpenAIAPIKey
+		cfg.APIKey = *override.OpenAIAPIKey
+	}
+	if override.OpenAIModel != nil {
+		cfg.OpenAIModel = *override.OpenAIModel
+	}
+	if override.AliyunAccessKeyID != nil {
+		cfg.AliyunAccessKeyID = *override.AliyunAccessKeyID
+	}
+	if override.ClearAliyunAccessKeySecret {
+		cfg.AliyunAccessKeySecret = ""
+	} else if override.AliyunAccessKeySecret != nil && strings.TrimSpace(*override.AliyunAccessKeySecret) != "" {
+		cfg.AliyunAccessKeySecret = *override.AliyunAccessKeySecret
+	}
+	if override.AliyunRegionID != nil {
+		cfg.AliyunRegionID = *override.AliyunRegionID
+	}
+	if override.AliyunEndpoint != nil {
+		cfg.AliyunEndpoint = *override.AliyunEndpoint
+	}
+	if override.AliyunTextService != nil {
+		cfg.AliyunTextService = *override.AliyunTextService
+	}
+	if override.AliyunBlockRiskLevel != nil {
+		cfg.AliyunBlockRiskLevel = *override.AliyunBlockRiskLevel
 	}
 	if override.Model != nil {
 		cfg.Model = *override.Model
@@ -227,12 +311,82 @@ func applyTestOverride(cfg Config, override TestConfigOverride) Config {
 	return NormalizeConfig(cfg)
 }
 
-func (s *Service) moderate(ctx context.Context, cfg Config, input string, images []ModerationImage) (Decision, int64, error) {
-	switch NormalizeConfig(cfg).Provider {
+func (s *Service) moderate(ctx context.Context, cfg Config, input string, images []ModerationImage) (ModerateResult, error) {
+	cfg = NormalizeConfig(cfg)
+	var lastErr error
+	lastProvider := ""
+	var totalLatencyMS int64
+	errorsByProvider := make([]string, 0, len(cfg.ProviderChain))
+	for _, provider := range cfg.ProviderChain {
+		lastProvider = provider
+		result, err := s.moderateProvider(ctx, cfg, provider, input, images)
+		totalLatencyMS += result.ProviderLatencyMS
+		if result.Provider != "" {
+			result.LatencyMS = totalLatencyMS
+			result.Decision.Provider = result.Provider
+			result.Decision.RiskLevel = result.RiskLevel
+			result.Decision.ProviderReason = result.ProviderReason
+		}
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		errorsByProvider = append(errorsByProvider, fmt.Sprintf("%s: %v", provider, err))
+	}
+	if cfg.FailMode == FailModeOpen {
+		reason := "all moderation providers failed"
+		if len(errorsByProvider) > 0 {
+			reason = strings.Join(errorsByProvider, "; ")
+		}
+		return ModerateResult{
+			Decision: Decision{
+				Allowed:        true,
+				Action:         ActionAllow,
+				Flagged:        false,
+				CategoryScores: map[string]float64{},
+				ProviderReason: reason,
+			},
+			LatencyMS:      totalLatencyMS,
+			Provider:       normalizeProvider(lastProvider),
+			ProviderReason: reason,
+			ForceLog:       true,
+		}, nil
+	}
+	if lastErr == nil {
+		lastErr = newRiskControlConfigError("no risk control provider is configured")
+	}
+	return ModerateResult{LatencyMS: totalLatencyMS}, lastErr
+}
+
+func (s *Service) moderateProvider(ctx context.Context, cfg Config, provider string, input string, images []ModerationImage) (ModerateResult, error) {
+	startedAt := time.Now()
+	switch normalizeProvider(provider) {
 	case ProviderOpenAI:
-		return s.moderateOpenAI(ctx, cfg, input, images)
+		decision, latencyMS, err := s.moderateOpenAI(ctx, cfg, input, images)
+		if latencyMS == 0 {
+			latencyMS = time.Since(startedAt).Milliseconds()
+		}
+		return ModerateResult{
+			Decision:          decision,
+			LatencyMS:         latencyMS,
+			Provider:          ProviderOpenAI,
+			ProviderLatencyMS: latencyMS,
+		}, err
+	case ProviderAliyun:
+		decision, latencyMS, err := s.moderateAliyun(ctx, cfg, input, images)
+		if latencyMS == 0 {
+			latencyMS = time.Since(startedAt).Milliseconds()
+		}
+		return ModerateResult{
+			Decision:          decision,
+			LatencyMS:         latencyMS,
+			Provider:          ProviderAliyun,
+			RiskLevel:         decision.RiskLevel,
+			ProviderReason:    decision.ProviderReason,
+			ProviderLatencyMS: latencyMS,
+		}, err
 	default:
-		return Decision{}, 0, newRiskControlConfigError("unsupported risk control provider")
+		return ModerateResult{}, newRiskControlConfigError("unsupported risk control provider")
 	}
 }
 

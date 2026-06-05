@@ -108,15 +108,28 @@ func (s *Server) handleListRiskControlLogs(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handleTestRiskControl(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Prompt       string              `json:"prompt"`
-		Mode         *string             `json:"mode"`
-		BaseURL      *string             `json:"baseUrl"`
-		APIKey       *string             `json:"apiKey"`
-		ClearAPIKey  bool                `json:"clearApiKey"`
-		Model        *string             `json:"model"`
-		TimeoutMS    *int                `json:"timeoutMs"`
-		BlockMessage *string             `json:"blockMessage"`
-		Thresholds   *map[string]float64 `json:"thresholds"`
+		Prompt                     string              `json:"prompt"`
+		Mode                       *string             `json:"mode"`
+		ProviderChain              *[]string           `json:"providerChain"`
+		FailMode                   *string             `json:"failMode"`
+		BaseURL                    *string             `json:"baseUrl"`
+		APIKey                     *string             `json:"apiKey"`
+		ClearAPIKey                bool                `json:"clearApiKey"`
+		Model                      *string             `json:"model"`
+		OpenAIBaseURL              *string             `json:"openaiBaseUrl"`
+		OpenAIAPIKey               *string             `json:"openaiApiKey"`
+		ClearOpenAIAPIKey          bool                `json:"clearOpenaiApiKey"`
+		OpenAIModel                *string             `json:"openaiModel"`
+		AliyunAccessKeyID          *string             `json:"aliyunAccessKeyId"`
+		AliyunAccessKeySecret      *string             `json:"aliyunAccessKeySecret"`
+		ClearAliyunAccessKeySecret bool                `json:"clearAliyunAccessKeySecret"`
+		AliyunRegionID             *string             `json:"aliyunRegionId"`
+		AliyunEndpoint             *string             `json:"aliyunEndpoint"`
+		AliyunTextService          *string             `json:"aliyunTextService"`
+		AliyunBlockRiskLevel       *string             `json:"aliyunBlockRiskLevel"`
+		TimeoutMS                  *int                `json:"timeoutMs"`
+		BlockMessage               *string             `json:"blockMessage"`
+		Thresholds                 *map[string]float64 `json:"thresholds"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
@@ -130,20 +143,85 @@ func (s *Server) handleTestRiskControl(w http.ResponseWriter, r *http.Request) {
 	defer store.Close()
 	service := riskcontrol.NewService(store)
 	result, err := service.Test(r.Context(), body.Prompt, riskcontrol.TestConfigOverride{
-		Mode:         body.Mode,
-		BaseURL:      body.BaseURL,
-		APIKey:       body.APIKey,
-		ClearAPIKey:  body.ClearAPIKey,
-		Model:        body.Model,
-		TimeoutMS:    body.TimeoutMS,
-		BlockMessage: body.BlockMessage,
-		Thresholds:   body.Thresholds,
+		Mode:                       body.Mode,
+		ProviderChain:              body.ProviderChain,
+		FailMode:                   body.FailMode,
+		BaseURL:                    body.BaseURL,
+		APIKey:                     body.APIKey,
+		ClearAPIKey:                body.ClearAPIKey,
+		Model:                      body.Model,
+		OpenAIBaseURL:              body.OpenAIBaseURL,
+		OpenAIAPIKey:               body.OpenAIAPIKey,
+		ClearOpenAIAPIKey:          body.ClearOpenAIAPIKey,
+		OpenAIModel:                body.OpenAIModel,
+		AliyunAccessKeyID:          body.AliyunAccessKeyID,
+		AliyunAccessKeySecret:      body.AliyunAccessKeySecret,
+		ClearAliyunAccessKeySecret: body.ClearAliyunAccessKeySecret,
+		AliyunRegionID:             body.AliyunRegionID,
+		AliyunEndpoint:             body.AliyunEndpoint,
+		AliyunTextService:          body.AliyunTextService,
+		AliyunBlockRiskLevel:       body.AliyunBlockRiskLevel,
+		TimeoutMS:                  body.TimeoutMS,
+		BlockMessage:               body.BlockMessage,
+		Thresholds:                 body.Thresholds,
 	})
 	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "risk_control_test_failed", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"result": result})
+}
+
+func (s *Server) handleListRiskControlPolicies(w http.ResponseWriter, r *http.Request) {
+	store, err := s.newRiskControlStore()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "risk_control_store_failed", err.Error())
+		return
+	}
+	defer store.Close()
+	items, err := store.ListPolicies(r.Context(), riskcontrol.PolicyFilter{
+		Scope:    r.URL.Query().Get("scope"),
+		TargetID: r.URL.Query().Get("targetId"),
+	})
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "risk_control_policies_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) handleUpsertRiskControlPolicy(w http.ResponseWriter, r *http.Request) {
+	var body riskcontrol.PolicyInput
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", "invalid request body")
+		return
+	}
+	store, err := s.newRiskControlStore()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "risk_control_store_failed", err.Error())
+		return
+	}
+	defer store.Close()
+	item, err := store.UpsertPolicy(r.Context(), body)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "risk_control_policy_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"item": item})
+}
+
+func (s *Server) handleDeleteRiskControlPolicy(w http.ResponseWriter, r *http.Request) {
+	store, err := s.newRiskControlStore()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "risk_control_store_failed", err.Error())
+		return
+	}
+	defer store.Close()
+	if err := store.DeletePolicy(r.Context(), r.PathValue("id")); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "risk_control_policy_delete_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func pagesForTotal(total int64, pageSize int) int64 {

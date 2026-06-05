@@ -65,6 +65,7 @@ func resetBusinessImageProxyTestData(t *testing.T, cfg *config.Config) {
 		business_image_conversations,
 		business_image_jobs,
 		business_image_tracker,
+		business_risk_control_policies,
 		business_risk_control_logs,
 		business_notification_reads,
 		business_notifications,
