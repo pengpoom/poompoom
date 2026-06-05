@@ -71,7 +71,7 @@ export function RuntimeSection({ config, setSection }: RuntimeSectionProps) {
                 title: "填写示例",
                 body: (
                   <>
-                    <code>7000</code>、<code>8080</code>、<code>9000</code>。
+                    <code>7070</code>、<code>8080</code>、<code>9000</code>。
                   </>
                 ),
               },

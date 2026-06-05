@@ -91,7 +91,9 @@ func (s *Server) requireExternalAPIKey(next http.Handler) http.Handler {
 			writeV1Error(w, http.StatusForbidden, "key_disabled", "api key is not active")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKeyAPIKey, key)))
+		ctx := context.WithValue(r.Context(), ctxKeyAPIKey, key)
+		ctx = withRequestOrigin(ctx, r)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -166,9 +168,8 @@ type v1ImageJobResponse struct {
 	Error     *v1JobError     `json:"error,omitempty"`
 }
 
-func (s *Server) v1StatusURL(jobID string) string {
-	base := strings.TrimRight(strings.TrimSpace(s.cfg.ExternalAPI.BaseURL), "/")
-	return base + "/v1/images/jobs/" + jobID
+func (s *Server) v1StatusURL(ctx context.Context, jobID string) string {
+	return s.resolveFacadeBaseURL(ctx) + "/v1/images/jobs/" + jobID
 }
 
 func (s *Server) handleV1CreateImageGeneration(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +235,7 @@ func (s *Server) handleV1CreateImageGeneration(w http.ResponseWriter, r *http.Re
 			Status:    toPublicStatus(job.Status),
 			Model:     job.Model,
 			Created:   startedAt.Unix(),
-			StatusURL: s.v1StatusURL(job.ID),
+			StatusURL: s.v1StatusURL(r.Context(), job.ID),
 		})
 		return
 	}
@@ -260,7 +261,7 @@ func (s *Server) writeV1SyncImageResult(w http.ResponseWriter, r *http.Request, 
 			Status:    "running",
 			Model:     job.Model,
 			Created:   startedAt.Unix(),
-			StatusURL: s.v1StatusURL(job.ID),
+			StatusURL: s.v1StatusURL(r.Context(), job.ID),
 		})
 		return
 	}
@@ -376,7 +377,7 @@ func (s *Server) handleV1GetImageJob(w http.ResponseWriter, r *http.Request) {
 			resp.Error = &v1JobError{Code: job.ErrorCode, Message: job.ErrorMessage}
 		}
 	case "queued", "running":
-		resp.StatusURL = s.v1StatusURL(job.ID)
+		resp.StatusURL = s.v1StatusURL(r.Context(), job.ID)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -397,7 +398,7 @@ func (s *Server) v1JobImages(ctx context.Context, job businessjobs.Job, userID s
 	if ttl <= 0 {
 		ttl = 3600
 	}
-	base := strings.TrimRight(strings.TrimSpace(s.cfg.ExternalAPI.BaseURL), "/")
+	base := s.resolveFacadeBaseURL(ctx)
 	for _, a := range assets {
 		if asB64 {
 			b, rerr := os.ReadFile(s.resolveImageFilePath(a.FileName))

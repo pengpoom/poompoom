@@ -51,7 +51,7 @@ docker compose logs -f studio
 访问：
 
 ```text
-http://服务器IP:7000/
+http://服务器IP:7070/
 ```
 
 ## 3. 数据目录
@@ -222,7 +222,7 @@ API Key 入库只保存 `HMAC-SHA256(signing_secret, key)`，不存明文。因�
 
 ```nginx
 location / {
-    proxy_pass http://127.0.0.1:7000;
+    proxy_pass http://127.0.0.1:7070;
     proxy_connect_timeout 75s;
     proxy_send_timeout    130s;
     proxy_read_timeout    130s;

@@ -30,7 +30,7 @@ export function defaultConfigPayload(): ConfigPayload {
     },
     server: {
       host: "",
-      port: 7000,
+      port: 7070,
       staticDir: "",
       maxImageConcurrency: 8,
       imageQueueLimit: 32,

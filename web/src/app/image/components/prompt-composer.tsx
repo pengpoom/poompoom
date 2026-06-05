@@ -222,7 +222,7 @@ function AspectResolutionPicker({
         aria-label="选择比例和分辨率"
       >
         <AspectPreviewIcon ratio={aspectRatio} />
-        {triggerLabel}
+        <span className="min-w-0 flex-1 truncate whitespace-nowrap text-center">{triggerLabel}</span>
         <ChevronDown className={cn("size-4 opacity-65 transition", open && "rotate-180")} />
       </button>
 
@@ -588,7 +588,7 @@ export function PromptComposer({
                 resolutionTier={imageResolutionTier}
                 resolutionTierLabel={imageResolutionTierLabel}
                 resolutionTierOptions={imageResolutionTierOptions}
-                triggerClassName={cn(controlButtonClass, "w-[136px] shrink-0 px-2")}
+                triggerClassName={cn(controlButtonClass, "w-[148px] shrink-0 px-2")}
                 onAspectRatioChange={onImageAspectRatioChange}
                 onResolutionTierChange={onImageResolutionTierChange}
               />

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Coins, Copy, KeyRound, LoaderCircle, Power, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
+import { Coins, Copy, Globe2, KeyRound, LoaderCircle, Power, RefreshCw, ShieldAlert, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { AdminHeader, AdminPage, AdminPanel, AdminStatCard } from "@/components/admin-layout";
@@ -179,20 +179,22 @@ export default function APIAccessPage() {
               <button className="app-btn-primary" type="button" onClick={openCreateDialog}>+ 新建</button>
             </div>
             {baseUrl ? (
-              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, padding: "0 0 16px", fontSize: 13, color: "var(--app-text-secondary)" }}>
-                <span style={{ flexShrink: 0 }}>API 端点：</span>
-                <code style={{ padding: "3px 8px", borderRadius: 6, border: "1px solid var(--app-border)", background: "var(--app-bg-surface)", fontSize: 12, wordBreak: "break-all" }}>
+              <div className="api-access-endpoint" role="group" aria-label="API 端点">
+                <div className="api-access-endpoint-label">
+                  <Globe2 className="size-4" aria-hidden="true" />
+                  <span>API 端点</span>
+                </div>
+                <code className="api-access-endpoint-url" title={baseUrl}>
                   {baseUrl}
                 </code>
                 <button
                   type="button"
-                  className="app-btn"
-                  style={{ padding: "2px 8px", height: 26, fontSize: 12, flexShrink: 0 }}
+                  className="api-access-endpoint-copy"
                   onClick={() => void copyText(baseUrl)}
-                  title="复制"
+                  aria-label="复制 API 端点"
+                  title="复制 API 端点"
                 >
-                  <Copy className="size-3.5" />
-                  复制
+                  <Copy className="size-4" />
                 </button>
               </div>
             ) : null}

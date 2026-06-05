@@ -757,7 +757,7 @@ export default function SettingsPage() {
                   placeholder="support@example.com"
                 />
               </Field>
-              <Field label="对外 API 地址" hint="对外分发 API 的公开访问地址，终端用户填入客户端 base_url；留空则使用部署默认值。">
+              <Field label="对外 API 地址" hint="对外分发 API 的公开访问地址，终端用户填入客户端 base_url；留空则自动用当前访问地址（域名或 IP:端口）。">
                 <input className="app-input"
                   value={settings.site.apiBaseUrl}
                   onChange={(event) =>
@@ -766,7 +766,7 @@ export default function SettingsPage() {
                       site: { ...current.site, apiBaseUrl: event.target.value },
                     }))
                   }
-                  placeholder="https://your-domain.com"
+                  placeholder={typeof window !== "undefined" ? window.location.origin : "https://your-domain.com"}
                 />
               </Field>
             </SettingSection>

@@ -2,7 +2,7 @@
 
 Image Studio 是一个图片生成 Web 项目，包含 React 前端和 Go 后端。生产部署使用单个 Docker 镜像：前端会在构建时打包为静态资源，由后端统一托管。
 
-默认服务端口是 `7000`。结构化业务数据保存在 Compose 内的 PostgreSQL volume，图片文件和运行配置保存在部署目录的 `backend/data`。Redis 仅用于 job 队列唤醒信号，队列里只保存 `job_id`，最终状态仍以 PostgreSQL 为准。
+默认服务端口是 `7070`。结构化业务数据保存在 Compose 内的 PostgreSQL volume，图片文件和运行配置保存在部署目录的 `backend/data`。Redis 仅用于 job 队列唤醒信号，队列里只保存 `job_id`，最终状态仍以 PostgreSQL 为准。
 
 ## 快速部署
 
@@ -47,7 +47,7 @@ docker compose logs -f studio
 访问：
 
 ```text
-http://服务器IP:7000/
+http://服务器IP:7070/
 ```
 
 如果当前仓库仍是私有仓库，直接 `curl raw.githubusercontent.com` 可能无法下载脚本。可以先 clone 仓库后执行：

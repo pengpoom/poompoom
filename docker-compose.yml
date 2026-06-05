@@ -7,8 +7,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-image_studio}
       POSTGRES_USER: ${POSTGRES_USER:-image_studio}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+    # 不对宿主机暴露端口,studio 经内网 postgres:5432 连接;本机调试可临时加 ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -20,13 +19,12 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+    command: sh -c 'redis-server --appendonly yes ${REDIS_PASSWORD:+--requirepass "$REDIS_PASSWORD"}'
+    # 不对宿主机暴露端口,studio 经内网 redis:6379 连接;本机调试可临时加 ports: ["127.0.0.1:${REDIS_PORT:-6379}:6379"]
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli ${REDIS_PASSWORD:+-a \"$REDIS_PASSWORD\"} ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -40,10 +38,10 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "7000:7000"
+      - "7070:7070"
     environment:
       SERVER_HOST: 0.0.0.0
-      SERVER_PORT: 7000
+      SERVER_PORT: 7070
       DATABASE_DRIVER: postgres
       DATABASE_DSN: postgres://${POSTGRES_USER:-image_studio}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-image_studio}?sslmode=disable
       DATABASE_MAX_OPEN_CONNS: ${DATABASE_MAX_OPEN_CONNS:-20}
@@ -82,7 +80,7 @@ services:
     volumes:
       - ${IMAGE_STUDIO_DATA_DIR:-./backend/data}:/app/data
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7000/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7070/health"]
       interval: 30s
       timeout: 5s
       retries: 3

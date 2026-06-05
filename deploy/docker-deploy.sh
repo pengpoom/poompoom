@@ -122,7 +122,7 @@ Next steps:
 
   4. Open:
 
-       http://SERVER_IP:7000/
+       http://SERVER_IP:7070/
 
 Notes:
   - Web one-click update requires IMAGE_STUDIO_UPDATER_TOKEN and Docker socket access.

@@ -49,7 +49,6 @@ func (s *Server) handleGetBusinessSystemSettings(w http.ResponseWriter, r *http.
 	} else {
 		settings = businesssettings.WithConfigRuntime(settings, s.cfg)
 	}
-	settings.Site.ApiBaseURL = businesssettings.ResolveAPIBaseURL(settings, s.cfg.ExternalAPI.BaseURL)
 	writeJSON(w, http.StatusOK, businesssettings.Response{
 		Settings: settings,
 		Runtime:  businesssettings.Runtime(s.cfg),

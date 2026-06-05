@@ -41,10 +41,10 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "${SERVER_PORT:-7000}:7000"
+      - "${SERVER_PORT:-7070}:7070"
     environment:
       SERVER_HOST: 0.0.0.0
-      SERVER_PORT: 7000
+      SERVER_PORT: 7070
       DATABASE_DRIVER: postgres
       DATABASE_DSN: postgres://${POSTGRES_USER:-image_studio}:${POSTGRES_PASSWORD:-image_studio}@postgres:5432/${POSTGRES_DB:-image_studio}?sslmode=disable
       DATABASE_MAX_OPEN_CONNS: ${DATABASE_MAX_OPEN_CONNS:-20}

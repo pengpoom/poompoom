@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"imagestudio/internal/businessapikeys"
-	"imagestudio/internal/businesssettings"
 )
 
 const maxSelfServeAPIKeys = 5
@@ -63,7 +62,7 @@ func (s *Server) handleListMyAPIKeys(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "list_failed", err.Error())
 		return
 	}
-	baseURL := businesssettings.ResolveAPIBaseURL(s.businessSystemSettings(r), s.cfg.ExternalAPI.BaseURL)
+	baseURL := s.resolveFacadeBaseURL(withRequestOrigin(r.Context(), r))
 	writeJSON(w, http.StatusOK, map[string]any{"items": keys, "baseUrl": baseURL})
 }
 
