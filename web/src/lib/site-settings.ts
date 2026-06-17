@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { fetchPublicSiteSettings, type PublicSiteSettings } from "@/lib/api";
 
 export const DEFAULT_SITE_SETTINGS: PublicSiteSettings["site"] = {
-  name: "ImageStudio",
+  name: "Poom Studio",
   subtitle: "图片生成工作台",
   logoUrl: "",
 };

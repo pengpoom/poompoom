@@ -3113,7 +3113,7 @@ func (s *Store) createProviderPayment(ctx context.Context, provider providerRunt
 		return runtime.CreatePayment(ctx, ProviderPaymentRequest{
 			Order:     order,
 			Method:    order.PaymentMethod,
-			Subject:   fmt.Sprintf("ImageStudio %s", order.OutTradeNo),
+			Subject:   fmt.Sprintf("Poom Studio %s", order.OutTradeNo),
 			NotifyURL: baseURL + "/api/business/payment/webhook/easypay",
 			ReturnURL: firstNonEmpty(input.ReturnURL, baseURL+"/credits"),
 			ClientIP:  input.ClientIP,

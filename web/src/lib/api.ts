@@ -903,7 +903,7 @@ let cachedConfig: ConfigPayload | null = null;
 function buildDefaultConfig(): ConfigPayload {
   return {
     app: {
-      name: "Image Studio",
+      name: "Poom Studio",
       version: "",
       apiKey: "",
       authKey: "",

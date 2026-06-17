@@ -1,21 +1,47 @@
-# Image Studio
+# Poom Studio
 
-Image Studio 是一个图片生成 Web 项目，包含 React 前端和 Go 后端。生产部署使用单个 Docker 镜像：前端会在构建时打包为静态资源，由后端统一托管。
+开源的图片/视频生成与管理运维平台。React 前端 + Go 后端，生产部署为单个 Docker 镜像（前端构建为静态资源，由后端统一托管）。除了面向用户的生成工作台，还内置一套完整的管理运维后台，并对外提供 OpenAI 风格的生成 API。
 
-默认服务端口是 `7070`。结构化业务数据保存在 Compose 内的 PostgreSQL volume，图片文件和运行配置保存在部署目录的 `backend/data`。Redis 仅用于 job 队列唤醒信号，队列里只保存 `job_id`，最终状态仍以 PostgreSQL 为准。
+## 功能特性
+
+**生成能力**
+
+- 图片生成：支持 `gpt-image`、`gemini-banana` 等平台；异步 job 队列、失败自动退点，后端重启可恢复 `queued` 任务
+- 视频生成：规划中（roadmap）
+
+**管理运维后台**
+
+- 用户与权限：账号、角色、启用/禁用、密码重置
+- 积分与计费：点数余额与流水、订阅等级（tier）/ 充值等级（wallet）标签，可按套餐绑定等级
+- Provider 号池：按平台 / 标签 / 套餐等级分组调度上游账号，局部故障自动回退（见 [ProviderPool.md](ProviderPool.md)）
+- 用量与监控：管理员仪表盘、用户用量、Job 明细、admission 准入队列与 tracker 运行监控
+- 存储检查：业务图片资产表与磁盘文件的一致性核对
+
+**对外 API 服务**
+
+- OpenAI 风格的 `/v1/images` 分发接口（生成 / 任务查询 / 取消 / 模型 / 额度），业务 API Key 鉴权，支持同步与异步
+- 接口详情见 [Interface.md](Interface.md)，开启与运维见 [Deploy.md](Deploy.md) 第 8 节
+
+## 运行架构
+
+默认服务端口 `7070`。结构化业务数据保存在 PostgreSQL，图片文件和运行配置保存在部署目录的 `backend/data`。Redis 仅用于 job 队列唤醒信号，队列里只保存 `job_id`，最终状态以 PostgreSQL 为准。
+
+## 文档
+
+- [Deploy.md](Deploy.md) — 部署、更新、备份、本地开发、对外 API 配置
+- [ProviderPool.md](ProviderPool.md) — Provider 号池、标签调度、套餐等级、排障
+- [Interface.md](Interface.md) — 后端接口说明与路由总表
 
 ## 快速部署
 
 服务器只需要 Docker 和 Docker Compose，不需要在服务器上安装 Node.js 或 Go。
 
-Provider 号池、标签调度、套餐等级和排障说明见 [ProviderPool.md](ProviderPool.md)。
-
 推荐使用部署脚本初始化目录：
 
 ```bash
-mkdir -p poomimage
-cd poomimage
-curl -fsSL https://raw.githubusercontent.com/pengpoom/poomimage/main/deploy/docker-deploy.sh | bash
+mkdir -p poompoom
+cd poompoom
+curl -fsSL https://raw.githubusercontent.com/pengpoom/poompoom/main/deploy/docker-deploy.sh | bash
 ```
 
 脚本会生成：
@@ -50,11 +76,11 @@ docker compose logs -f studio
 http://服务器IP:7070/
 ```
 
-如果当前仓库仍是私有仓库，直接 `curl raw.githubusercontent.com` 可能无法下载脚本。可以先 clone 仓库后执行：
+也可以先 clone 仓库再执行脚本（例如服务器无法直接访问 `raw.githubusercontent.com` 时）：
 
 ```bash
-git clone git@github.com:pengpoom/poomimage.git poomimage
-cd poomimage
+git clone git@github.com:pengpoom/poompoom.git poompoom
+cd poompoom
 ./deploy/docker-deploy.sh
 ```
 

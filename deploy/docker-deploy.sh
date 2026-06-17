@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-GITHUB_REPO="${GITHUB_REPO:-pengpoom/poomimage}"
+GITHUB_REPO="${GITHUB_REPO:-pengpoom/poompoom}"
 BRANCH="${BRANCH:-main}"
 INSTALL_DIR="${INSTALL_DIR:-$PWD}"
 COMPOSE_URL="${COMPOSE_URL:-https://raw.githubusercontent.com/$GITHUB_REPO/$BRANCH/docker-compose.yml}"
@@ -114,7 +114,7 @@ cat <<'EOF'
 Next steps:
   1. Edit .env and set ADMIN_PASSWORD / TEST_PASSWORD to values you will keep.
   2. If GHCR is private, run docker login ghcr.io before pulling images.
-  3. Start ImageStudio:
+  3. Start Poom Studio:
 
        docker compose pull
        docker compose up -d

@@ -79,7 +79,7 @@ const defaultWalletLevels: BusinessBillingLevel[] = [
 function defaultSystemSettings(): BusinessSystemSettings {
   return {
     site: {
-      name: "ImageStudio",
+      name: "Poom Studio",
       subtitle: "图片生成工作台",
       logoUrl: "",
       contactInfo: "",
@@ -104,7 +104,7 @@ function defaultSystemSettings(): BusinessSystemSettings {
       username: "",
       password: "",
       from: "",
-      fromName: "ImageStudio",
+      fromName: "Poom Studio",
     },
     generation: {
       defaultPlatform: "gpt-image",
@@ -192,7 +192,7 @@ function normalizeSettings(settings: BusinessSystemSettings): BusinessSystemSett
     ...next,
     site: {
       ...next.site,
-      name: next.site.name.trim() || "ImageStudio",
+      name: next.site.name.trim() || "Poom Studio",
       subtitle: next.site.subtitle.trim() || "图片生成工作台",
       logoUrl: next.site.logoUrl.trim(),
       contactInfo: next.site.contactInfo.trim(),
@@ -218,7 +218,7 @@ function normalizeSettings(settings: BusinessSystemSettings): BusinessSystemSett
       username: next.email.username.trim(),
       password: next.email.password.trim(),
       from: next.email.from.trim(),
-      fromName: next.email.fromName.trim() || "ImageStudio",
+      fromName: next.email.fromName.trim() || "Poom Studio",
     },
     generation: {
       ...next.generation,
@@ -1357,7 +1357,7 @@ export default function SettingsPage() {
                         email: { ...current.email, fromName: event.target.value },
                       }))
                     }
-                    placeholder="ImageStudio"
+                    placeholder="Poom Studio"
                   />
                 </Field>
                 <div

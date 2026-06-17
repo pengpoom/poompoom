@@ -213,7 +213,7 @@ func (s *Store) Save(ctx context.Context, settings Settings) (Settings, error) {
 func Defaults() Settings {
 	return Settings{
 		Site: SiteSettings{
-			Name:        "ImageStudio",
+			Name:        "Poom Studio",
 			Subtitle:    "图片生成工作台",
 			LogoURL:     "",
 			ContactInfo: "",
@@ -237,7 +237,7 @@ func Defaults() Settings {
 			Username: "",
 			Password: "",
 			From:     "",
-			FromName: "ImageStudio",
+			FromName: "Poom Studio",
 		},
 		Generation: GenerationSettings{
 			DefaultPlatform: businessproviders.PlatformGPTImage,

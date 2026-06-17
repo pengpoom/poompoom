@@ -1,4 +1,4 @@
-# Image Studio 部署说明
+# Poom Studio 部署说明
 
 更新时间: 2026-05-24
 
@@ -19,7 +19,7 @@
 ```bash
 mkdir -p image-studio
 cd image-studio
-curl -fsSL https://raw.githubusercontent.com/pengpoom/poomimage/main/deploy/docker-deploy.sh | bash
+curl -fsSL https://raw.githubusercontent.com/pengpoom/poompoom/main/deploy/docker-deploy.sh | bash
 ```
 
 脚本会生成：

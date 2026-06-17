@@ -1,6 +1,6 @@
-# Image Studio 接口文档
+# Poom Studio 接口文档
 
-更新时间：2026-05-17
+更新时间：2026-06-17
 
 本文档以当前后端实际挂载路由为准，主要来源是 `web/backend/api/server.go` 的 `Server.Handler()`。前端代码里仍保留的旧账号接口如果没有在当前路由表挂载，会单独放在“历史遗留 / 未挂载接口”说明中。
 
@@ -27,6 +27,7 @@ http://localhost:5270
 | 管理员登录态 | 管理后台接口 | 需要 UI Bearer token，且登录用户 `role=admin` |
 | 图片文件登录态 | 业务图片访问 | `/v1/files/image/business-*` 支持 UI Bearer token 或 `image_studio_session` Cookie |
 | 兼容 API Key | `/v1/*` 兼容接口 | `Authorization: Bearer <APP_API_KEY>`；也兼容 UI Bearer token |
+| 业务 API Key | `/v1/images/*` 对外分发 | `Authorization: Bearer <poom_live_…>`；需开启 `EXTERNAL_API_ENABLED` |
 
 统一错误格式优先使用：
 
@@ -1067,7 +1068,7 @@ Provider 对象：
 {
   "settings": {
     "site": {
-      "name": "ImageStudio",
+      "name": "Poom Studio",
       "subtitle": "图片生成工作台",
       "logoUrl": "",
       "contactInfo": ""
@@ -1119,7 +1120,7 @@ Provider 对象：
 {
   "settings": {
     "site": {
-      "name": "ImageStudio",
+      "name": "Poom Studio",
       "subtitle": "图片生成工作台"
     },
     "user": {
@@ -1188,8 +1189,8 @@ Provider 对象：
   "legacyReferencedFiles": [],
   "brokenAssets": [],
   "directories": [
-    "/home/peng/Project/image/image-studio/web/backend/data/business-images",
-    "/home/peng/Project/image/image-studio/web/backend/data/tmp/image"
+    "/app/data/business-images",
+    "/app/data/tmp/image"
   ]
 }
 ```
@@ -1458,9 +1459,9 @@ app, server, chatgpt, accounts, storage, sync, proxy, apiAccess, newapi, sub2api
 
 ## OpenAI 兼容接口
 
-这些接口服务于 `/v1/*` 兼容调用，认证使用 `Authorization: Bearer <APP_API_KEY>`，也允许已登录 UI session。它们属于兼容层，不是当前 Image Studio 工作台主链路。
+这些接口服务于 `/v1/*` 兼容调用，认证使用 `Authorization: Bearer <APP_API_KEY>`，也允许已登录 UI session。它们属于兼容层，不是当前 Poom Studio 工作台主链路。
 
-`/v1/images/generations` 和 `/v1/images/edits` 已下线。当前网页生图只走 `/api/image/generate`，任务 ID 以 PostgreSQL `job_id` 为主线；未来如果重新提供外部图片 API，应基于同一条 `job_id` 主线实现。
+旧的同步式 `/v1/images/generations`、`/v1/images/edits` 兼容接口已下线；网页生图走 `/api/image/generate`。对外图片生成现由独立的「对外分发 API」`/v1/images/*` 提供——基于同一条 PostgreSQL `job_id` 主线、用业务 API Key 鉴权，需开启 `EXTERNAL_API_ENABLED`，详见下方「对外分发 API（/v1/images）」章节。
 
 ### POST `/v1/chat/completions`
 
@@ -1511,6 +1512,147 @@ Responses 兼容接口保留路由，但 `image_generation` 图片生成能力�
 ### GET `/v1/models`
 
 返回兼容模型列表。
+
+## 对外分发 API（/v1/images）
+
+面向外部开发者的图片生成 API，OpenAI 风格。认证使用业务 API Key（`poom_live_…`，在后台「API Keys」为用户签发），放入 `Authorization: Bearer <key>`。整条 API 需要 `EXTERNAL_API_ENABLED=true`，否则所有 `/v1/images/*` 返回 `503 service_unavailable`。运维配置见 [Deploy.md](Deploy.md) 第 8 节。
+
+鉴权失败：
+
+| 状态码 | code | 场景 |
+| --- | --- | --- |
+| 503 | `service_unavailable` | 对外 API 未开启 |
+| 401 | `invalid_api_key` | 缺少 Bearer token 或 key 无效 |
+| 403 | `key_disabled` | key 非 active 状态 |
+
+错误统一格式：
+
+```json
+{
+  "error": {
+    "message": "invalid api key",
+    "type": "authentication_error",
+    "code": "invalid_api_key"
+  }
+}
+```
+
+### POST `/v1/images/generations`
+
+提交一次对外生图。默认**同步**模式：服务端最多挂起 120 秒等图后直接返回整图；也可传 `"async": true` 改异步，立即返回任务对象。
+
+请求：
+
+```json
+{
+  "prompt": "生成一张雨伞的图片",
+  "model": "gpt-image-2",
+  "n": 1,
+  "size": "1024x1024",
+  "quality": "high",
+  "response_format": "url",
+  "metadata": {},
+  "async": false
+}
+```
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `prompt` | 是 | 生图提示词；为空返回 `400 invalid_request` |
+| `model` | 否 | 模型名，为空按平台默认模型 |
+| `n` | 否 | 图片数量 |
+| `size` | 否 | 尺寸，如 `1024x1024` |
+| `quality` | 否 | 质量，如 `high` |
+| `response_format` | 否 | `url`（默认，返回带签名的图片 URL）或 `b64_json`（返回 base64） |
+| `metadata` | 否 | 任意 JSON，会原样写入任务并回传 |
+| `async` | 否 | `true` 走异步任务模式 |
+
+同步成功：`200`
+
+```json
+{
+  "created": 1718600000,
+  "data": [
+    { "url": "https://your-domain.com/v1/files/image/business-xxx.png?exp=...&sig=..." }
+  ]
+}
+```
+
+- 同步等待超过 120 秒仍未完成：返回 `202` + 任务对象（含 `status_url`），改用 `GET /v1/images/jobs/{id}` 轮询。
+- 任务被取消：`409 job_cancelled`；生成失败：`502` + 上游错误码。
+
+异步成功（`"async": true`）：`202`
+
+```json
+{
+  "id": "job_xxx",
+  "object": "image.generation.job",
+  "status": "queued",
+  "model": "gpt-image-2",
+  "created": 1718600000,
+  "status_url": "https://your-domain.com/v1/images/jobs/job_xxx"
+}
+```
+
+### GET `/v1/images/jobs/{id}`
+
+查询对外生图任务。只能查到本 key 自己提交的任务，否则返回 `404 job_not_found`。
+
+响应：
+
+```json
+{
+  "id": "job_xxx",
+  "object": "image.generation.job",
+  "status": "succeeded",
+  "model": "gpt-image-2",
+  "created": 1718600000,
+  "images": [
+    { "url": "https://your-domain.com/v1/files/image/business-xxx.png?exp=...&sig=..." }
+  ],
+  "metadata": {}
+}
+```
+
+- `status`：`queued` / `running` / `succeeded` / `failed` / `cancelled`。
+- `succeeded` 带 `images`（加 `?response_format=b64_json` 改返回 base64）；`failed` 带 `error.{code,message}`；`queued` / `running` 带 `status_url`。
+
+### DELETE `/v1/images/jobs/{id}`
+
+取消本 key 的某个任务。上游请求开始前取消会自动退点。响应为任务对象，`status` 变为 `cancel_requested` 或 `cancelled`。非本 key 的任务返回 `404`。
+
+### GET `/v1/images/models`
+
+返回当前启用且可用的模型列表。
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "gpt-image-2",
+      "object": "model",
+      "owned_by": "poompoom",
+      "display_name": "GPT Image 2"
+    }
+  ]
+}
+```
+
+### GET `/v1/images/credits`
+
+查询当前 key 关联用户的点数余额，以及本 key 的额度使用情况。
+
+```json
+{
+  "balance": 100,
+  "key_credit_limit": 500,
+  "key_used_credits": 20,
+  "key_remaining": 480
+}
+```
+
+- `key_credit_limit` 为 `0` 表示该 key 不单独限额，此时不返回 `key_remaining`。
 
 ## 旧图片会话接口
 
@@ -1672,6 +1814,11 @@ Responses 兼容接口保留路由，但 `image_generation` 图片生成能力�
 | POST | `/v1/responses` | 兼容 API Key | Responses 兼容接口 |
 | GET | `/v1/models` | 兼容 API Key | 模型列表 |
 | GET | `/v1/files/image/{filename}` | 业务图需 UI 登录态 | 图片文件访问 |
+| POST | `/v1/images/generations` | 业务 API Key | 对外生图（默认同步 / `async` 异步） |
+| GET | `/v1/images/jobs/{id}` | 业务 API Key | 查询对外生图任务 |
+| DELETE | `/v1/images/jobs/{id}` | 业务 API Key | 取消对外生图任务 |
+| GET | `/v1/images/models` | 业务 API Key | 对外可用模型列表 |
+| GET | `/v1/images/credits` | 业务 API Key | 对外 Key 额度查询 |
 | GET | `/*` | 公开 | 前端静态资源和 SPA fallback |
 
 ## 历史遗留 / 未挂载接口

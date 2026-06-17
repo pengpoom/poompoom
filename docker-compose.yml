@@ -31,7 +31,7 @@ services:
     restart: unless-stopped
 
   studio:
-    image: ghcr.io/pengpoom/poomimage:${IMAGE_TAG:-latest}
+    image: ghcr.io/pengpoom/poompoom:${IMAGE_TAG:-latest}
     depends_on:
       postgres:
         condition: service_healthy
@@ -61,14 +61,14 @@ services:
       TEST_PASSWORD: ${TEST_PASSWORD}
       IMAGE_STUDIO_UPDATER_URL: http://updater:7071
       IMAGE_STUDIO_UPDATER_TOKEN: ${IMAGE_STUDIO_UPDATER_TOKEN:-}
-      IMAGE_STUDIO_VERSION_REPO: ${IMAGE_STUDIO_VERSION_REPO:-pengpoom/poomimage}
+      IMAGE_STUDIO_VERSION_REPO: ${IMAGE_STUDIO_VERSION_REPO:-pengpoom/poompoom}
       IMAGE_STUDIO_GITHUB_TOKEN: ${IMAGE_STUDIO_GITHUB_TOKEN:-}
       REGISTRATION_SMTP_HOST: ${REGISTRATION_SMTP_HOST:-}
       REGISTRATION_SMTP_PORT: ${REGISTRATION_SMTP_PORT:-587}
       REGISTRATION_SMTP_USERNAME: ${REGISTRATION_SMTP_USERNAME:-}
       REGISTRATION_SMTP_PASSWORD: ${REGISTRATION_SMTP_PASSWORD:-}
       REGISTRATION_SMTP_FROM: ${REGISTRATION_SMTP_FROM:-}
-      REGISTRATION_SMTP_FROM_NAME: ${REGISTRATION_SMTP_FROM_NAME:-ImageStudio}
+      REGISTRATION_SMTP_FROM_NAME: ${REGISTRATION_SMTP_FROM_NAME:-Poom Studio}
       EXTERNAL_API_ENABLED: ${EXTERNAL_API_ENABLED:-true}
       EXTERNAL_API_BASE_URL: ${EXTERNAL_API_BASE_URL:-}
       EXTERNAL_API_SIGNING_SECRET: ${EXTERNAL_API_SIGNING_SECRET:-}
@@ -88,7 +88,7 @@ services:
     restart: unless-stopped
 
   updater:
-    image: ghcr.io/pengpoom/poomimage:${IMAGE_TAG:-latest}
+    image: ghcr.io/pengpoom/poompoom:${IMAGE_TAG:-latest}
     command: ["/app/image-studio-updater"]
     environment:
       UPDATER_HOST: 0.0.0.0

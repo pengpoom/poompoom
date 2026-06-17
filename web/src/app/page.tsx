@@ -146,7 +146,7 @@ export default function HomePage() {
         >
           <Link to="/" className="inline-flex items-center gap-2.5 text-lg font-bold" aria-label={`${site.name} 首页`}>
             <BrandMark logoUrl={site.logoUrl} siteName={site.name} />
-            <span>{site.name || "Image Studio"}</span>
+            <span>{site.name || "Poom Studio"}</span>
           </Link>
 
           <nav className="hidden justify-center gap-1.5 text-sm font-medium text-[#aeb7c8] md:flex" aria-label="产品导航">
@@ -399,7 +399,7 @@ export default function HomePage() {
           <div className="max-w-[300px]">
             <Link to="/" className="inline-flex items-center gap-2.5 text-lg font-bold">
               <BrandMark logoUrl={site.logoUrl} siteName={site.name} />
-              <span>{site.name || "Image Studio"}</span>
+              <span>{site.name || "Poom Studio"}</span>
             </Link>
             <p className="mt-3 text-[13px] leading-[1.7] text-[#9aa3b2]">
               AI 创意工作台 · 图像 / 设计 / 电商 / 科研图 / PPT 一站式。

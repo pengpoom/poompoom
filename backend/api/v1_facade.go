@@ -495,7 +495,7 @@ func (s *Server) handleV1ListModels(w http.ResponseWriter, r *http.Request) {
 		data = append(data, map[string]any{
 			"id":           m.ID,
 			"object":       "model",
-			"owned_by":     firstNonEmpty(m.Vendor, "poomimage"),
+			"owned_by":     firstNonEmpty(m.Vendor, "poompoom"),
 			"display_name": m.DisplayName,
 		})
 	}

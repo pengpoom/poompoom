@@ -39,7 +39,7 @@ export default function LoginPage() {
         </Link>
         <div className="auth-brand">
           <AuthBrandMark logoUrl={site.logoUrl} siteName={site.name} />
-          <span>{site.name || "Image Studio"}</span>
+          <span>{site.name || "Poom Studio"}</span>
         </div>
       </header>
 

@@ -113,7 +113,7 @@ export function AuthCard({
     setTurnstileToken("");
     setTurnstileResetKey((current) => current + 1);
   };
-  const authTitle = mode === "register" ? "创建你的账号" : `登录 ${site.name || "Image Studio"}`;
+  const authTitle = mode === "register" ? "创建你的账号" : `登录 ${site.name || "Poom Studio"}`;
   const authSubtitle =
     mode === "register"
       ? "创建你的 AI 图像工作区，开始沉淀提示词、素材和生成结果。"
@@ -262,7 +262,7 @@ export function AuthCard({
       <div className="auth-card-inner">
         <div className="auth-brand-row">
           <AuthBrandMark logoUrl={site.logoUrl} siteName={site.name} compact />
-          <span>{site.name || "Image Studio"}</span>
+          <span>{site.name || "Poom Studio"}</span>
         </div>
 
         <h2>{authTitle}</h2>
