@@ -1346,7 +1346,7 @@ Provider 对象：
 当前文件名仍是历史命名：
 
 ```text
-image-studio-diagnostics-YYYYMMDD-HHMMSS.json
+poom-studio-diagnostics-YYYYMMDD-HHMMSS.json
 ```
 
 ### GET `/api/config`

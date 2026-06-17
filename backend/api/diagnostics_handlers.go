@@ -186,7 +186,7 @@ func (s *Server) handleRuntimeStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleExportDiagnostics(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
-	filename := fmt.Sprintf("image-studio-diagnostics-%s.json", now.Format("20060102-150405"))
+	filename := fmt.Sprintf("poom-studio-diagnostics-%s.json", now.Format("20060102-150405"))
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	writeJSON(w, http.StatusOK, diagnosticsExportPayload{
 		GeneratedAt: now.Format(time.RFC3339Nano),

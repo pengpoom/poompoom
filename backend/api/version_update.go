@@ -170,7 +170,7 @@ func fetchGitHubJSON(ctx context.Context, url string, target any) error {
 		return err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "image-studio-updater")
+	req.Header.Set("User-Agent", "poom-studio-updater")
 	if token := strings.TrimSpace(os.Getenv("IMAGE_STUDIO_GITHUB_TOKEN")); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}

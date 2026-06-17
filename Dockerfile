@@ -32,7 +32,7 @@ RUN target_os="${TARGETOS:-$(go env GOOS)}" && \
     CGO_ENABLED=0 GOOS="${target_os}" GOARCH="${target_arch}" \
       go build \
       -ldflags="-s -w" \
-      -o /out/image-studio-updater ./cmd/updater
+      -o /out/poom-studio-updater ./cmd/updater
 
 FROM --platform=$BUILDPLATFORM alpine:3.22 AS runtime-assets
 RUN apk add --no-cache ca-certificates docker-cli docker-cli-compose tzdata && update-ca-certificates
@@ -47,7 +47,7 @@ COPY --from=runtime-assets /usr/bin/docker /usr/bin/docker
 COPY --from=runtime-assets /usr/libexec/docker /usr/libexec/docker
 
 COPY --from=backend-builder /out/image-studio /app/image-studio
-COPY --from=backend-builder /out/image-studio-updater /app/image-studio-updater
+COPY --from=backend-builder /out/poom-studio-updater /app/poom-studio-updater
 COPY backend/internal/config/config.defaults.toml /app/data/config.example.toml
 COPY --from=web-builder /workspace/web/dist /app/static
 

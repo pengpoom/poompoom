@@ -3102,7 +3102,7 @@ export async function downloadDiagnosticsExport() {
   const disposition = response.headers.get("content-disposition") || "";
   const match = disposition.match(/filename="([^"]+)"/i);
   const fileName =
-    match?.[1] || `image-studio-diagnostics-${Date.now()}.json`;
+    match?.[1] || `poom-studio-diagnostics-${Date.now()}.json`;
   return { blob, fileName };
 }
 

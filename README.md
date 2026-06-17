@@ -179,7 +179,7 @@ backend/data/tmp/image
 默认备份 `backend/data` 到：
 
 ```text
-backups/image-studio-data-YYYYmmdd-HHMMSS.tar.gz
+backups/poom-studio-data-YYYYmmdd-HHMMSS.tar.gz
 ```
 
 如果服务器部署目录只有 `docker-compose.yml`，可以把 `scripts/backup-data.sh` 和 `scripts/restore-data.sh` 复制到部署目录使用。
@@ -187,7 +187,7 @@ backups/image-studio-data-YYYYmmdd-HHMMSS.tar.gz
 PostgreSQL 需要单独备份。示例：
 
 ```bash
-docker compose exec postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > backups/image-studio-postgres-$(date +%Y%m%d-%H%M%S).sql
+docker compose exec postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > backups/poom-studio-postgres-$(date +%Y%m%d-%H%M%S).sql
 ```
 
 如果脚本不在仓库根目录，或者数据目录不同，可以显式指定：
@@ -209,7 +209,7 @@ docker compose down
 执行恢复：
 
 ```bash
-./scripts/restore-data.sh backups/image-studio-data-YYYYmmdd-HHMMSS.tar.gz
+./scripts/restore-data.sh backups/poom-studio-data-YYYYmmdd-HHMMSS.tar.gz
 ```
 
 脚本会要求输入 `RESTORE`，并在覆盖前自动备份当前 `backend/data`。

@@ -96,7 +96,7 @@ else
   copy_or_download "$REPO_ROOT/.env.example" "$ENV_URL" ".env"
   replace_env_value ".env" "ADMIN_PASSWORD" "change-this-admin-password-$(random_secret)"
   replace_env_value ".env" "TEST_PASSWORD" "change-this-user-password-$(random_secret)"
-  replace_env_value ".env" "IMAGE_STUDIO_UPDATER_TOKEN" "image-studio-updater-$(random_secret)"
+  replace_env_value ".env" "IMAGE_STUDIO_UPDATER_TOKEN" "poom-studio-updater-$(random_secret)"
   replace_env_value ".env" "EXTERNAL_API_SIGNING_SECRET" "$(random_secret)"
   replace_env_value ".env" "IMAGE_STUDIO_DEPLOY_DIR" "$INSTALL_DIR"
   if [ "$(id -u)" = "0" ]; then

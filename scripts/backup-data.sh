@@ -7,7 +7,7 @@ DATA_DIR="${IMAGE_STUDIO_DATA_DIR:-$ROOT_DIR/backend/data}"
 BACKUP_DIR="${IMAGE_STUDIO_BACKUP_DIR:-$ROOT_DIR/backups}"
 TIMESTAMP="$(date +'%Y%m%d-%H%M%S')"
 WORK_DIR="$(mktemp -d)"
-ARCHIVE="$BACKUP_DIR/image-studio-data-$TIMESTAMP.tar.gz"
+ARCHIVE="$BACKUP_DIR/poom-studio-data-$TIMESTAMP.tar.gz"
 
 cleanup() {
   rm -rf "$WORK_DIR"

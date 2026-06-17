@@ -31,7 +31,7 @@ services:
     restart: unless-stopped
 
   studio:
-    image: ghcr.io/pengpoom/poompoom:${IMAGE_TAG:-latest}
+    image: ${STUDIO_IMAGE:-ghcr.io/pengpoom/poompoom}:${IMAGE_TAG:-latest}
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,8 +88,8 @@ services:
     restart: unless-stopped
 
   updater:
-    image: ghcr.io/pengpoom/poompoom:${IMAGE_TAG:-latest}
-    command: ["/app/image-studio-updater"]
+    image: ${STUDIO_IMAGE:-ghcr.io/pengpoom/poompoom}:${IMAGE_TAG:-latest}
+    command: ["/app/poom-studio-updater"]
     environment:
       UPDATER_HOST: 0.0.0.0
       UPDATER_PORT: 7071
